@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Hanken Grotesk", "Inter", sans-serif;
+  --font-display: "Montserrat", sans-serif;
+  
+  --color-gold-light: #ffedc3;
+  --color-gold-medium: #f1c100;
+  --color-gold-brand: #ffcc00;
+  --color-obsidian-dark: #0A0A0A;
+  --color-obsidian-card: #141414;
+  --color-obsidian-border: rgba(255, 255, 255, 0.05);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-obsidian-dark);
+  color: #F5F5F5;
+}
+
+.boss-card {
+  background-color: var(--color-obsidian-card);
+  border: 1px solid var(--color-obsidian-border);
+  border-radius: 1.5rem; /* rounded-3xl corner roundness for pillowy bento design */
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+}
+
+.boss-card:hover {
+  background-color: #1C1C1C;
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+.boss-card-active {
+  border: 1px solid var(--color-gold-brand);
+}
+
+.custom-glow {
+  box-shadow: 0 0 15px rgba(255, 204, 0, 0.15);
+}
+
+/* Scrollbar customizations */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f0f0f;
+}
+::-webkit-scrollbar-thumb {
+  background: #353534;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #ffcc00;
+}

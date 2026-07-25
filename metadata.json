@@ -1,0 +1,6 @@
+{
+  "name": "IMAC Enterprises",
+  "description": "IMAC Enterprises - A lightweight, offline-first point-of-sale app with beautiful performance insights and inventory management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
