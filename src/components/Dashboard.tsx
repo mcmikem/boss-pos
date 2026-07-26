@@ -11,7 +11,9 @@ import {
   Zap,
   ArrowRight,
   X,
-  Share2
+  Share2,
+  Plus,
+  Minus
 } from 'lucide-react';
 import { Sale, Expense, Product, StoreSettings } from '../types';
 
@@ -25,6 +27,8 @@ interface DashboardProps {
   onRefundSale: (saleId: string) => void;
   settings: StoreSettings;
   onUpdateSettings: React.Dispatch<React.SetStateAction<StoreSettings>>;
+  onAddExpense: (expense: Expense) => void;
+  expenseCategories: string[];
 }
 
 export default function Dashboard({ 
@@ -36,9 +40,15 @@ export default function Dashboard({
   onRepeatLastSale,
   onRefundSale,
   settings,
-  onUpdateSettings
+  onUpdateSettings,
+  onAddExpense,
+  expenseCategories
 }: DashboardProps) {
   const [selectedSaleForModal, setSelectedSaleForModal] = useState<Sale | null>(null);
+  const [quickExpenseDesc, setQuickExpenseDesc] = useState('');
+  const [quickExpenseAmt, setQuickExpenseAmt] = useState('');
+  const [quickExpenseCat, setQuickExpenseCat] = useState(expenseCategories[0] || 'Stock Purchase');
+  const [showQuickExpense, setShowQuickExpense] = useState(false);
 
   const todayStr = new Date().toISOString().split('T')[0];
   
@@ -65,6 +75,8 @@ export default function Dashboard({
     .filter(e => e.timestamp.startsWith(todayStr))
     .reduce((acc, e) => acc + e.amount, 0);
 
+  const todayExpenses = expenses.filter(e => e.timestamp.startsWith(todayStr));
+
   const grossProfit = todaySalesSum - todayCostSum;
   const netProfit = grossProfit - todayExpensesSum;
 
@@ -79,6 +91,23 @@ export default function Dashboard({
   });
   
   const maxHourlySale = Math.max(...hourlySales, 10);
+
+  const handleQuickExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickExpenseDesc.trim()) { return; }
+    const amt = parseFloat(quickExpenseAmt) || 0;
+    if (amt <= 0) { return; }
+    onAddExpense({
+      id: `exp-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      description: quickExpenseDesc,
+      amount: amt,
+      category: quickExpenseCat,
+    });
+    setQuickExpenseDesc('');
+    setQuickExpenseAmt('');
+    setShowQuickExpense(false);
+  };
 
   const shareReceiptViaWhatsApp = (sale: Sale) => {
     const itemsList = sale.items.map(i => `${i.productName} x${i.qty} = ${formatCurrency(i.lineTotal)}`).join('\n');
@@ -197,6 +226,56 @@ export default function Dashboard({
           </div>
         </section>
       )}
+
+      <section className="boss-card p-5">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">
+            {showQuickExpense ? 'Quick Expense' : "Today's Spending"}
+          </h3>
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-black text-rose-400 font-display">-{formatCurrency(todayExpensesSum)}</p>
+            <button onClick={() => setShowQuickExpense(!showQuickExpense)}
+              className="p-1.5 text-zinc-500 hover:text-gold-brand rounded-lg hover:bg-white/5 transition-all">
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        {showQuickExpense ? (
+          <form onSubmit={handleQuickExpense} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <input type="text" placeholder="e.g. Flour" value={quickExpenseDesc}
+                onChange={(e) => setQuickExpenseDesc(e.target.value)}
+                className="bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+              <input type="number" placeholder="Amount" value={quickExpenseAmt}
+                onChange={(e) => setQuickExpenseAmt(e.target.value)}
+                className="bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none font-bold" />
+            </div>
+            <div className="flex gap-2">
+              <select value={quickExpenseCat} onChange={(e) => setQuickExpenseCat(e.target.value)}
+                className="flex-1 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
+                {expenseCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
+              <button type="submit" className="h-10 px-4 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest text-xs rounded-xl shadow-lg">
+                Log
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-1.5 max-h-36 overflow-y-auto">
+            {todayExpenses.length > 0 ? todayExpenses.map(exp => (
+              <div key={exp.id} className="flex items-center justify-between bg-black/30 rounded-lg px-3 py-2">
+                <div>
+                  <p className="text-xs font-bold text-white uppercase">{exp.description}</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category}</p>
+                </div>
+                <p className="text-xs font-black text-rose-400">-{formatCurrency(exp.amount)}</p>
+              </div>
+            )) : (
+              <p className="text-xs text-zinc-500 font-bold uppercase text-center py-4">No expenses today</p>
+            )}
+          </div>
+        )}
+      </section>
 
       <section className="boss-card p-5">
         <div className="flex justify-between items-center mb-4">

@@ -1,14 +1,85 @@
 import { Product, Supplier, Sale, Expense, StoreSettings } from './types';
 
 const BASE = '';
+const CACHE_PREFIX = 'boss_api_cache_';
+
+function cacheKey(path: string): string {
+  return `${CACHE_PREFIX}${path}`;
+}
+
+function getCache<T>(path: string): T | null {
+  try {
+    const raw = localStorage.getItem(cacheKey(path));
+    if (!raw) return null;
+    const { data, expiry } = JSON.parse(raw);
+    if (Date.now() > expiry) {
+      localStorage.removeItem(cacheKey(path));
+      return null;
+    }
+    return data as T;
+  } catch {
+    return null;
+  }
+}
+
+function setCache<T>(path: string, data: T, ttlMs = 5 * 60 * 1000): void {
+  try {
+    localStorage.setItem(cacheKey(path), JSON.stringify({ data, expiry: Date.now() + ttlMs }));
+  } catch {}
+}
+
+function clearCache(path: string): void {
+  try { localStorage.removeItem(cacheKey(path)); } catch {}
+}
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  // For GET requests, try cache first
+  const isRead = !options || !options.method || options.method === 'GET';
+
+  if (isRead) {
+    const cached = getCache<T>(path);
+    if (cached) return cached;
+  }
+
+  // If offline, return cache for reads
+  if (isRead && !navigator.onLine) {
+    const cached = getCache<T>(path);
+    if (cached) return cached;
+    throw new Error('Offline and no cached data');
+  }
+
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+
+    // Cache successful reads
+    if (isRead) setCache(path, data);
+
+    // Clear cache for mutations
+    if (!isRead) {
+      // Clear all related caches
+      const basePath = path.split('/').slice(0, 3).join('/');
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX) && key.includes(basePath)) {
+          localStorage.removeItem(key);
+        }
+      }
+    }
+
+    return data;
+  } catch (err) {
+    // On network error, try cache for reads
+    if (isRead) {
+      const cached = getCache<T>(path);
+      if (cached) return cached;
+    }
+    throw err;
+  }
 }
 
 export const productApi = {

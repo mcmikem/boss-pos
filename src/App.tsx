@@ -20,6 +20,9 @@ export const THEMES: AppTheme[] = [
   { id: 'amber', name: 'Equator Amber', brand: '#f97316', medium: '#ea580c', light: '#ffedd5' },
 ];
 
+const DEFAULT_CATEGORIES = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
+const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'];
+
 const DEFAULT_SETTINGS: StoreSettings = {
   shopName: 'IMAC Enterprises',
   themeId: 'gold',
@@ -40,6 +43,14 @@ export default function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [categories, setCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem('boss_pos_categories');
+    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+  });
+  const [expenseCategories, setExpenseCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem('boss_pos_expense_categories');
+    return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATEGORIES;
+  });
   const [cart, setCart] = useState<SaleItem[]>([]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -63,6 +74,14 @@ export default function App() {
   useEffect(() => {
     settingsApi.update(settings).catch(() => {});
   }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem('boss_pos_categories', JSON.stringify(categories));
+  }, [categories]);
+
+  useEffect(() => {
+    localStorage.setItem('boss_pos_expense_categories', JSON.stringify(expenseCategories));
+  }, [expenseCategories]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_cart', JSON.stringify(cart));
@@ -143,6 +162,28 @@ export default function App() {
     try { await expenseApi.create(newExpense); } catch { triggerToast('Failed to save expense', 'error'); }
   };
 
+  const handleDeleteExpense = async (expenseId: string) => {
+    setExpenses(prev => prev.filter(e => e.id !== expenseId));
+    try { await expenseApi.remove(expenseId); } catch { triggerToast('Failed to delete expense', 'error'); }
+  };
+
+  const handleAddExpenseCategory = (name: string) => {
+    setExpenseCategories(prev => prev.includes(name) ? prev : [...prev, name]);
+  };
+
+  const handleUpdateExpenseCategory = (oldName: string, newName: string) => {
+    setExpenseCategories(prev => prev.map(c => c === oldName ? newName : c));
+    setExpenses(prev => prev.map(e => e.category === oldName ? { ...e, category: newName } : e));
+  };
+
+  const handleDeleteExpenseCategory = (name: string) => {
+    setExpenseCategories(prev => {
+      const filtered = prev.filter(c => c !== name);
+      return filtered.includes('Miscellaneous') ? filtered : [...filtered, 'Miscellaneous'];
+    });
+    setExpenses(prev => prev.map(e => e.category === name ? { ...e, category: 'Miscellaneous' } : e));
+  };
+
   const handleAddSupplier = async (newSup: Supplier) => {
     setSuppliers(prev => [...prev, newSup]);
     try { await supplierApi.create(newSup); } catch { triggerToast('Failed to save supplier', 'error'); }
@@ -157,6 +198,23 @@ export default function App() {
     setSuppliers(prev => prev.filter(s => s.id !== supplierId));
     setProducts(prev => prev.map(p => p.supplierId === supplierId ? { ...p, supplierId: undefined } : p));
     try { await supplierApi.remove(supplierId); } catch { triggerToast('Failed to delete supplier', 'error'); }
+  };
+
+  const handleAddCategory = (name: string) => {
+    setCategories(prev => prev.includes(name) ? prev : [...prev, name]);
+  };
+
+  const handleUpdateCategory = (oldName: string, newName: string) => {
+    setCategories(prev => prev.map(c => c === oldName ? newName : c));
+    setProducts(prev => prev.map(p => p.category === oldName ? { ...p, category: newName } : p));
+  };
+
+  const handleDeleteCategory = (name: string) => {
+    setCategories(prev => prev.filter(c => c !== name));
+    setProducts(prev => prev.map(p => p.category === name ? { ...p, category: 'Uncategorized' } : p));
+    if (!categories.includes('Uncategorized')) {
+      setCategories(prev => prev.includes('Uncategorized') ? prev : [...prev, 'Uncategorized']);
+    }
   };
 
   const handleRepeatLastSale = () => {
@@ -186,6 +244,8 @@ export default function App() {
             formatCurrency={formatCurrency} onNavigate={setActiveTab}
             onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
             settings={settings} onUpdateSettings={setSettings}
+            onAddExpense={handleAddExpense}
+            expenseCategories={expenseCategories}
           />
         );
       case 'sales':
@@ -200,8 +260,12 @@ export default function App() {
         return (
           <Inventory 
             products={products} suppliers={suppliers}
+            categories={categories}
             onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct}
             onDeleteProduct={handleDeleteProduct}
+            onAddCategory={handleAddCategory}
+            onUpdateCategory={handleUpdateCategory}
+            onDeleteCategory={handleDeleteCategory}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
         );
@@ -209,7 +273,13 @@ export default function App() {
         return (
           <Analytics 
             sales={sales} expenses={expenses} products={products}
-            suppliers={suppliers} onAddExpense={handleAddExpense}
+            suppliers={suppliers}
+            expenseCategories={expenseCategories}
+            onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
+            onAddExpenseCategory={handleAddExpenseCategory}
+            onUpdateExpenseCategory={handleUpdateExpenseCategory}
+            onDeleteExpenseCategory={handleDeleteExpenseCategory}
             onAddSupplier={handleAddSupplier} onUpdateSupplier={handleUpdateSupplier}
             onDeleteSupplier={handleDeleteSupplier}
             formatCurrency={formatCurrency} triggerToast={triggerToast}

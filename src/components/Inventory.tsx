@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   Search, 
   Plus, 
@@ -12,17 +12,23 @@ import {
   PlusCircle,
   Truck,
   Hash,
-  Barcode
+  Barcode,
+  Image
 } from 'lucide-react';
 import { Product, Supplier } from '../types';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Settings2 } from 'lucide-react';
+import CategoryManager from './CategoryManager';
 
 interface InventoryProps {
   products: Product[];
   suppliers: Supplier[];
+  categories: string[];
   onAddProduct: (product: Product) => void;
   onUpdateProduct: (product: Product) => void;
   onDeleteProduct: (productId: string) => void;
+  onAddCategory: (name: string) => void;
+  onUpdateCategory: (oldName: string, newName: string) => void;
+  onDeleteCategory: (name: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -30,12 +36,18 @@ interface InventoryProps {
 export default function Inventory({
   products,
   suppliers,
+  categories,
   onAddProduct,
   onUpdateProduct,
   onDeleteProduct,
+  onAddCategory,
+  onUpdateCategory,
+  onDeleteCategory,
   formatCurrency,
   triggerToast
 }: InventoryProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'stock' | 'name' | 'price'>('stock');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -53,6 +65,7 @@ export default function Inventory({
   const [newSupplierId, setNewSupplierId] = useState('');
   const [newImei, setNewImei] = useState('');
   const [newBarcode, setNewBarcode] = useState('');
+  const [newImageUrl, setNewImageUrl] = useState('');
 
   const [editCost, setEditCost] = useState('');
   const [editPrice, setEditPrice] = useState('');
@@ -61,7 +74,25 @@ export default function Inventory({
   const [editSupplierId, setEditSupplierId] = useState('');
   const [editImei, setEditImei] = useState('');
   const [editBarcode, setEditBarcode] = useState('');
+  const [editImageUrl, setEditImageUrl] = useState('');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleImageSelect = (file: File, setImageUrl: (url: string) => void) => {
+    if (!file.type.startsWith('image/')) {
+      triggerToast('Please select an image file', 'error');
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      triggerToast('Image must be under 500KB', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (e.target?.result) setImageUrl(e.target.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const lowStockProducts = useMemo(() => {
     return products.filter(p => p.stockQty <= p.lowStockThreshold && !p.isService);
@@ -93,6 +124,7 @@ export default function Inventory({
     setEditSupplierId(product.supplierId || '');
     setEditImei(product.imei || '');
     setEditBarcode(product.barcode || '');
+    setEditImageUrl(product.imageUrl || '');
     setStockAdjustment(0);
     setAdjustmentType('add');
     setConfirmDelete(false);
@@ -130,6 +162,7 @@ export default function Inventory({
       stockQty: finalStock,
       imei: editImei || undefined,
       barcode: editBarcode || undefined,
+      imageUrl: editImageUrl || undefined,
     };
 
     onUpdateProduct(updated);
@@ -159,16 +192,17 @@ export default function Inventory({
       supplierId: newSupplierId || undefined,
       imei: newImei || undefined,
       barcode: newBarcode || undefined,
+      imageUrl: newImageUrl || undefined,
     };
 
     onAddProduct(newProd);
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
-    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode('');
+    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewImageUrl('');
     triggerToast(`Added "${newProd.name}"`, 'success');
   };
 
-  const categoriesList = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
+  const categoriesList = categories;
 
   return (
     <div className="space-y-6" id="inventory-tab-content">
@@ -283,9 +317,33 @@ export default function Inventory({
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
               </div>
 
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Product Image</label>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => fileInputRef.current?.click()}
+                    className="h-10 px-4 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-gold-brand rounded-xl text-xs font-bold flex items-center gap-2">
+                    <Image className="w-4 h-4" /> {newImageUrl ? 'Change' : 'Upload'}
+                  </button>
+                  {newImageUrl && (
+                    <button onClick={() => setNewImageUrl('')} className="text-xs text-rose-400 font-bold hover:underline">Remove</button>
+                  )}
+                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageSelect(f, setNewImageUrl); }} />
+                </div>
+                {newImageUrl && (
+                  <img src={newImageUrl} alt="Preview" className="mt-2 w-16 h-16 object-cover rounded-xl border border-zinc-800" />
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Category</label>
+                  <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5 flex items-center gap-1">
+                    Category
+                    <button onClick={() => setShowCategoryManager(true)}
+                      className="p-0.5 text-zinc-500 hover:text-gold-brand transition-colors" title="Manage Categories">
+                      <Settings2 className="w-3 h-3" />
+                    </button>
+                  </label>
                   <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                     {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -379,7 +437,13 @@ export default function Inventory({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Category</label>
+                <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5 flex items-center gap-1">
+                  Category
+                  <button onClick={() => setShowCategoryManager(true)}
+                    className="p-0.5 text-zinc-500 hover:text-gold-brand transition-colors" title="Manage Categories">
+                    <Settings2 className="w-3 h-3" />
+                  </button>
+                </label>
                 <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                   {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -399,6 +463,24 @@ export default function Inventory({
               <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Alert when stock below</label>
               <input type="number" value={editThreshold} onChange={(e) => setEditThreshold(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+            </div>
+
+            <div>
+              <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Product Image</label>
+              <div className="flex items-center gap-3">
+                <button onClick={() => editFileInputRef.current?.click()}
+                  className="h-10 px-4 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-gold-brand rounded-xl text-xs font-bold flex items-center gap-2">
+                  <Image className="w-4 h-4" /> {editImageUrl ? 'Change' : 'Upload'}
+                </button>
+                {editImageUrl && (
+                  <button onClick={() => setEditImageUrl('')} className="text-xs text-rose-400 font-bold hover:underline">Remove</button>
+                )}
+                <input ref={editFileInputRef} type="file" accept="image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageSelect(f, setEditImageUrl); }} />
+              </div>
+              {editImageUrl && (
+                <img src={editImageUrl} alt="Preview" className="mt-2 w-16 h-16 object-cover rounded-xl border border-zinc-800" />
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -470,6 +552,17 @@ export default function Inventory({
             </div>
           </div>
         </div>
+      )}
+
+      {showCategoryManager && (
+        <CategoryManager
+          categories={categories}
+          onAddCategory={onAddCategory}
+          onUpdateCategory={onUpdateCategory}
+          onDeleteCategory={onDeleteCategory}
+          onClose={() => setShowCategoryManager(false)}
+          triggerToast={triggerToast}
+        />
       )}
     </div>
   );

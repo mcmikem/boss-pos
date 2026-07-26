@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "API_ONLY=1 PORT=3001 node --env-file .env server.js & vite --port=3000 --host=0.0.0.0",
+    "dev:api": "API_ONLY=1 PORT=3001 node --env-file .env server.js",
     "build": "vite build",
     "start": "node server.js",
     "preview": "vite preview",
@@ -12,6 +13,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@ericblade/quagga2": "^1.12.1",
+    "@neondatabase/serverless": "^1.0.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

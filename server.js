@@ -8,10 +8,15 @@ const __dirname = dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(join(__dirname, 'dist')));
-app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, 'dist', 'index.html'));
-});
+// In dev mode, only handle API — Vite serves the frontend
+if (process.env.API_ONLY) {
+  console.log(`\n  🏪 IMAC API server on port ${PORT}\n`);
+} else {
+  app.use(express.static(join(__dirname, 'dist')));
+  app.get('*', (req, res) => {
+    res.sendFile(join(__dirname, 'dist', 'index.html'));
+  });
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  🏪 IMAC POS is LIVE at:`);
