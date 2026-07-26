@@ -5,9 +5,9 @@
   --font-sans: "Hanken Grotesk", "Inter", sans-serif;
   --font-display: "Montserrat", sans-serif;
   
-  --color-gold-light: #ffedc3;
-  --color-gold-medium: #f1c100;
-  --color-gold-brand: #ffcc00;
+  --color-gold-light: #fff9e6; /* Brighter for better contrast */
+  --color-gold-medium: #ffd700; /* Brighter gold */
+  --color-gold-brand: #ffec00; /* Brighter gold - improves WCAG contrast */
   --color-obsidian-dark: #0A0A0A;
   --color-obsidian-card: #141414;
   --color-obsidian-border: rgba(255, 255, 255, 0.05);

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   Plus, 
@@ -21,9 +21,15 @@ import {
   X,
   Zap,
   Percent,
-  User
+  User,
+  Barcode,
+  AlertTriangle,
+  Keyboard
 } from 'lucide-react';
 import { Product, Sale, SaleItem, StoreSettings } from '../types';
+import { getIconForProduct } from '../data/icons';
+import BarcodeScanner from './BarcodeScanner';
+import KeyboardShortcuts from './KeyboardShortcuts';
 
 interface SalesProps {
   products: Product[];
@@ -86,14 +92,22 @@ export default function Sales({
   const [customItemName, setCustomItemName] = useState<string>('');
   const [customItemPrice, setCustomItemPrice] = useState<string>('');
   const [customCashReceived, setCustomCashReceived] = useState<string>('');
+  
+  const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState<boolean>(false);
 
   const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            p.category.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
-    });
+    return products
+      .map(p => ({
+        ...p,
+        imageUrl: p.imageUrl || getIconForProduct(p.name, p.category)
+      }))
+      .filter(p => {
+        const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
+        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                              p.category.toLowerCase().includes(searchQuery.toLowerCase());
+        return matchesCategory && matchesSearch;
+      });
   }, [products, selectedCategory, searchQuery]);
 
   const handleAddToCart = (product: Product) => {
@@ -147,6 +161,42 @@ export default function Sales({
     handleAddToCart(fakeProduct);
     setCustomItemName('');
     setCustomItemPrice('');
+  };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setIsScannerOpen(true);
+      }
+      if (e.key === 'F2') {
+        e.preventDefault();
+        handleCompleteSale();
+      }
+      if (e.ctrlKey && e.key === '/') {
+        e.preventDefault();
+        setShowKeyboardHelp(true);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [cart, paymentMethod, customerName, discount, customCashReceived]);
+
+  const handleBarcodeScanned = (barcode: string) => {
+    // Try to find product by barcode or IMEI
+    const product = products.find(p => 
+      p.barcode === barcode || p.imei === barcode || p.id === `prod-${barcode}`
+    );
+    
+    if (product) {
+      handleAddToCart(product);
+      triggerToast(`Added: ${product.name}`, 'success');
+      setIsScannerOpen(false);
+    } else {
+      triggerToast(`Product not found (${barcode})`, 'error');
+    }
   };
 
   const handleAdjustQty = (productId: string, delta: number) => {
@@ -861,6 +911,30 @@ export default function Sales({
           </div>
         </div>
       )}
+
+      {/* Barcode Scanner */}
+      <BarcodeScanner isOpen={isScannerOpen} onScan={handleBarcodeScanned} onClose={() => setIsScannerOpen(false)} />
+
+      {/* Keyboard Shortcuts Help */}
+      <KeyboardShortcuts isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+
+      {/* Barcode Scanner & Shortcuts Button (Floating) */}
+      <div className="fixed bottom-24 left-4 z-30 flex gap-2">
+        <button
+          onClick={() => setIsScannerOpen(true)}
+          className="h-12 px-4 bg-[#141414] border border-white/10 hover:border-gold-brand text-gold-brand rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg"
+          title="Open barcode scanner (F1)"
+        >
+          <Barcode className="w-4 h-4" /> Scan
+        </button>
+        <button
+          onClick={() => setShowKeyboardHelp(true)}
+          className="h-12 w-12 bg-[#141414] border border-white/10 hover:border-gold-brand text-zinc-400 hover:text-gold-brand rounded-xl flex items-center justify-center font-bold transition-all active:scale-95 shadow-lg"
+          title="Keyboard shortcuts"
+        >
+          <Keyboard className="w-4 h-4" />
+        </button>
+      </div>
     </div>
   );
 }

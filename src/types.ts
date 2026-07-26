@@ -7,10 +7,19 @@ export interface Product {
   stockQty: number;
   lowStockThreshold: number;
   supplierId?: string;
-  imageUrl?: string;
+  imageUrl?: string; // small SVG data URI or emoji
   isService?: boolean;
   imei?: string;
   barcode?: string;
+}
+
+export interface CreditLedger {
+  id: string;
+  saleId: string;
+  customerName: string;
+  amount: number;
+  createdAt: string;
+  paidAmount: number;
 }
 
 export interface SaleItem {

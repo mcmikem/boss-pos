@@ -19,6 +19,7 @@ import {
   Save
 } from 'lucide-react';
 import { Sale, Expense, Product, Supplier } from '../types';
+import CreditsLedger from './CreditsLedger';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -365,6 +366,16 @@ export default function Analytics({
               </div>
             </section>
           )}
+
+          {/* Credits Ledger */}
+          <div className="lg:col-span-1">
+            <CreditsLedger 
+              sales={sales}
+              formatCurrency={formatCurrency}
+              onPayCredit={() => {}}
+              triggerToast={triggerToast}
+            />
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="md:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between h-32">

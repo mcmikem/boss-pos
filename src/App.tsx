@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi } from './api';
+import { enrichProductsWithIcons } from './data/icons';
 
 import Dashboard from './components/Dashboard';
 import Sales from './components/Sales';
@@ -52,7 +53,7 @@ export default function App() {
   useEffect(() => {
     Promise.all([
       settingsApi.get().then(setSettings).catch(() => {}),
-      productApi.list().then(setProducts).catch(() => {}),
+      productApi.list().then(p => setProducts(enrichProductsWithIcons(p))).catch(() => {}),
       supplierApi.list().then(setSuppliers).catch(() => {}),
       saleApi.list().then(setSales).catch(() => {}),
       expenseApi.list().then(setExpenses).catch(() => {}),
@@ -91,7 +92,8 @@ export default function App() {
   };
 
   const handleAddProduct = async (newProd: Product) => {
-    setProducts(prev => [newProd, ...prev]);
+    const prodWithIcon = enrichProductsWithIcons([newProd])[0];
+    setProducts(prev => [prodWithIcon, ...prev]);
     try { await productApi.create(newProd); } catch { triggerToast('Failed to save product', 'error'); }
   };
 
