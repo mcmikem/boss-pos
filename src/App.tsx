@@ -6,6 +6,7 @@ import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, Cr
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 
+import ErrorBoundary from './components/ErrorBoundary';
 import Dashboard from './components/Dashboard';
 import Sales from './components/Sales';
 import Inventory from './components/Inventory';
@@ -291,6 +292,7 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return (
+          <ErrorBoundary key="dashboard">
           <Dashboard 
             sales={sales} expenses={expenses} products={products}
             formatCurrency={formatCurrency} onNavigate={(tab) => setActiveTab(tab)}
@@ -299,18 +301,22 @@ export default function App() {
             onAddExpense={handleAddExpense}
             expenseCategories={expenseCategories}
           />
+          </ErrorBoundary>
         );
       case 'sales':
         return (
+          <ErrorBoundary key="sales">
           <Sales 
             products={products} onAddSale={handleAddSale}
             formatCurrency={formatCurrency} cart={cart} setCart={setCart}
             triggerToast={triggerToast} settings={settings}
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
           />
+          </ErrorBoundary>
         );
       case 'inventory':
         return (
+          <ErrorBoundary key="inventory">
           <Inventory 
             products={products} suppliers={suppliers}
             categories={categories}
@@ -321,9 +327,11 @@ export default function App() {
             onDeleteCategory={handleDeleteCategory}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
+          </ErrorBoundary>
         );
       case 'analytics':
         return (
+          <ErrorBoundary key="analytics">
           <Analytics 
             sales={sales} expenses={expenses} products={products}
             suppliers={suppliers}
@@ -339,6 +347,7 @@ export default function App() {
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
           />
+          </ErrorBoundary>
         );
     }
   };

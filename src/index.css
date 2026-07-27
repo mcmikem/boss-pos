@@ -57,3 +57,21 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #ffcc00;
 }
+
+/* Touch targets - minimum 44x44px for mobile */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Higher contrast text */
+.text-contrast {
+  color: #D4D4D4;
+}
+
+.text-contrast-secondary {
+  color: #A3A3A3;
+}
