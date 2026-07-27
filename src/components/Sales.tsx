@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateActio
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, X, Zap, Percent, User,
-  Barcode, Wallet, ChefHat, ArrowRightLeft, BookOpen
+  Barcode, Wallet, ChefHat, ArrowRightLeft, BookOpen,
+  CookingPot, Pen, Printer, Scissors, Trophy, Palette, Package
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, StoreSettings, CashTransfer } from '../types';
 import ProductCard from './ProductCard';
@@ -35,15 +36,15 @@ const getNextOrderNumber = () => {
   return `Order #${next}`;
 };
 
-const CATEGORY_VISUALS: Record<string, { gradient: string; emoji: string; glow: string }> = {
-  'Electronics': { gradient: 'from-violet-900/80 via-indigo-800/50 to-slate-900/90', emoji: '📱', glow: 'rgba(139,92,246,0.15)' },
-  'Eatery': { gradient: 'from-amber-800/80 via-orange-700/50 to-stone-900/90', emoji: '🍕', glow: 'rgba(245,158,11,0.15)' },
-  'Stationery': { gradient: 'from-emerald-800/80 via-teal-700/50 to-slate-900/90', emoji: '📝', glow: 'rgba(16,185,129,0.15)' },
-  'Printing': { gradient: 'from-purple-800/80 via-fuchsia-700/50 to-slate-900/90', emoji: '🖨️', glow: 'rgba(168,85,247,0.15)' },
-  'Tailoring': { gradient: 'from-pink-800/80 via-rose-700/50 to-stone-900/90', emoji: '✂️', glow: 'rgba(244,63,94,0.15)' },
-  'Library': { gradient: 'from-stone-800/80 via-zinc-700/50 to-slate-900/90', emoji: '📚', glow: 'rgba(120,113,108,0.15)' },
-  'Sports': { gradient: 'from-orange-800/80 via-amber-700/50 to-stone-900/90', emoji: '⚽', glow: 'rgba(251,146,60,0.15)' },
-  'Graphics': { gradient: 'from-cyan-800/80 via-sky-700/50 to-slate-900/90', emoji: '🎨', glow: 'rgba(6,182,212,0.15)' },
+const CATEGORY_VISUALS: Record<string, { gradient: string; icon: React.ComponentType<{ className?: string }>; glow: string }> = {
+  'Electronics': { gradient: 'from-violet-900/80 via-indigo-800/50 to-slate-900/90', icon: Smartphone, glow: 'rgba(139,92,246,0.15)' },
+  'Eatery': { gradient: 'from-amber-800/80 via-orange-700/50 to-stone-900/90', icon: CookingPot, glow: 'rgba(245,158,11,0.15)' },
+  'Stationery': { gradient: 'from-emerald-800/80 via-teal-700/50 to-slate-900/90', icon: Pen, glow: 'rgba(16,185,129,0.15)' },
+  'Printing': { gradient: 'from-purple-800/80 via-fuchsia-700/50 to-slate-900/90', icon: Printer, glow: 'rgba(168,85,247,0.15)' },
+  'Tailoring': { gradient: 'from-pink-800/80 via-rose-700/50 to-stone-900/90', icon: Scissors, glow: 'rgba(244,63,94,0.15)' },
+  'Library': { gradient: 'from-stone-800/80 via-zinc-700/50 to-slate-900/90', icon: BookOpen, glow: 'rgba(120,113,108,0.15)' },
+  'Sports': { gradient: 'from-orange-800/80 via-amber-700/50 to-stone-900/90', icon: Trophy, glow: 'rgba(251,146,60,0.15)' },
+  'Graphics': { gradient: 'from-cyan-800/80 via-sky-700/50 to-slate-900/90', icon: Palette, glow: 'rgba(6,182,212,0.15)' },
 };
 
 export default function Sales({
@@ -317,21 +318,22 @@ export default function Sales({
               }`}>
               <span className="text-sm uppercase tracking-wider font-black">All</span>
             </button>
-            {categories.map(cat => {
-              const isActive = selectedCategory === cat;
-              const catInfo = CATEGORY_VISUALS[cat] || { gradient: 'from-zinc-800', emoji: '📦', glow: 'rgba(0,0,0,0.1)' };
-              return (
-                <button key={cat} onClick={() => setSelectedCategory(cat)}
-                  className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
-                    isActive
-                      ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
-                      : 'bg-[#141414]/50 border-white/5 hover:border-white/10 text-zinc-400 font-bold'
-                  }`}>
-                  <span className="shrink-0 text-sm">{catInfo.emoji}</span>
-                  <span className="text-sm uppercase tracking-wider">{cat}</span>
-                </button>
-              );
-            })}
+              {categories.map(cat => {
+                const isActive = selectedCategory === cat;
+                const catInfo = CATEGORY_VISUALS[cat] || { gradient: 'from-zinc-800', icon: Package, glow: 'rgba(0,0,0,0.1)' };
+                const CatIcon = catInfo.icon;
+                return (
+                  <button key={cat} onClick={() => setSelectedCategory(cat)}
+                    className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
+                      isActive
+                        ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
+                        : 'bg-[#141414]/50 border-white/5 hover:border-white/10 text-zinc-400 font-bold'
+                    }`}>
+                    <CatIcon className="w-4 h-4 shrink-0" />
+                    <span className="text-sm uppercase tracking-wider">{cat}</span>
+                  </button>
+                );
+              })}
           </section>
         </div>
 

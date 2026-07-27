@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import { Plus, Tag } from 'lucide-react';
+import { memo, type ComponentType } from 'react';
+import { Plus, Smartphone, CookingPot, Pen, Printer, Scissors, BookOpen, Trophy, Palette, Package } from 'lucide-react';
 import { Product, SaleItem } from '../types';
 
 interface ProductCardProps {
@@ -11,22 +11,23 @@ interface ProductCardProps {
   compact?: boolean;
 }
 
-const CATEGORY_VISUALS: Record<string, { gradient: string; emoji: string; glow: string }> = {
-  'Electronics': { gradient: 'from-violet-900/80 via-indigo-800/50 to-slate-900/90', emoji: '📱', glow: 'rgba(139,92,246,0.15)' },
-  'Eatery': { gradient: 'from-amber-800/80 via-orange-700/50 to-stone-900/90', emoji: '🍕', glow: 'rgba(245,158,11,0.15)' },
-  'Stationery': { gradient: 'from-emerald-800/80 via-teal-700/50 to-slate-900/90', emoji: '📝', glow: 'rgba(16,185,129,0.15)' },
-  'Printing': { gradient: 'from-purple-800/80 via-fuchsia-700/50 to-slate-900/90', emoji: '🖨️', glow: 'rgba(168,85,247,0.15)' },
-  'Tailoring': { gradient: 'from-pink-800/80 via-rose-700/50 to-stone-900/90', emoji: '✂️', glow: 'rgba(244,63,94,0.15)' },
-  'Library': { gradient: 'from-stone-800/80 via-zinc-700/50 to-slate-900/90', emoji: '📚', glow: 'rgba(120,113,108,0.15)' },
-  'Sports': { gradient: 'from-orange-800/80 via-amber-700/50 to-stone-900/90', emoji: '⚽', glow: 'rgba(251,146,60,0.15)' },
-  'Graphics': { gradient: 'from-cyan-800/80 via-sky-700/50 to-slate-900/90', emoji: '🎨', glow: 'rgba(6,182,212,0.15)' },
+const CATEGORY_VISUALS: Record<string, { gradient: string; icon: ComponentType<{ className?: string }>; glow: string }> = {
+  'Electronics': { gradient: 'from-violet-900/80 via-indigo-800/50 to-slate-900/90', icon: Smartphone, glow: 'rgba(139,92,246,0.15)' },
+  'Eatery': { gradient: 'from-amber-800/80 via-orange-700/50 to-stone-900/90', icon: CookingPot, glow: 'rgba(245,158,11,0.15)' },
+  'Stationery': { gradient: 'from-emerald-800/80 via-teal-700/50 to-slate-900/90', icon: Pen, glow: 'rgba(16,185,129,0.15)' },
+  'Printing': { gradient: 'from-purple-800/80 via-fuchsia-700/50 to-slate-900/90', icon: Printer, glow: 'rgba(168,85,247,0.15)' },
+  'Tailoring': { gradient: 'from-pink-800/80 via-rose-700/50 to-stone-900/90', icon: Scissors, glow: 'rgba(244,63,94,0.15)' },
+  'Library': { gradient: 'from-stone-800/80 via-zinc-700/50 to-slate-900/90', icon: BookOpen, glow: 'rgba(120,113,108,0.15)' },
+  'Sports': { gradient: 'from-orange-800/80 via-amber-700/50 to-stone-900/90', icon: Trophy, glow: 'rgba(251,146,60,0.15)' },
+  'Graphics': { gradient: 'from-cyan-800/80 via-sky-700/50 to-slate-900/90', icon: Palette, glow: 'rgba(6,182,212,0.15)' },
 };
 
 const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
   const cartItem = cart?.find(item => item.productId === product.id);
-  const catVis = CATEGORY_VISUALS[product.category] || { gradient: 'from-zinc-800/80 via-zinc-700/50 to-slate-900/90', emoji: '📦', glow: 'rgba(0,0,0,0.1)' };
+  const catVis = CATEGORY_VISUALS[product.category] || { gradient: 'from-zinc-800/80 via-zinc-700/50 to-slate-900/90', icon: Package, glow: 'rgba(0,0,0,0.1)' };
+  const CatIcon = catVis.icon;
 
   if (compact) {
     return (
@@ -70,8 +71,8 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
         ) : (
           <div className={`w-full h-full bg-gradient-to-br ${catVis.gradient} flex items-center justify-center`}>
-            <span className="text-5xl sm:text-6xl opacity-80 drop-shadow-lg">{catVis.emoji}</span>
-          </div>
+                              <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
+                            </div>
         )}
         {isOutOfStock ? (
           <div className="absolute top-2 right-2 bg-rose-950/90 backdrop-blur-sm text-rose-300 text-[10px] font-black px-2.5 py-1 rounded-lg border border-rose-800/50 uppercase tracking-wider">SOLD OUT</div>
