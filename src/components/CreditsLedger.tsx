@@ -1,22 +1,12 @@
-import React, { useState, useMemo } from 'react';
-import { Sale, SaleItem } from '../types';
-import { X, Plus, Check, AlertCircle } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import type { Sale } from '../types';
+import { X, Check, AlertCircle } from 'lucide-react';
 
 interface CreditsLedgerProps {
   sales: Sale[];
   formatCurrency: (val: number) => string;
   onPayCredit: (saleId: string, amount: number) => void;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
-}
-
-interface CreditRecord {
-  saleId: string;
-  orderNumber: string;
-  customerName: string;
-  total: number;
-  paidAmount: number;
-  remaining: number;
-  createdAt: string;
 }
 
 export default function CreditsLedger({

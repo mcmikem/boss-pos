@@ -1,10 +1,26 @@
-import { Product, Supplier, Sale, Expense, StoreSettings } from './types';
+import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
+const CACHE_INDEX_KEY = 'boss_api_cache_keys';
 
 function cacheKey(path: string): string {
   return `${CACHE_PREFIX}${path}`;
+}
+
+function getCacheKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CACHE_INDEX_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCacheKeys(keys: Set<string>): void {
+  try {
+    localStorage.setItem(CACHE_INDEX_KEY, JSON.stringify([...keys]));
+  } catch {}
 }
 
 function getCache<T>(path: string): T | null {
@@ -14,6 +30,9 @@ function getCache<T>(path: string): T | null {
     const { data, expiry } = JSON.parse(raw);
     if (Date.now() > expiry) {
       localStorage.removeItem(cacheKey(path));
+      const keys = getCacheKeys();
+      keys.delete(cacheKey(path));
+      saveCacheKeys(keys);
       return null;
     }
     return data as T;
@@ -24,16 +43,27 @@ function getCache<T>(path: string): T | null {
 
 function setCache<T>(path: string, data: T, ttlMs = 5 * 60 * 1000): void {
   try {
-    localStorage.setItem(cacheKey(path), JSON.stringify({ data, expiry: Date.now() + ttlMs }));
+    const key = cacheKey(path);
+    localStorage.setItem(key, JSON.stringify({ data, expiry: Date.now() + ttlMs }));
+    const keys = getCacheKeys();
+    keys.add(key);
+    saveCacheKeys(keys);
   } catch {}
 }
 
-function clearCache(path: string): void {
-  try { localStorage.removeItem(cacheKey(path)); } catch {}
+function clearRelatedCaches(path: string): void {
+  const basePath = path.split('/').slice(0, 3).join('/');
+  const keys = getCacheKeys();
+  for (const key of keys) {
+    if (key.includes(basePath)) {
+      localStorage.removeItem(key);
+      keys.delete(key);
+    }
+  }
+  saveCacheKeys(keys);
 }
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  // For GET requests, try cache first
   const isRead = !options || !options.method || options.method === 'GET';
 
   if (isRead) {
@@ -41,7 +71,6 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     if (cached) return cached;
   }
 
-  // If offline, return cache for reads
   if (isRead && !navigator.onLine) {
     const cached = getCache<T>(path);
     if (cached) return cached;
@@ -56,24 +85,14 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
 
-    // Cache successful reads
     if (isRead) setCache(path, data);
 
-    // Clear cache for mutations
     if (!isRead) {
-      // Clear all related caches
-      const basePath = path.split('/').slice(0, 3).join('/');
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(CACHE_PREFIX) && key.includes(basePath)) {
-          localStorage.removeItem(key);
-        }
-      }
+      clearRelatedCaches(path);
     }
 
     return data;
   } catch (err) {
-    // On network error, try cache for reads
     if (isRead) {
       const cached = getCache<T>(path);
       if (cached) return cached;
@@ -106,6 +125,11 @@ export const expenseApi = {
   list: () => api<Expense[]>('/api/expenses'),
   create: (e: Expense) => api<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(e) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/expenses/${id}`, { method: 'DELETE' }),
+};
+
+export const creditPaymentApi = {
+  list: () => api<CreditPayment[]>('/api/credit-payments'),
+  create: (p: CreditPayment) => api<CreditPayment>('/api/credit-payments', { method: 'POST', body: JSON.stringify(p) }),
 };
 
 export const settingsApi = {

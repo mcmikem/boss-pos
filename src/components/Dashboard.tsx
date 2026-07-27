@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { 
   Coins, 
   Smartphone, 
   BookOpen, 
   TrendingUp, 
-  TrendingDown, 
   Receipt, 
   ArrowUpRight, 
   AlertCircle, 
@@ -12,21 +11,19 @@ import {
   ArrowRight,
   X,
   Share2,
-  Plus,
-  Minus
+  Plus
 } from 'lucide-react';
-import { Sale, Expense, Product, StoreSettings } from '../types';
+import type { Sale, Expense, Product, StoreSettings } from '../types';
 
 interface DashboardProps {
   sales: Sale[];
   expenses: Expense[];
   products: Product[];
   formatCurrency: (val: number) => string;
-  onNavigate: (tab: string) => void;
+  onNavigate: (tab: 'sales' | 'dashboard' | 'inventory' | 'analytics') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
   settings: StoreSettings;
-  onUpdateSettings: React.Dispatch<React.SetStateAction<StoreSettings>>;
   onAddExpense: (expense: Expense) => void;
   expenseCategories: string[];
 }
@@ -40,7 +37,6 @@ export default function Dashboard({
   onRepeatLastSale,
   onRefundSale,
   settings,
-  onUpdateSettings,
   onAddExpense,
   expenseCategories
 }: DashboardProps) {
@@ -49,6 +45,7 @@ export default function Dashboard({
   const [quickExpenseAmt, setQuickExpenseAmt] = useState('');
   const [quickExpenseCat, setQuickExpenseCat] = useState(expenseCategories[0] || 'Stock Purchase');
   const [showQuickExpense, setShowQuickExpense] = useState(false);
+  const [showRepeatConfirm, setShowRepeatConfirm] = useState(false);
 
   const todayStr = new Date().toISOString().split('T')[0];
   
@@ -92,7 +89,7 @@ export default function Dashboard({
   
   const maxHourlySale = Math.max(...hourlySales, 10);
 
-  const handleQuickExpense = (e: React.FormEvent) => {
+  const handleQuickExpense = (e: FormEvent) => {
     e.preventDefault();
     if (!quickExpenseDesc.trim()) { return; }
     const amt = parseFloat(quickExpenseAmt) || 0;
@@ -130,7 +127,7 @@ export default function Dashboard({
         
         {sales.length > 0 && (
           <button 
-            onClick={onRepeatLastSale}
+            onClick={() => setShowRepeatConfirm(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-gold-light rounded-2xl text-xs font-black tracking-widest uppercase transition-all active:scale-95 cursor-pointer"
             id="repeat-last-sale-btn"
           >
@@ -316,7 +313,7 @@ export default function Dashboard({
         </div>
 
         <div className="space-y-2">
-          {sales.slice(0, 5).map((sale) => {
+          {todaySales.slice(0, 5).map((sale) => {
             let paymentBadge = null;
             if (sale.paymentMethod === 'Cash') {
               paymentBadge = <span className="text-[10px] font-bold bg-emerald-950/40 text-emerald-400 px-2 py-0.5 border border-emerald-800/30 rounded uppercase tracking-wider">Cash</span>;
@@ -418,6 +415,23 @@ export default function Dashboard({
                 Refund
               </button>
               <button onClick={() => setSelectedSaleForModal(null)} className="flex-1 h-11 bg-gold-brand text-black font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 shadow-[0_4px_12px_rgba(255,204,0,0.15)]">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Repeat Last Sale Confirmation */}
+      {showRepeatConfirm && sales.length > 0 && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl">
+            <h3 className="text-sm font-black text-white uppercase tracking-wider text-center mb-2">Repeat Last Sale?</h3>
+            <p className="text-xs text-zinc-400 text-center mb-1">Load items from</p>
+            <p className="text-sm font-black text-gold-brand text-center mb-4">{sales[0].orderNumber} ({sales[0].items.length} items)</p>
+            <div className="flex gap-2">
+              <button onClick={() => setShowRepeatConfirm(false)}
+                className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider">Cancel</button>
+              <button onClick={() => { setShowRepeatConfirm(false); onRepeatLastSale(); }}
+                className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest">Load Items</button>
             </div>
           </div>
         </div>

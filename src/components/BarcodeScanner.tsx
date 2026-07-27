@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Barcode, X, Zap, CameraOff, Keyboard } from 'lucide-react';
 import Quagga from '@ericblade/quagga2';
 

@@ -1,28 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo, type FormEvent } from 'react';
 import { 
-  TrendingUp, 
-  ArrowRight, 
-  Plus, 
-  Coins, 
-  User, 
-  Phone, 
-  Mail, 
-  AlertCircle, 
-  AlertOctagon, 
-  ChevronRight,
-  TrendingDown,
-  Info,
-  Truck,
-  Edit,
-  Trash2,
-  X,
-  Save,
-  Settings2,
-  Hash,
-  Check,
-  Edit2
+  TrendingUp, Plus, Coins, User, Phone, Mail,
+  AlertOctagon, Truck, Edit, Trash2, X, Save,
+  Settings2, Hash, Check, Edit2
 } from 'lucide-react';
-import { Sale, Expense, Product, Supplier } from '../types';
+import type { Sale, Expense, Product, Supplier } from '../types';
 import CreditsLedger from './CreditsLedger';
 
 interface AnalyticsProps {
@@ -39,6 +21,7 @@ interface AnalyticsProps {
   onAddSupplier: (supplier: Supplier) => void;
   onUpdateSupplier: (supplier: Supplier) => void;
   onDeleteSupplier: (supplierId: string) => void;
+  onPayCredit: (saleId: string, amount: number) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
@@ -59,6 +42,7 @@ export default function Analytics({
   onAddSupplier,
   onUpdateSupplier,
   onDeleteSupplier,
+  onPayCredit,
   formatCurrency,
   triggerToast,
   showSuppliers,
@@ -166,7 +150,7 @@ export default function Analytics({
     return productProfitability.filter(item => item.isLossProduct);
   }, [productProfitability]);
 
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = (e: FormEvent) => {
     e.preventDefault();
     if (!expenseDesc.trim()) {
       triggerToast('Enter a description', 'error');
@@ -292,7 +276,7 @@ export default function Analytics({
     'Stationery': '#60a5fa',
     'Printing': '#f472b6',
     'Tailoring': '#a78bfa',
-    'Library': '#a78bfa',
+    'Library': '#38bdf8',
     'Sports': '#fb923c',
     'Graphics': '#ffffff',
   };
@@ -424,7 +408,7 @@ export default function Analytics({
             <CreditsLedger 
               sales={sales}
               formatCurrency={formatCurrency}
-              onPayCredit={() => {}}
+              onPayCredit={onPayCredit}
               triggerToast={triggerToast}
             />
           </div>
@@ -567,7 +551,7 @@ export default function Analytics({
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(exp.amount)}</p>
                     <button onClick={() => { onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info'); }}
-                      className="p-1.5 text-zinc-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-rose-950/30">
+                      className="p-1.5 text-zinc-600 hover:text-rose-400 lg:opacity-0 lg:group-hover:opacity-100 transition-all rounded-lg hover:bg-rose-950/30">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>

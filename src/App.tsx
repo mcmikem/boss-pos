@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette
 } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi } from './api';
+import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 
 import Dashboard from './components/Dashboard';
@@ -12,13 +12,15 @@ import Inventory from './components/Inventory';
 import Analytics from './components/Analytics';
 import Toast from './components/Toast';
 
-export const THEMES: AppTheme[] = [
+const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
   { id: 'emerald', name: 'Nile Emerald', brand: '#10b981', medium: '#059669', light: '#a7f3d0' },
   { id: 'sapphire', name: 'Victoria Sapphire', brand: '#3b82f6', medium: '#2563eb', light: '#bfdbfe' },
   { id: 'ruby', name: 'Sunset Ruby', brand: '#f43f5e', medium: '#e11d48', light: '#fecdd3' },
   { id: 'amber', name: 'Equator Amber', brand: '#f97316', medium: '#ea580c', light: '#ffedd5' },
 ];
+
+const THEME_MAP = new Map(THEMES_LIST.map(t => [t.id, t]));
 
 const DEFAULT_CATEGORIES = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'];
@@ -55,6 +57,8 @@ export default function App() {
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
+  const [apiError, setApiError] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const triggerToast = (msg: string, type: 'success' | 'error' | 'info') => {
     setToastMessage(msg);
@@ -62,17 +66,37 @@ export default function App() {
   };
 
   useEffect(() => {
+    const errors: string[] = [];
     Promise.all([
-      settingsApi.get().then(setSettings).catch(() => {}),
-      productApi.list().then(p => setProducts(enrichProductsWithIcons(p))).catch(() => {}),
-      supplierApi.list().then(setSuppliers).catch(() => {}),
-      saleApi.list().then(setSales).catch(() => {}),
-      expenseApi.list().then(setExpenses).catch(() => {}),
-    ]).then(() => setLoading(false));
+      settingsApi.get().then(setSettings).catch(() => { errors.push('settings'); }),
+      productApi.list().then(p => setProducts(enrichProductsWithIcons(p))).catch(() => { errors.push('products'); }),
+      supplierApi.list().then(setSuppliers).catch(() => { errors.push('suppliers'); }),
+      saleApi.list().then(setSales).catch(() => { errors.push('sales'); }),
+      expenseApi.list().then(setExpenses).catch(() => { errors.push('expenses'); }),
+      creditPaymentApi.list().then(() => {}).catch(() => {}),
+    ]).then(() => {
+      setLoading(false);
+      if (errors.length === 5) {
+        setApiError(true);
+      } else if (errors.length > 0) {
+        triggerToast(`Failed to load: ${errors.join(', ')}. Check connection.`, 'error');
+      }
+    });
   }, []);
 
   useEffect(() => {
-    settingsApi.update(settings).catch(() => {});
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    settingsApi.update(settings).catch(() => triggerToast('Failed to save settings', 'error'));
   }, [settings]);
 
   useEffect(() => {
@@ -91,9 +115,23 @@ export default function App() {
     if (loading) return;
     const cached = localStorage.getItem('boss_pos_cart');
     if (cached) {
-      try { setCart(JSON.parse(cached)); } catch {}
+      try {
+        const restored: SaleItem[] = JSON.parse(cached);
+        const validated = restored.map(item => {
+          const live = products.find(p => p.id === item.productId);
+          if (live && live.price !== item.unitPrice) {
+            return { ...item, unitPrice: live.price, lineTotal: item.qty * live.price };
+          }
+          return item;
+        });
+        setCart(validated);
+        const changed = restored.some((item, i) => item.unitPrice !== validated[i]?.unitPrice);
+        if (changed) {
+          triggerToast('Cart prices updated to match current product pricing', 'info');
+        }
+      } catch {}
     }
-  }, [loading]);
+  }, [loading, products]);
 
   const formatCurrency = (ugxVal: number) => {
     if (currency === 'USD') {
@@ -210,10 +248,24 @@ export default function App() {
   };
 
   const handleDeleteCategory = (name: string) => {
-    setCategories(prev => prev.filter(c => c !== name));
     setProducts(prev => prev.map(p => p.category === name ? { ...p, category: 'Uncategorized' } : p));
-    if (!categories.includes('Uncategorized')) {
-      setCategories(prev => prev.includes('Uncategorized') ? prev : [...prev, 'Uncategorized']);
+    setCategories(prev => {
+      const filtered = prev.filter(c => c !== name);
+      return filtered.includes('Uncategorized') ? filtered : [...filtered, 'Uncategorized'];
+    });
+  };
+
+  const handlePayCredit = async (saleId: string, amount: number) => {
+    const payment: CreditPayment = {
+      id: `cp-${Date.now()}`,
+      saleId,
+      amount,
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await creditPaymentApi.create(payment);
+    } catch {
+      triggerToast('Failed to sync payment to server', 'error');
     }
   };
 
@@ -241,9 +293,9 @@ export default function App() {
         return (
           <Dashboard 
             sales={sales} expenses={expenses} products={products}
-            formatCurrency={formatCurrency} onNavigate={setActiveTab}
+            formatCurrency={formatCurrency} onNavigate={(tab) => setActiveTab(tab)}
             onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
-            settings={settings} onUpdateSettings={setSettings}
+            settings={settings}
             onAddExpense={handleAddExpense}
             expenseCategories={expenseCategories}
           />
@@ -251,9 +303,10 @@ export default function App() {
       case 'sales':
         return (
           <Sales 
-            products={products} sales={sales} onAddSale={handleAddSale}
+            products={products} onAddSale={handleAddSale}
             formatCurrency={formatCurrency} cart={cart} setCart={setCart}
-            triggerToast={triggerToast} settings={settings} onUpdateSettings={setSettings}
+            triggerToast={triggerToast} settings={settings}
+            onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
           />
         );
       case 'inventory':
@@ -282,6 +335,7 @@ export default function App() {
             onDeleteExpenseCategory={handleDeleteExpenseCategory}
             onAddSupplier={handleAddSupplier} onUpdateSupplier={handleUpdateSupplier}
             onDeleteSupplier={handleDeleteSupplier}
+            onPayCredit={handlePayCredit}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
           />
@@ -289,12 +343,30 @@ export default function App() {
     }
   };
 
+  const handleRetry = () => window.location.reload();
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#0A0A0A]">
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-gold-brand/20 border-t-gold-brand rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Loading...</p>
+          {apiError ? (
+            <>
+              <div className="w-16 h-16 rounded-full bg-rose-950/30 border border-rose-500/30 flex items-center justify-center mx-auto mb-4">
+                <span className="text-3xl">!</span>
+              </div>
+              <p className="text-sm font-black text-rose-400 uppercase tracking-widest mb-2">Connection Error</p>
+              <p className="text-xs text-zinc-500 mb-4 max-w-xs">Could not reach the server. Check your connection and try again.</p>
+              <button onClick={handleRetry}
+                className="px-6 h-11 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 transition-all">
+                Retry
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="w-12 h-12 border-4 border-gold-brand/20 border-t-gold-brand rounded-full animate-spin mx-auto mb-4"></div>
+              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Loading...</p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -304,10 +376,10 @@ export default function App() {
     <div 
       className="flex flex-col min-h-screen pb-24 text-zinc-100 bg-[#0A0A0A] relative"
       style={{
-        '--color-gold-brand': settings.themeId ? THEMES.find(t => t.id === settings.themeId)?.brand || '#ffcc00' : '#ffcc00',
-        '--color-gold-medium': settings.themeId ? THEMES.find(t => t.id === settings.themeId)?.medium || '#f1c100' : '#f1c100',
-        '--color-gold-light': settings.themeId ? THEMES.find(t => t.id === settings.themeId)?.light || '#ffedc3' : '#ffedc3',
-      } as React.CSSProperties}
+        '--color-gold-brand': THEME_MAP.get(settings.themeId)?.brand ?? '#ffcc00',
+        '--color-gold-medium': THEME_MAP.get(settings.themeId)?.medium ?? '#f1c100',
+        '--color-gold-light': THEME_MAP.get(settings.themeId)?.light ?? '#ffedc3',
+      } as Record<string, string>}
     >
       <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center px-4 py-3 h-16 w-full">
         <div className="flex items-center gap-3">
@@ -315,6 +387,11 @@ export default function App() {
           <h1 className="text-sm sm:text-base md:text-lg font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[150px] sm:max-w-none">
             {settings.shopName}
           </h1>
+          {!isOnline && (
+            <span className="text-[8px] bg-rose-950/40 text-rose-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-rose-500/30 animate-pulse">
+              Offline
+            </span>
+          )}
           <span className="hidden sm:inline-block text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans">
             {settings.vibe}
           </span>
@@ -322,7 +399,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2 shrink-0 min-h-[40px]">
             <Globe className="w-4 h-4 text-zinc-500" />
-            <select value={currency} onChange={(e) => setCurrency(e.target.value as any)}
+            <select value={currency} onChange={(e) => setCurrency(e.target.value as 'UGX' | 'USD')}
               className="bg-transparent text-xs font-black text-gold-brand border-none focus:outline-none focus:ring-0 cursor-pointer uppercase tracking-wider" id="currency-selector">
               <option value="UGX" className="bg-[#141414]">UGX</option>
               <option value="USD" className="bg-[#141414]">USD</option>
@@ -403,7 +480,7 @@ export default function App() {
                   <Palette className="w-3.5 h-3.5 text-gold-brand" /> Color Theme
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  {THEMES.map(t => (
+                  {THEMES_LIST.map(t => (
                     <button key={t.id} onClick={() => setSettings(prev => ({ ...prev, themeId: t.id }))}
                       className={`px-2.5 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${settings.themeId === t.id ? 'bg-white/5 text-white border-gold-brand' : 'bg-transparent text-zinc-500 border-white/5 hover:text-zinc-300'}`}
                       style={{ borderColor: settings.themeId === t.id ? t.brand : 'transparent' }}>

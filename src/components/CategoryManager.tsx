@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Plus, X, Edit2, Trash2, Check, Hash } from 'lucide-react';
 
 interface CategoryManagerProps {

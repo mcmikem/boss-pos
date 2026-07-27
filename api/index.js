@@ -37,6 +37,11 @@ async function initDB() {
   await sql`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS credit_payments (
+    id TEXT PRIMARY KEY, saleid TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL,
+    createdat TEXT NOT NULL
+  )`;
 }
 
 function escapeId(id) {
@@ -108,11 +113,13 @@ async function seedDatabase() {
     { id:'prod-52',name:'Kitenge Dress (Custom)',category:'Tailoring',cost:18000,price:45000,stockQty:10,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-53',name:'School Uniform (Full)',category:'Tailoring',cost:20000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-54',name:'Men\'s Shirt (Fitted)',category:'Tailoring',cost:15000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
-    { id:'prod-60',name:'Movie Download',category:'Library',cost:3000,price:7000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-61',name:'Music Download',category:'Library',cost:1000,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-62',name:'Software Install',category:'Library',cost:5000,price:15000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-63',name:'Karaoke Track',category:'Library',cost:1000,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-64',name:'Audio Recording (per hr)',category:'Library',cost:25000,price:60000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-60',name:'Movie',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-61',name:'Music (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-62',name:'Computer Software',category:'Library',cost:1000,price:2500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-63',name:'Series (per episode)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-64',name:'Android Software',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-65',name:'Karaoke Track',category:'Library',cost:1000,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-66',name:'Audio Recording (per hr)',category:'Library',cost:10000,price:25000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
     { id:'prod-70',name:'Soccer Ball (Size 5)',category:'Sports',cost:28000,price:50000,stockQty:8,lowStockThreshold:2,supplierId:'sup-1' },
     { id:'prod-71',name:'Skipping Rope',category:'Sports',cost:5000,price:12000,stockQty:15,lowStockThreshold:3,supplierId:'sup-1' },
     { id:'prod-72',name:'Whistle (Referee)',category:'Sports',cost:3000,price:8000,stockQty:20,lowStockThreshold:4,supplierId:'sup-1' },
@@ -266,6 +273,21 @@ app.put('/api/settings', asHandler(async (req, res) => {
     await sql`INSERT INTO settings (key,value) VALUES (${k},${typeof v === 'string' ? v : JSON.stringify(v)}) ON CONFLICT (key) DO UPDATE SET value = ${typeof v === 'string' ? v : JSON.stringify(v)}`;
   }
   res.json({ success: true });
+}));
+
+// === CREDIT PAYMENTS API ===
+app.get('/api/credit-payments', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM credit_payments ORDER BY createdat DESC`;
+  res.json(rows.map(r => ({
+    id: r.id, saleId: r.saleid,
+    amount: r.amount, createdAt: r.createdat,
+  })));
+}));
+
+app.post('/api/credit-payments', asHandler(async (req, res) => {
+  const p = req.body;
+  await sql`INSERT INTO credit_payments (id,saleid,amount,createdat) VALUES (${p.id},${p.saleId},${p.amount},${p.createdAt})`;
+  res.json(p);
 }));
 
 function mapProduct(r) {

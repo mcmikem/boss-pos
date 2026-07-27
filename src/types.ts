@@ -13,6 +13,23 @@ export interface Product {
   barcode?: string;
 }
 
+export interface CashTransfer {
+  id: string;
+  fromCategory: string;
+  toCategory: string;
+  amount: number;
+  reason: string;
+  createdAt: string;
+  settledAt: string | null;
+}
+
+export interface CreditPayment {
+  id: string;
+  saleId: string;
+  amount: number;
+  createdAt: string;
+}
+
 export interface CreditLedger {
   id: string;
   saleId: string;

@@ -1,22 +1,9 @@
-import React, { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { 
-  Search, 
-  Plus, 
-  Minus, 
-  ChevronRight, 
-  AlertTriangle, 
-  Edit, 
-  Package, 
-  Save, 
-  X,
-  PlusCircle,
-  Truck,
-  Hash,
-  Barcode,
-  Image
+  Search, Plus, AlertTriangle, Edit, Package, Save, X,
+  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2
 } from 'lucide-react';
-import { Product, Supplier } from '../types';
-import { Trash2, Settings2 } from 'lucide-react';
+import type { Product, Supplier } from '../types';
 import CategoryManager from './CategoryManager';
 
 interface InventoryProps {
@@ -67,6 +54,7 @@ export default function Inventory({
   const [newBarcode, setNewBarcode] = useState('');
   const [newImageUrl, setNewImageUrl] = useState('');
 
+  const [editName, setEditName] = useState('');
   const [editCost, setEditCost] = useState('');
   const [editPrice, setEditPrice] = useState('');
   const [editThreshold, setEditThreshold] = useState('');
@@ -75,6 +63,7 @@ export default function Inventory({
   const [editImei, setEditImei] = useState('');
   const [editBarcode, setEditBarcode] = useState('');
   const [editImageUrl, setEditImageUrl] = useState('');
+  const [editIsService, setEditIsService] = useState(false);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -99,10 +88,13 @@ export default function Inventory({
   }, [products]);
 
   const processedProducts = useMemo(() => {
-    let list = products.filter(p => 
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      p.category.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    let list = products.filter(p => {
+      const q = searchQuery.toLowerCase();
+      return p.name.toLowerCase().includes(q) || 
+        p.category.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+        (p.imei && p.imei.toLowerCase().includes(q));
+    });
 
     if (sortBy === 'stock') {
       list.sort((a, b) => a.stockQty - b.stockQty);
@@ -117,6 +109,7 @@ export default function Inventory({
 
   const handleOpenEdit = (product: Product) => {
     setEditingProduct(product);
+    setEditName(product.name);
     setEditCost(String(product.cost));
     setEditPrice(String(product.price));
     setEditThreshold(String(product.lowStockThreshold));
@@ -125,6 +118,7 @@ export default function Inventory({
     setEditImei(product.imei || '');
     setEditBarcode(product.barcode || '');
     setEditImageUrl(product.imageUrl || '');
+    setEditIsService(product.isService || false);
     setStockAdjustment(0);
     setAdjustmentType('add');
     setConfirmDelete(false);
@@ -132,6 +126,12 @@ export default function Inventory({
 
   const handleSaveEdit = () => {
     if (!editingProduct) return;
+
+    const nameTrimmed = editName.trim();
+    if (!nameTrimmed) {
+      triggerToast('Product name is required', 'error');
+      return;
+    }
 
     const costNum = parseFloat(editCost) || 0;
     const priceNum = parseFloat(editPrice) || 0;
@@ -154,6 +154,7 @@ export default function Inventory({
 
     const updated: Product = {
       ...editingProduct,
+      name: nameTrimmed,
       cost: costNum,
       price: priceNum,
       lowStockThreshold: thresholdNum,
@@ -163,11 +164,12 @@ export default function Inventory({
       imei: editImei || undefined,
       barcode: editBarcode || undefined,
       imageUrl: editImageUrl || undefined,
+      isService: editIsService,
     };
 
     onUpdateProduct(updated);
     setEditingProduct(null);
-    triggerToast(`Updated ${editingProduct.name}`, 'success');
+    triggerToast(`Updated ${nameTrimmed}`, 'success');
   };
 
   const handleCreateProduct = () => {
@@ -420,6 +422,21 @@ export default function Inventory({
                 <Edit className="w-5 h-5 text-gold-brand" /> Edit: {editingProduct.name}
               </h3>
               <button onClick={() => setEditingProduct(null)} className="text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div>
+              <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Product Name</label>
+              <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+            </div>
+
+            <div className="flex items-center gap-3 bg-zinc-900 rounded-xl px-4 py-3 border border-zinc-800">
+              <label className="text-xs text-zinc-400 font-bold uppercase">Service?</label>
+              <button onClick={() => setEditIsService(!editIsService)}
+                className={`relative w-11 h-6 rounded-full transition-all ${editIsService ? 'bg-gold-brand' : 'bg-zinc-700'}`}>
+                <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${editIsService ? 'left-5' : 'left-0.5'}`}></span>
+              </button>
+              <span className="text-xs text-zinc-500">{editIsService ? 'No stock tracking' : 'Stock tracked'}</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
