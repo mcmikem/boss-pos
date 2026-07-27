@@ -76,12 +76,18 @@ export default function Sales({
   const [showTransfers, setShowTransfers] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(30);
+  const PAGE_SIZE = 30;
 
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    setVisibleCount(30);
+  }, [selectedCategory, searchQuery]);
 
   const filteredProducts = useMemo(() => {
     return products
@@ -336,7 +342,7 @@ export default function Sales({
               {selectedCategory === 'All' ? 'All Products' : selectedCategory}
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {filteredProducts.map(product => (
+              {filteredProducts.slice(0, visibleCount).map(product => (
                 <ProductCard
                   key={product.id}
                   product={product}
@@ -353,6 +359,23 @@ export default function Sales({
                 </div>
               )}
             </div>
+            {filteredProducts.length > visibleCount && (
+              <div className="flex justify-center pt-4">
+                <button onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+                  className="px-6 h-11 bg-[#141414] border border-white/10 text-zinc-400 hover:text-gold-brand hover:border-gold-brand/40 rounded-xl text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target">
+                  Load {Math.min(PAGE_SIZE, filteredProducts.length - visibleCount)} more ({filteredProducts.length - visibleCount} remaining)
+                </button>
+              </div>
+            )}
+            {filteredProducts.length > visibleCount && visibleCount > PAGE_SIZE && filteredProducts.length > visibleCount && null}
+            {visibleCount > PAGE_SIZE && (
+              <div className="flex justify-center pt-2">
+                <button onClick={() => setVisibleCount(PAGE_SIZE)}
+                  className="text-[10px] text-zinc-600 hover:text-zinc-400 font-bold uppercase tracking-wider transition-all cursor-pointer">
+                  Show less
+                </button>
+              </div>
+            )}
           </section>
         </div>
       </div>

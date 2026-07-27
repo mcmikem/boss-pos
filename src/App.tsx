@@ -12,6 +12,7 @@ import Sales from './components/Sales';
 import Inventory from './components/Inventory';
 import Analytics from './components/Analytics';
 import Toast from './components/Toast';
+import PinGate from './components/PinGate';
 
 const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
@@ -56,6 +57,7 @@ export default function App() {
   });
   const [cart, setCart] = useState<SaleItem[]>([]);
 
+  const [isUnlocked, setIsUnlocked] = useState(() => !localStorage.getItem('boss_pos_pin'));
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
   const [apiError, setApiError] = useState(false);
@@ -256,6 +258,17 @@ export default function App() {
     });
   };
 
+  const handleSetPin = (pin: string) => {
+    localStorage.setItem('boss_pos_pin', pin);
+    setIsUnlocked(true);
+    triggerToast('PIN set successfully', 'success');
+  };
+
+  const handleDisablePin = () => {
+    localStorage.removeItem('boss_pos_pin');
+    triggerToast('PIN removed', 'info');
+  };
+
   const handlePayCredit = async (saleId: string, amount: number) => {
     const payment: CreditPayment = {
       id: `cp-${Date.now()}`,
@@ -379,6 +392,10 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  if (!isUnlocked) {
+    return <PinGate onUnlock={() => setIsUnlocked(true)} onSetPin={handleSetPin} hasPin={!!localStorage.getItem('boss_pos_pin')} shopName={settings.shopName} />;
   }
 
   return (
@@ -518,6 +535,26 @@ export default function App() {
                 <input type="range" min="5" max="30" value={settings.dailyGoalNum}
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
+                <div className="flex gap-2">
+                  <button onClick={() => {
+                    const newPin = prompt('Enter new 4-digit PIN:');
+                    if (newPin && /^\d{4}$/.test(newPin)) { handleSetPin(newPin); }
+                    else if (newPin) { triggerToast('PIN must be 4 digits', 'error'); }
+                  }}
+                    className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                    {localStorage.getItem('boss_pos_pin') ? 'Change PIN' : 'Set PIN'}
+                  </button>
+                  {localStorage.getItem('boss_pos_pin') && (
+                    <button onClick={() => { if (confirm('Remove PIN security?')) handleDisablePin(); }}
+                      className="h-10 px-3 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-zinc-600">App will require PIN on every page load.</p>
               </div>
             </div>
             <button onClick={() => { setIsSettingsOpen(false); triggerToast("Settings saved!", "success"); }}

@@ -310,10 +310,32 @@ export default function Analytics({
             {showSuppliers ? 'Manage your suppliers' : 'Sales, profit & expenses'}
           </p>
         </div>
-        <button onClick={() => setShowSuppliers(!showSuppliers)}
-          className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all">
-          {showSuppliers ? '← Back to Reports' : 'View Suppliers →'}
-        </button>
+        <div className="flex gap-2">
+          {!showSuppliers && (
+            <button onClick={() => {
+              const salesCsv = [
+                ['Order', 'Date', 'Payment', 'Items', 'Total', 'Customer'].join(','),
+                ...filteredSales.map(s => `"${s.orderNumber}","${new Date(s.timestamp).toLocaleDateString()}","${s.paymentMethod}",${s.items.reduce((a,i) => a + i.qty, 0)},${s.total},"${s.customerName || ''}"`),
+              ].join('\n');
+              const expensesCsv = [
+                ['Date', 'Description', 'Category', 'Amount'].join(','),
+                ...filteredExpenses.map(e => `"${new Date(e.timestamp).toLocaleDateString()}","${e.description}","${e.category}",${e.amount}`),
+              ].join('\n');
+              const blob = new Blob([salesCsv + '\n\nEXPENSES\n' + expensesCsv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a'); a.href = url; a.download = `reports-${new Date().toISOString().split('T')[0]}.csv`;
+              a.click(); URL.revokeObjectURL(url);
+              triggerToast('Report exported as CSV', 'success');
+            }}
+              className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-emerald-500 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
+              Export CSV
+            </button>
+          )}
+          <button onClick={() => setShowSuppliers(!showSuppliers)}
+            className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
+            {showSuppliers ? '← Back to Reports' : 'View Suppliers →'}
+          </button>
+        </div>
       </section>
 
       {showSuppliers ? (
