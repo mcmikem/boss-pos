@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, X, Zap, Percent, User,
@@ -76,6 +76,7 @@ export default function Sales({
   const [showFoodCost, setShowFoodCost] = useState(false);
   const [showTransfers, setShowTransfers] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(30);
   const PAGE_SIZE = 30;
@@ -774,37 +775,46 @@ export default function Sales({
       />
 
       {/* Floating Action Buttons */}
-      <div className="fixed bottom-24 left-4 z-30 flex flex-col gap-2">
-        <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
+      <div className="fixed bottom-24 left-4 z-30 flex flex-col items-start gap-2">
+        {/* Quick Sale — always visible */}
+        <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); setFabOpen(false); }}
           className="h-14 w-14 bg-gold-brand text-black rounded-2xl shadow-2xl flex items-center justify-center active:scale-95 transition-all border border-white/10 shadow-[0_4px_20px_rgba(255,204,0,0.3)] cursor-pointer"
           title="Quick Sale">
           <Zap className="w-7 h-7" />
         </button>
-        <button onClick={() => setIsScannerOpen(true)}
-          className="touch-target px-4 bg-[#141414] border border-white/10 hover:border-gold-brand text-gold-brand rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer"
-          title="Open barcode scanner (F1)">
-          <Barcode className="w-4 h-4" /> Scan
-        </button>
-        <button onClick={() => setShowQuickExpense(true)}
-          className="touch-target px-4 bg-[#141414] border border-white/10 hover:border-emerald-500 text-emerald-400 rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer"
-          title="Quick expense">
-          <Wallet className="w-4 h-4" /> Expense
-        </button>
-        <button onClick={() => setShowFoodCost(true)}
-          className="touch-target px-4 bg-[#141414] border border-white/10 hover:border-amber-500 text-amber-400 rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer"
-          title="Food cost & profit analyzer">
-          <ChefHat className="w-4 h-4" /> Profit
-        </button>
-        <button onClick={() => setShowTransfers(true)}
-          className="touch-target px-4 bg-[#141414] border border-white/10 hover:border-sky-500 text-sky-400 rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer"
-          title="Track cash transfers between drawers">
-          <ArrowRightLeft className="w-4 h-4" /> Transfer
-        </button>
-        <button onClick={() => setShowLibrary(true)}
-          className="touch-target px-4 bg-[#141414] border border-white/10 hover:border-violet-500 text-violet-400 rounded-xl flex items-center gap-2 font-bold text-xs uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer"
-          title="Library - movies, music, software">
-          <BookOpen className="w-4 h-4" /> Library
-        </button>
+
+        {/* More toggle */}
+        {fabOpen && <div className="fixed inset-0 z-[-1]" onClick={() => setFabOpen(false)} />}
+        <div className="relative">
+          <button onClick={() => setFabOpen(prev => !prev)}
+            className={`h-12 w-12 rounded-xl border transition-all cursor-pointer flex items-center justify-center active:scale-90 ${
+              fabOpen ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/10 hover:border-gold-brand'
+            }`}
+            title="More tools">
+            <span className={`text-lg font-black transition-transform ${fabOpen ? 'rotate-45' : ''}`}>+</span>
+          </button>
+
+          {fabOpen && (
+            <div className="absolute bottom-full left-0 mb-2 flex flex-col gap-1.5 min-w-[130px]">
+              {[
+                { icon: Barcode, label: 'Scan', color: 'hover:border-gold-brand hover:text-gold-brand', onClick: () => { setIsScannerOpen(true); setFabOpen(false); } },
+                { icon: Wallet, label: 'Expense', color: 'hover:border-emerald-500 hover:text-emerald-400', onClick: () => { setShowQuickExpense(true); setFabOpen(false); } },
+                { icon: ChefHat, label: 'Profit', color: 'hover:border-amber-500 hover:text-amber-400', onClick: () => { setShowFoodCost(true); setFabOpen(false); } },
+                { icon: ArrowRightLeft, label: 'Transfer', color: 'hover:border-sky-500 hover:text-sky-400', onClick: () => { setShowTransfers(true); setFabOpen(false); } },
+                { icon: BookOpen, label: 'Library', color: 'hover:border-violet-500 hover:text-violet-400', onClick: () => { setShowLibrary(true); setFabOpen(false); } },
+              ].map(btn => {
+                const BtnIcon = btn.icon;
+                return (
+                  <button key={btn.label} onClick={btn.onClick}
+                    className={`touch-target px-3 py-2 bg-[#141414] border border-white/10 rounded-xl flex items-center gap-2 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer ${btn.color}`}>
+                    <BtnIcon className="w-4 h-4 shrink-0" />
+                    <span>{btn.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Clear Cart Confirmation */}
