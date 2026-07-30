@@ -10,6 +10,7 @@ interface BarcodeScannerProps {
 
 export default function BarcodeScanner({ onScan, isOpen, onClose }: BarcodeScannerProps) {
   const scannerRef = useRef<HTMLDivElement>(null);
+  const detectedHandlerRef = useRef<((data: any) => void) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -94,18 +95,20 @@ export default function BarcodeScanner({ onScan, isOpen, onClose }: BarcodeScann
       Quagga.start();
     });
 
-    Quagga.onDetected((data: any) => {
-      if (data && data.codeResult && data.codeResult.code) {
-        const code = data.codeResult.code;
-        Quagga.offDetected(() => {});
-        stopScanner();
-        onScan(code);
+    const handler = (data: any) => {
+      if (data?.codeResult?.code) {
+        onScan(data.codeResult.code);
       }
-    });
+    };
+    detectedHandlerRef.current = handler;
+    Quagga.onDetected(handler);
   };
 
   const stopScanner = () => {
-    try { Quagga.offDetected(() => {}); } catch {}
+    if (detectedHandlerRef.current) {
+      try { Quagga.offDetected(detectedHandlerRef.current); } catch {}
+      detectedHandlerRef.current = null;
+    }
     try { Quagga.stop(); } catch {}
   };
 

@@ -4,7 +4,7 @@ import {
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier } from '../types';
+import type { Sale, Expense, Product, Supplier, CreditPayment } from '../types';
 import CreditsLedger from './CreditsLedger';
 
 interface AnalyticsProps {
@@ -12,6 +12,7 @@ interface AnalyticsProps {
   expenses: Expense[];
   products: Product[];
   suppliers: Supplier[];
+  creditPayments: CreditPayment[];
   expenseCategories: string[];
   onAddExpense: (expense: Expense) => void;
   onDeleteExpense: (expenseId: string) => void;
@@ -33,6 +34,7 @@ export default function Analytics({
   expenses,
   products,
   suppliers,
+  creditPayments,
   expenseCategories,
   onAddExpense,
   onDeleteExpense,
@@ -109,10 +111,7 @@ export default function Analytics({
   const netProfit = grossProfit - totalExpenses;
 
   const categoryBreakdown = useMemo(() => {
-    const categoriesSum: { [key: string]: number } = {
-      'Electronics': 0, 'Eatery': 0, 'Stationery': 0, 'Printing': 0,
-      'Tailoring': 0, 'Library': 0, 'Sports': 0, 'Graphics': 0
-    };
+    const categoriesSum: { [key: string]: number } = {};
 
     filteredSales.forEach(sale => {
       sale.items.forEach(item => {
@@ -270,7 +269,7 @@ export default function Analytics({
     return `${linePath} L400,140 L0,140 Z`;
   }, [linePath, chartPoints]);
 
-  const colorsMap: { [key: string]: string } = {
+const colorsMap: { [key: string]: string } = {
     'Electronics': '#f1c100',
     'Eatery': '#4ade80',
     'Stationery': '#60a5fa',
@@ -429,6 +428,7 @@ export default function Analytics({
           <div className="lg:col-span-1">
             <CreditsLedger 
               sales={sales}
+              creditPayments={creditPayments}
               formatCurrency={formatCurrency}
               onPayCredit={onPayCredit}
               triggerToast={triggerToast}

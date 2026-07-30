@@ -78,6 +78,24 @@ export interface Supplier {
   email: string;
 }
 
+export interface TailoringOrder {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  orderDate: string;
+  expectedDate: string;
+  completedDate?: string;
+  workType: 'repair' | 'custom' | 'sportswear';
+  workDescription: string;
+  totalAmount: number;
+  depositPaid: number;
+  materialCost: number;
+  status: 'pending' | 'in_progress' | 'completed' | 'delivered';
+  notes: string;
+  measurements?: string;
+  createdAt: string;
+}
+
 export interface AppTheme {
   id: string;
   name: string;

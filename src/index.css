@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -42,7 +41,13 @@ body {
   box-shadow: 0 0 15px rgba(255, 204, 0, 0.15);
 }
 
-/* Scrollbar customizations */
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #353534 #0f0f0f;
+}
+
+/* WebKit scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -67,11 +72,10 @@ body {
   justify-content: center;
 }
 
-/* Higher contrast text */
-.text-contrast {
-  color: #D4D4D4;
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
-
-.text-contrast-secondary {
-  color: #A3A3A3;
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }

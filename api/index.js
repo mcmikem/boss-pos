@@ -17,8 +17,9 @@ async function initDB() {
     cost DOUBLE PRECISION DEFAULT 0, price DOUBLE PRECISION DEFAULT 0,
     stockqty INTEGER DEFAULT 0, lowstockthreshold INTEGER DEFAULT 5,
     supplierid TEXT, isservice BOOLEAN DEFAULT false,
-    imei TEXT, barcode TEXT
+    imei TEXT, barcode TEXT, imageurl TEXT
   )`;
+  try { await sql`ALTER TABLE products ADD COLUMN imageurl TEXT`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
@@ -42,6 +43,17 @@ async function initDB() {
     amount DOUBLE PRECISION NOT NULL,
     createdat TEXT NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS tailoring_orders (
+    id TEXT PRIMARY KEY, customername TEXT NOT NULL, customerphone TEXT DEFAULT '',
+    orderdate TEXT NOT NULL, expecteddate TEXT NOT NULL, completeddate TEXT,
+    worktype TEXT NOT NULL, workdescription TEXT NOT NULL,
+    totalamount DOUBLE PRECISION DEFAULT 0, depositpaid DOUBLE PRECISION DEFAULT 0,
+    materialcost DOUBLE PRECISION DEFAULT 0,
+    status TEXT DEFAULT 'pending', notes TEXT DEFAULT '',
+    measurements TEXT DEFAULT '', createdat TEXT NOT NULL
+  )`;
+  try { await sql`ALTER TABLE tailoring_orders ADD COLUMN measurements TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE tailoring_orders ADD COLUMN materialcost DOUBLE PRECISION DEFAULT 0`; } catch {}
 }
 
 function escapeId(id) {
@@ -113,13 +125,15 @@ async function seedDatabase() {
     { id:'prod-52',name:'Kitenge Dress (Custom)',category:'Tailoring',cost:18000,price:45000,stockQty:10,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-53',name:'School Uniform (Full)',category:'Tailoring',cost:20000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-54',name:'Men\'s Shirt (Fitted)',category:'Tailoring',cost:15000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
-    { id:'prod-60',name:'Movie',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-61',name:'Music (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-62',name:'Computer Software',category:'Library',cost:1000,price:2500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-63',name:'Series (per episode)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-64',name:'Android Software',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-65',name:'Karaoke Track',category:'Library',cost:1000,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-66',name:'Audio Recording (per hr)',category:'Library',cost:10000,price:25000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-55',name:'Work/Corporate Uniform',category:'Tailoring',cost:25000,price:50000,stockQty:5,lowStockThreshold:2,supplierId:'sup-3' },
+    { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
     { id:'prod-70',name:'Soccer Ball (Size 5)',category:'Sports',cost:28000,price:50000,stockQty:8,lowStockThreshold:2,supplierId:'sup-1' },
     { id:'prod-71',name:'Skipping Rope',category:'Sports',cost:5000,price:12000,stockQty:15,lowStockThreshold:3,supplierId:'sup-1' },
     { id:'prod-72',name:'Whistle (Referee)',category:'Sports',cost:3000,price:8000,stockQty:20,lowStockThreshold:4,supplierId:'sup-1' },
@@ -127,6 +141,11 @@ async function seedDatabase() {
     { id:'prod-81',name:'Flyer Design (A5)',category:'Graphics',cost:15000,price:45000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-2' },
     { id:'prod-82',name:'Business Cards (100pcs)',category:'Graphics',cost:15000,price:40000,stockQty:20,lowStockThreshold:3,supplierId:'sup-2' },
     { id:'prod-83',name:'PVC Banner (per sq m)',category:'Graphics',cost:12000,price:25000,stockQty:30,lowStockThreshold:5,supplierId:'sup-2' },
+    { id:'prod-90',name:'Jersey (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:20,lowStockThreshold:3,supplierId:'sup-1' },
+    { id:'prod-91',name:'Jersey (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:15,lowStockThreshold:3,supplierId:'sup-1' },
+    { id:'prod-92',name:'T-Shirt (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:25,lowStockThreshold:5,supplierId:'sup-1' },
+    { id:'prod-93',name:'T-Shirt (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:20,lowStockThreshold:5,supplierId:'sup-1' },
+    { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
   ];
   await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode'],
     products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null })));
@@ -143,7 +162,7 @@ async function seedDatabase() {
   const sales = [
     { id:'sale-1',orderNumber:'Order #8492',timestamp:'2026-07-15T11:10:00+03:00',items:[{productId:'prod-4',productName:'Phone Charger (USB-C)',qty:1,unitPrice:15000,unitCost:6000,lineTotal:15000},{productId:'prod-7',productName:'Bluetooth Earphones (TWS)',qty:1,unitPrice:55000,unitCost:25000,lineTotal:55000}],subtotal:70000,tax:0,total:70000,paymentMethod:'MTN MoMo' },
     { id:'sale-2',orderNumber:'Order #8491',timestamp:'2026-07-15T09:45:00+03:00',items:[{productId:'prod-20',productName:'Double Egg Rolex',qty:2,unitPrice:3500,unitCost:1800,lineTotal:7000},{productId:'prod-24',productName:'Soda (Glass Bottle)',qty:2,unitPrice:2000,unitCost:1200,lineTotal:4000}],subtotal:11000,tax:0,total:11000,paymentMethod:'Cash' },
-    { id:'sale-3',orderNumber:'Order #8490',timestamp:'2026-07-15T08:30:00+03:00',items:[{productId:'prod-10',productName:'Phone Case (Silicone)',qty:2,unitPrice:12000,unitCost:4000,lineTotal:24000},{productId:'prod-62',productName:'Charging Port Repair',qty:1,unitPrice:30000,unitCost:10000,lineTotal:30000}],subtotal:54000,tax:0,total:54000,paymentMethod:'Cash' },
+    { id:'sale-3',orderNumber:'Order #8490',timestamp:'2026-07-15T08:30:00+03:00',items:[{productId:'prod-10',productName:'Phone Case (Silicone)',qty:2,unitPrice:12000,unitCost:4000,lineTotal:24000},{productId:'prod-4',productName:'Phone Charger (USB-C)',qty:1,unitPrice:15000,unitCost:6000,lineTotal:15000}],subtotal:39000,tax:0,total:39000,paymentMethod:'Cash' },
   ];
   await batchInsert('sales', ['id','ordernumber','timestamp','items','subtotal','tax','total','paymentmethod','customername','discount','notes'],
     sales.map(s => ({ id: s.id, ordernumber: s.orderNumber, timestamp: s.timestamp, items: JSON.stringify(s.items), subtotal: s.subtotal, tax: s.tax, total: s.total, paymentmethod: s.paymentMethod, customername: s.customerName || null, discount: s.discount || null, notes: s.notes || null })));
@@ -154,6 +173,34 @@ async function seedDatabase() {
 
 let initPromise = initDB().then(() => seedDatabase()).catch(err => {
   console.error('Database initialization failed:', err);
+});
+
+async function syncLibraryProducts() {
+  const libraryProducts = [
+    { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  ];
+  for (const p of libraryProducts) {
+    await sql`
+      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl)
+      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},${p.isService},null)
+      ON CONFLICT (id) DO UPDATE SET
+        name=EXCLUDED.name, category=EXCLUDED.category, cost=EXCLUDED.cost,
+        price=EXCLUDED.price, stockQty=EXCLUDED.stockQty,
+        lowStockThreshold=EXCLUDED.lowStockThreshold, isService=EXCLUDED.isService
+    `;
+  }
+  await sql`DELETE FROM products WHERE category='Movies' OR category='Music' OR category='Software (Android)' OR category='Software (Windows)'`;
+}
+
+initPromise = initPromise.then(() => syncLibraryProducts()).catch(err => {
+  console.error('Library sync failed:', err);
 });
 
 app.use((req, res, next) => {
@@ -170,13 +217,13 @@ app.get('/api/products', asHandler(async (req, res) => {
 
 app.post('/api/products', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null})`;
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null})`;
   res.json(p);
 }));
 
 app.put('/api/products/:id', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null} WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null} WHERE id=${req.params.id}`;
   res.json(p);
 }));
 
@@ -219,10 +266,7 @@ app.post('/api/sales', asHandler(async (req, res) => {
   const itemsJson = JSON.stringify(s.items);
   await sql`INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes) VALUES (${s.id},${s.orderNumber},${s.timestamp},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${s.customerName||null},${s.discount||null},${s.notes||null})`;
   for (const item of s.items) {
-    const prod = await sql`SELECT * FROM products WHERE id=${item.productId}`;
-    if (prod.length > 0 && !prod[0].isService) {
-      await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${item.qty}) WHERE id=${item.productId}`;
-    }
+    await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${item.qty}) WHERE id=${item.productId} AND isService=false`;
   }
   res.json(s);
 }));
@@ -232,10 +276,7 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
   if (sale.length === 0) return res.status(404).json({ error: 'Sale not found' });
   const items = JSON.parse(sale[0].items);
   for (const item of items) {
-    const prod = await sql`SELECT * FROM products WHERE id=${item.productId}`;
-    if (prod.length > 0 && !prod[0].isService) {
-      await sql`UPDATE products SET stockQty = stockQty + ${item.qty} WHERE id=${item.productId}`;
-    }
+    await sql`UPDATE products SET stockQty = stockQty + ${item.qty} WHERE id=${item.productId} AND isService=false`;
   }
   await sql`DELETE FROM sales WHERE id=${req.params.id}`;
   res.json({ success: true });
@@ -290,12 +331,55 @@ app.post('/api/credit-payments', asHandler(async (req, res) => {
   res.json(p);
 }));
 
+// === TAILORING ORDERS API ===
+app.get('/api/tailoring-orders', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM tailoring_orders ORDER BY createdat DESC`;
+  res.json(rows.map(mapTailoringOrder));
+}));
+
+app.post('/api/tailoring-orders', asHandler(async (req, res) => {
+  const o = req.body;
+  await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat) VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.workType},${o.workDescription},${o.totalAmount||0},${o.depositPaid||0},${o.materialCost||0},${o.status||'pending'},${o.notes||''},${o.measurements||''},${o.createdAt})`;
+  res.json(o);
+}));
+
+app.put('/api/tailoring-orders/:id', asHandler(async (req, res) => {
+  const o = req.body;
+  await sql`UPDATE tailoring_orders SET customername=${o.customerName},customerphone=${o.customerPhone||''},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},worktype=${o.workType},workdescription=${o.workDescription},totalamount=${o.totalAmount||0},depositpaid=${o.depositPaid||0},materialcost=${o.materialCost||0},status=${o.status||'pending'},notes=${o.notes||''},measurements=${o.measurements||''} WHERE id=${req.params.id}`;
+  res.json(o);
+}));
+
+app.delete('/api/tailoring-orders/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM tailoring_orders WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
+// === SYNC PRODUCT CATALOG ===
+app.post('/api/sync-products', asHandler(async (req, res) => {
+  await syncLibraryProducts();
+  res.json({ success: true, updated: 8 });
+}));
+
 function mapProduct(r) {
   return {
     id: r.id, name: r.name, category: r.category, cost: r.cost, price: r.price,
     stockQty: r.stockqty, lowStockThreshold: r.lowstockthreshold,
     supplierId: r.supplierid, isService: !!r.isservice,
-    imei: r.imei, barcode: r.barcode,
+    imei: r.imei, barcode: r.barcode, imageUrl: r.imageurl || '',
+  };
+}
+
+function mapTailoringOrder(r) {
+  return {
+    id: r.id, customerName: r.customername, customerPhone: r.customerphone || '',
+    orderDate: r.orderdate, expectedDate: r.expecteddate,
+    completedDate: r.completeddate || undefined,
+    workType: r.worktype, workDescription: r.workdescription,
+    totalAmount: r.totalamount, depositPaid: r.depositpaid,
+    materialCost: r.materialcost || 0,
+    status: r.status, notes: r.notes || '',
+    measurements: r.measurements || '',
+    createdAt: r.createdat,
   };
 }
 

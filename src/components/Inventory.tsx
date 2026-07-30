@@ -72,15 +72,31 @@ export default function Inventory({
       triggerToast('Please select an image file', 'error');
       return;
     }
-    if (file.size > 500 * 1024) {
-      triggerToast('Image must be under 500KB', 'error');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (e.target?.result) setImageUrl(e.target.result as string);
+    const MAX_W = 200;
+    const img = document.createElement('img');
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      let w = img.naturalWidth;
+      let h = img.naturalHeight;
+      if (w > MAX_W) {
+        h = Math.round(h * (MAX_W / w));
+        w = MAX_W;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { triggerToast('Failed to process image', 'error'); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+      if (dataUrl.length > 100_000) {
+        triggerToast('Image too large after compression', 'error');
+        return;
+      }
+      setImageUrl(dataUrl);
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => triggerToast('Failed to load image', 'error');
+    img.src = URL.createObjectURL(file);
   };
 
   const lowStockProducts = useMemo(() => {

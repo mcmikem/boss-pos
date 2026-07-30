@@ -1,18 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { 
-  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette
+  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Scissors
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
 import { enrichProductsWithIcons } from './data/icons';
+import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
+import { UGX_TO_USD_RATE } from './data/constants';
+import { hashPin } from './utils/crypto';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import Dashboard from './components/Dashboard';
 import Sales from './components/Sales';
-import Inventory from './components/Inventory';
-import Analytics from './components/Analytics';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
+import SyncProductsButton from './components/SyncProductsButton';
+import TailoringOrders from './components/TailoringOrders';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const Inventory = lazy(() => import('./components/Inventory'));
+const Analytics = lazy(() => import('./components/Analytics'));
 
 const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
@@ -36,7 +42,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics'>('sales');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics' | 'tailoring'>('sales');
   const [currency, setCurrency] = useState<'UGX' | 'USD'>('UGX');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -47,6 +53,7 @@ export default function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [creditPayments, setCreditPayments] = useState<CreditPayment[]>([]);
   const [categories, setCategories] = useState<string[]>(() => {
     const saved = localStorage.getItem('boss_pos_categories');
     return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
@@ -57,6 +64,7 @@ export default function App() {
   });
   const [cart, setCart] = useState<SaleItem[]>([]);
 
+  const [isQuickSale, setIsQuickSale] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(() => !localStorage.getItem('boss_pos_pin'));
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
@@ -69,14 +77,24 @@ export default function App() {
   };
 
   useEffect(() => {
+    const cached = loadProducts();
+    if (cached) {
+      setProducts(enrichProductsWithIcons(cached));
+      setLoading(false);
+    }
+
     const errors: string[] = [];
     Promise.all([
       settingsApi.get().then(setSettings).catch(() => { errors.push('settings'); }),
-      productApi.list().then(p => setProducts(enrichProductsWithIcons(p))).catch(() => { errors.push('products'); }),
+      productApi.list().then(p => {
+        const enriched = enrichProductsWithIcons(p);
+        setProducts(enriched);
+        saveProducts(enriched);
+      }).catch(() => { errors.push('products'); if (!cached) setLoading(false); }),
       supplierApi.list().then(setSuppliers).catch(() => { errors.push('suppliers'); }),
       saleApi.list().then(setSales).catch(() => { errors.push('sales'); }),
       expenseApi.list().then(setExpenses).catch(() => { errors.push('expenses'); }),
-      creditPaymentApi.list().then(() => {}).catch(() => {}),
+      creditPaymentApi.list().then(setCreditPayments).catch(() => {}),
     ]).then(() => {
       setLoading(false);
       if (errors.length === 5) {
@@ -86,6 +104,10 @@ export default function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (products.length > 0) saveProducts(products);
+  }, [products]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -138,7 +160,7 @@ export default function App() {
 
   const formatCurrency = (ugxVal: number) => {
     if (currency === 'USD') {
-      const usdVal = ugxVal / 3700;
+      const usdVal = ugxVal / UGX_TO_USD_RATE;
       return new Intl.NumberFormat('en-US', {
         style: 'currency', currency: 'USD',
         minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -258,8 +280,9 @@ export default function App() {
     });
   };
 
-  const handleSetPin = (pin: string) => {
-    localStorage.setItem('boss_pos_pin', pin);
+  const handleSetPin = async (pin: string) => {
+    const hashed = await hashPin(pin);
+    localStorage.setItem('boss_pos_pin', hashed);
     setIsUnlocked(true);
     triggerToast('PIN set successfully', 'success');
   };
@@ -276,9 +299,11 @@ export default function App() {
       amount,
       createdAt: new Date().toISOString(),
     };
+    setCreditPayments(prev => [payment, ...prev]);
     try {
       await creditPaymentApi.create(payment);
     } catch {
+      setCreditPayments(prev => prev.filter(p => p.id !== payment.id));
       triggerToast('Failed to sync payment to server', 'error');
     }
   };
@@ -306,6 +331,7 @@ export default function App() {
       case 'dashboard':
         return (
           <ErrorBoundary key="dashboard">
+          <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Dashboard 
             sales={sales} expenses={expenses} products={products}
             formatCurrency={formatCurrency} onNavigate={(tab) => setActiveTab(tab)}
@@ -314,6 +340,7 @@ export default function App() {
             onAddExpense={handleAddExpense}
             expenseCategories={expenseCategories}
           />
+          </Suspense>
           </ErrorBoundary>
         );
       case 'sales':
@@ -324,12 +351,15 @@ export default function App() {
             formatCurrency={formatCurrency} cart={cart} setCart={setCart}
             triggerToast={triggerToast} settings={settings}
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
+            isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
+            categories={categories}
           />
           </ErrorBoundary>
         );
       case 'inventory':
         return (
           <ErrorBoundary key="inventory">
+          <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Inventory 
             products={products} suppliers={suppliers}
             categories={categories}
@@ -340,14 +370,17 @@ export default function App() {
             onDeleteCategory={handleDeleteCategory}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
+          </Suspense>
           </ErrorBoundary>
         );
       case 'analytics':
         return (
           <ErrorBoundary key="analytics">
+          <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Analytics 
             sales={sales} expenses={expenses} products={products}
             suppliers={suppliers}
+            creditPayments={creditPayments}
             expenseCategories={expenseCategories}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
@@ -360,6 +393,13 @@ export default function App() {
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
           />
+          </Suspense>
+          </ErrorBoundary>
+        );
+      case 'tailoring':
+        return (
+          <ErrorBoundary key="tailoring">
+          <TailoringOrders triggerToast={triggerToast} />
           </ErrorBoundary>
         );
     }
@@ -395,7 +435,8 @@ export default function App() {
   }
 
   if (!isUnlocked) {
-    return <PinGate onUnlock={() => setIsUnlocked(true)} onSetPin={handleSetPin} hasPin={!!localStorage.getItem('boss_pos_pin')} shopName={settings.shopName} />;
+    const storedPinHash = localStorage.getItem('boss_pos_pin');
+    return <PinGate onUnlock={() => setIsUnlocked(true)} onSetPin={handleSetPin} storedPinHash={storedPinHash} shopName={settings.shopName} />;
   }
 
   return (
@@ -455,6 +496,17 @@ export default function App() {
             )}
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">Sell</span>
+        </button>
+        <button onClick={() => { setIsQuickSale(true); }}
+          className="flex flex-col items-center justify-center flex-1 h-full py-1 text-gold-brand transition-all active:scale-95"
+          title="Quick Sale">
+          <div className="w-10 h-10 rounded-xl bg-gold-brand text-black flex items-center justify-center shadow-[0_0_12px_rgba(255,204,0,0.3)]">
+            <Zap className="w-5 h-5" />
+          </div>
+        </button>
+        <button onClick={() => { setActiveTab('tailoring'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'tailoring' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="tailoring-nav-btn">
+          <Scissors className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">Tailor</span>
         </button>
         <button onClick={() => { setActiveTab('dashboard'); setShowSuppliers(false); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'dashboard' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="dashboard-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
@@ -556,6 +608,19 @@ export default function App() {
                 </div>
                 <p className="text-[10px] text-zinc-600">App will require PIN on every page load.</p>
               </div>
+              <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
+                clearProductsCache();
+                const apiCacheKey = `boss_api_cache_/api/products`;
+                localStorage.removeItem(apiCacheKey);
+                const keys = JSON.parse(localStorage.getItem('boss_api_cache_keys') || '[]');
+                const filtered = keys.filter((k: string) => k !== apiCacheKey);
+                localStorage.setItem('boss_api_cache_keys', JSON.stringify(filtered));
+                fetch('/api/products').then(r => r.json()).then((p: Product[]) => {
+                  const enriched = enrichProductsWithIcons(p);
+                  setProducts(enriched);
+                  saveProducts(enriched);
+                });
+              }} />
             </div>
             <button onClick={() => { setIsSettingsOpen(false); triggerToast("Settings saved!", "success"); }}
               className="w-full mt-6 h-11 bg-gold-brand text-black font-black uppercase tracking-widest rounded-2xl text-xs hover:opacity-90 active:scale-98 transition-all font-display">

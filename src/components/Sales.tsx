@@ -1,11 +1,10 @@
-import { useState, useMemo, useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
-  Coins, Smartphone, UserCheck, X, Zap, Percent, User,
-  Barcode, Wallet, ChefHat, ArrowRightLeft, BookOpen,
-  CookingPot, Pen, Printer, Scissors, Trophy, Palette, Package
+  Coins, Smartphone, UserCheck, Percent, User,
+  Barcode, Wallet, ChefHat, ArrowRightLeft
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, StoreSettings, CashTransfer } from '../types';
+import { Product, Sale, SaleItem, Expense, StoreSettings } from '../types';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
 import KeyboardShortcuts from './KeyboardShortcuts';
@@ -14,7 +13,7 @@ import ConfirmSaleModal from './ConfirmSaleModal';
 import CashTransferModal from './CashTransferModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
-import LibraryModal from './LibraryModal';
+import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 
 interface SalesProps {
   products: Product[];
@@ -26,6 +25,9 @@ interface SalesProps {
   settings?: StoreSettings;
   onAddExpense?: (expense: Expense) => void;
   expenseCategories?: string[];
+  isQuickSale: boolean;
+  setIsQuickSale: Dispatch<SetStateAction<boolean>>;
+  categories: string[];
 }
 
 const getNextOrderNumber = () => {
@@ -36,19 +38,8 @@ const getNextOrderNumber = () => {
   return `Order #${next}`;
 };
 
-const CATEGORY_VISUALS: Record<string, { gradient: string; icon: React.ComponentType<{ className?: string }>; glow: string }> = {
-  'Electronics': { gradient: 'from-violet-900/80 via-indigo-800/50 to-slate-900/90', icon: Smartphone, glow: 'rgba(139,92,246,0.15)' },
-  'Eatery': { gradient: 'from-amber-800/80 via-orange-700/50 to-stone-900/90', icon: CookingPot, glow: 'rgba(245,158,11,0.15)' },
-  'Stationery': { gradient: 'from-emerald-800/80 via-teal-700/50 to-slate-900/90', icon: Pen, glow: 'rgba(16,185,129,0.15)' },
-  'Printing': { gradient: 'from-purple-800/80 via-fuchsia-700/50 to-slate-900/90', icon: Printer, glow: 'rgba(168,85,247,0.15)' },
-  'Tailoring': { gradient: 'from-pink-800/80 via-rose-700/50 to-stone-900/90', icon: Scissors, glow: 'rgba(244,63,94,0.15)' },
-  'Library': { gradient: 'from-stone-800/80 via-zinc-700/50 to-slate-900/90', icon: BookOpen, glow: 'rgba(120,113,108,0.15)' },
-  'Sports': { gradient: 'from-orange-800/80 via-amber-700/50 to-stone-900/90', icon: Trophy, glow: 'rgba(251,146,60,0.15)' },
-  'Graphics': { gradient: 'from-cyan-800/80 via-sky-700/50 to-slate-900/90', icon: Palette, glow: 'rgba(6,182,212,0.15)' },
-};
-
 export default function Sales({
-  products, onAddSale, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'],
+  products, onAddSale, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -62,7 +53,6 @@ export default function Sales({
   const [editingQtyValue, setEditingQtyValue] = useState<string>('');
   const [isMobileCartOpen, setIsMobileCartOpen] = useState<boolean>(false);
   const [isCustomChargeOpen, setIsCustomChargeOpen] = useState<boolean>(false);
-  const [isQuickSale, setIsQuickSale] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [discount, setDiscount] = useState<string>('');
@@ -75,7 +65,6 @@ export default function Sales({
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showFoodCost, setShowFoodCost] = useState(false);
   const [showTransfers, setShowTransfers] = useState(false);
-  const [showLibrary, setShowLibrary] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(30);
@@ -230,8 +219,6 @@ export default function Sales({
   };
   handleCompleteSaleRef.current = handleCompleteSale;
 
-  const categories = Object.keys(CATEGORY_VISUALS);
-
   const renderCartItem = (item: SaleItem) => {
     const isEditing = editingItemId === item.productId;
     const isRemoveConfirm = removeConfirmId === item.productId;
@@ -321,7 +308,7 @@ export default function Sales({
             </button>
               {categories.map(cat => {
                 const isActive = selectedCategory === cat;
-                const catInfo = CATEGORY_VISUALS[cat] || { gradient: 'from-zinc-800', icon: Package, glow: 'rgba(0,0,0,0.1)' };
+                const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
                 return (
                   <button key={cat} onClick={() => setSelectedCategory(cat)}
@@ -370,7 +357,6 @@ export default function Sales({
                 </button>
               </div>
             )}
-            {filteredProducts.length > visibleCount && visibleCount > PAGE_SIZE && filteredProducts.length > visibleCount && null}
             {visibleCount > PAGE_SIZE && (
               <div className="flex justify-center pt-2">
                 <button onClick={() => setVisibleCount(PAGE_SIZE)}
@@ -738,16 +724,6 @@ export default function Sales({
         formatCurrency={formatCurrency}
       />
 
-      <LibraryModal
-        isOpen={showLibrary}
-        onClose={() => setShowLibrary(false)}
-        products={products}
-        cart={cart}
-        setCart={setCart}
-        formatCurrency={formatCurrency}
-        triggerToast={triggerToast}
-      />
-
       <CashTransferModal
         isOpen={showTransfers}
         onClose={() => setShowTransfers(false)}
@@ -774,17 +750,9 @@ export default function Sales({
         formatCurrency={formatCurrency}
       />
 
-      {/* Floating Action Buttons */}
-      <div className="fixed bottom-24 left-4 z-30 flex flex-col items-start gap-2">
-        {/* Quick Sale — always visible */}
-        <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); setFabOpen(false); }}
-          className="h-14 w-14 bg-gold-brand text-black rounded-2xl shadow-2xl flex items-center justify-center active:scale-95 transition-all border border-white/10 shadow-[0_4px_20px_rgba(255,204,0,0.3)] cursor-pointer"
-          title="Quick Sale">
-          <Zap className="w-7 h-7" />
-        </button>
-
-        {/* More toggle */}
-        {fabOpen && <div className="fixed inset-0 z-[-1]" onClick={() => setFabOpen(false)} />}
+      {/* More tools FAB */}
+      {fabOpen && <div className="fixed inset-0 z-30" onClick={() => setFabOpen(false)} />}
+      <div className="fixed bottom-24 left-4 z-40">
         <div className="relative">
           <button onClick={() => setFabOpen(prev => !prev)}
             className={`h-12 w-12 rounded-xl border transition-all cursor-pointer flex items-center justify-center active:scale-90 ${
@@ -801,7 +769,6 @@ export default function Sales({
                 { icon: Wallet, label: 'Expense', color: 'hover:border-emerald-500 hover:text-emerald-400', onClick: () => { setShowQuickExpense(true); setFabOpen(false); } },
                 { icon: ChefHat, label: 'Profit', color: 'hover:border-amber-500 hover:text-amber-400', onClick: () => { setShowFoodCost(true); setFabOpen(false); } },
                 { icon: ArrowRightLeft, label: 'Transfer', color: 'hover:border-sky-500 hover:text-sky-400', onClick: () => { setShowTransfers(true); setFabOpen(false); } },
-                { icon: BookOpen, label: 'Library', color: 'hover:border-violet-500 hover:text-violet-400', onClick: () => { setShowLibrary(true); setFabOpen(false); } },
               ].map(btn => {
                 const BtnIcon = btn.icon;
                 return (

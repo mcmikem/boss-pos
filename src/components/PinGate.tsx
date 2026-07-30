@@ -1,17 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import { Lock, X } from 'lucide-react';
+import { Lock } from 'lucide-react';
+import { hashPin } from '../utils/crypto';
 
 interface PinGateProps {
   onUnlock: () => void;
   onSetPin: (pin: string) => void;
-  hasPin: boolean;
+  storedPinHash: string | null;
   shopName: string;
 }
 
-export default function PinGate({ onUnlock, onSetPin, hasPin, shopName }: PinGateProps) {
+export default function PinGate({ onUnlock, onSetPin, storedPinHash, shopName }: PinGateProps) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
-  const [isSettingPin, setIsSettingPin] = useState(!hasPin);
+  const isSettingPin = !storedPinHash;
   const [confirmPin, setConfirmPin] = useState('');
   const [step, setStep] = useState<'enter' | 'confirm'>('enter');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -20,7 +21,7 @@ export default function PinGate({ onUnlock, onSetPin, hasPin, shopName }: PinGat
     inputRef.current?.focus();
   }, []);
 
-  const handleDigit = (d: string) => {
+  const handleDigit = async (d: string) => {
     setError('');
     if (isSettingPin) {
       if (step === 'enter') {
@@ -39,8 +40,8 @@ export default function PinGate({ onUnlock, onSetPin, hasPin, shopName }: PinGat
       const next = pin + d;
       if (next.length <= 4) setPin(next);
       if (next.length === 4) {
-        const stored = localStorage.getItem('boss_pos_pin');
-        if (next === stored) { onUnlock(); }
+        const enteredHash = await hashPin(next);
+        if (enteredHash === storedPinHash) { onUnlock(); }
         else { setError('Wrong PIN'); setPin(''); }
       }
     }

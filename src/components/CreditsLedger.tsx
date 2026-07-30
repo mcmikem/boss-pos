@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
-import type { Sale } from '../types';
+import type { Sale, CreditPayment } from '../types';
 import { X, Check, AlertCircle } from 'lucide-react';
 
 interface CreditsLedgerProps {
   sales: Sale[];
+  creditPayments: CreditPayment[];
   formatCurrency: (val: number) => string;
   onPayCredit: (saleId: string, amount: number) => void;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -11,6 +12,7 @@ interface CreditsLedgerProps {
 
 export default function CreditsLedger({
   sales,
+  creditPayments,
   formatCurrency,
   onPayCredit,
   triggerToast
@@ -19,12 +21,15 @@ export default function CreditsLedger({
   const [paymentAmount, setPaymentAmount] = useState<string>('');
 
   const creditRecords = useMemo(() => {
+    const creditTotals: Record<string, number> = {};
+    creditPayments.forEach(p => {
+      creditTotals[p.saleId] = (creditTotals[p.saleId] || 0) + p.amount;
+    });
+
     return sales
       .filter(s => s.paymentMethod === 'Credit / Book' && s.customerName)
       .map(s => {
-        // Track paid amount from localStorage for each sale
-        const storageKey = `credit-paid-${s.id}`;
-        const paid = parseInt(localStorage.getItem(storageKey) || '0', 10);
+        const paid = creditTotals[s.id] || 0;
         return {
           saleId: s.id,
           orderNumber: s.orderNumber,
@@ -37,7 +42,7 @@ export default function CreditsLedger({
       })
       .filter(r => r.remaining > 0)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [sales]);
+  }, [sales, creditPayments]);
 
   const totalOutstanding = creditRecords.reduce((sum, r) => sum + r.remaining, 0);
 
@@ -54,12 +59,6 @@ export default function CreditsLedger({
       triggerToast(`Cannot exceed outstanding amount (${formatCurrency(record?.remaining || 0)})`, 'error');
       return;
     }
-
-    // Store payment in localStorage
-    const storageKey = `credit-paid-${paymentSaleId}`;
-    const currentPaid = parseInt(localStorage.getItem(storageKey) || '0', 10);
-    const newPaid = currentPaid + amtNum;
-    localStorage.setItem(storageKey, String(newPaid));
 
     triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
     setPaymentSaleId(null);
