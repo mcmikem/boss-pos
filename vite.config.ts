@@ -190,7 +190,7 @@ export default defineConfig(() => {
         modernPolyfills: true,
       }),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
         includeAssets: ['icon.svg'],
         manifest: {
           name: 'IMAC Enterprises POS',
@@ -214,6 +214,7 @@ export default defineConfig(() => {
           globPatterns: ['**/*.{js,css,html,svg,png,ico,json}'],
           skipWaiting: true,
           clientsClaim: true,
+          cleanupOutdatedCaches: true,
           runtimeCaching: [
             {
               urlPattern: /^https?:\/\/.*/,

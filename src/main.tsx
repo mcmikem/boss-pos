@@ -11,22 +11,21 @@ root.render(
   </StrictMode>,
 );
 
-// Register service worker with update prompt
+// Service worker: auto-update to the latest version on deploy
+// (reloads once when a new SW takes control, so stale lazy-loaded chunks never fail)
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').then(reg => {
-    reg.addEventListener('updatefound', () => {
-      const newSW = reg.installing;
-      if (newSW) {
-        newSW.addEventListener('statechange', () => {
-          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-            const msg = 'A new version is available. Reload to update.';
-            if (confirm(msg)) {
-              newSW.postMessage({ type: 'SKIP_WAITING' });
-              window.location.reload();
-            }
-          }
-        });
-      }
-    });
-  }).catch(() => {});
+  let refreshing = false;
+  let hasController = !!navigator.serviceWorker.controller;
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hasController) {
+      hasController = true;
+      return;
+    }
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
