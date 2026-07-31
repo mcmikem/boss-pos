@@ -1,3 +1,10 @@
+export interface ProductVariant {
+  id: string;
+  label: string;
+  price: number;
+  cost?: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -11,6 +18,7 @@ export interface Product {
   isService?: boolean;
   imei?: string;
   barcode?: string;
+  variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
 }
 
 export interface CashTransfer {
@@ -46,6 +54,8 @@ export interface SaleItem {
   unitPrice: number;
   unitCost: number;
   lineTotal: number;
+  variantId?: string;
+  variantLabel?: string;
 }
 
 export interface Sale {

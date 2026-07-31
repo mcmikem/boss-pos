@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef } from 'react';
 import { 
   Search, Plus, AlertTriangle, Edit, Package, Save, X,
-  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2
+  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks
 } from 'lucide-react';
-import type { Product, Supplier } from '../types';
+import type { Product, ProductVariant, Supplier } from '../types';
 import CategoryManager from './CategoryManager';
 
 interface InventoryProps {
@@ -53,6 +53,7 @@ export default function Inventory({
   const [newImei, setNewImei] = useState('');
   const [newBarcode, setNewBarcode] = useState('');
   const [newImageUrl, setNewImageUrl] = useState('');
+  const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
 
   const [editName, setEditName] = useState('');
   const [editCost, setEditCost] = useState('');
@@ -64,6 +65,7 @@ export default function Inventory({
   const [editBarcode, setEditBarcode] = useState('');
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editIsService, setEditIsService] = useState(false);
+  const [editVariants, setEditVariants] = useState<ProductVariant[]>([]);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -135,9 +137,28 @@ export default function Inventory({
     setEditBarcode(product.barcode || '');
     setEditImageUrl(product.imageUrl || '');
     setEditIsService(product.isService || false);
+    setEditVariants(product.variants ? product.variants.map(v => ({ ...v })) : []);
     setStockAdjustment(0);
     setAdjustmentType('add');
     setConfirmDelete(false);
+  };
+
+  const addVariant = () => {
+    const base = editingProduct;
+    setEditVariants(prev => [...prev, {
+      id: `var-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      label: '',
+      price: base?.price || 0,
+      cost: base?.cost || undefined,
+    }]);
+  };
+
+  const updateVariant = (id: string, patch: Partial<ProductVariant>) => {
+    setEditVariants(prev => prev.map(v => v.id === id ? { ...v, ...patch } : v));
+  };
+
+  const removeVariant = (id: string) => {
+    setEditVariants(prev => prev.filter(v => v.id !== id));
   };
 
   const handleSaveEdit = () => {
@@ -168,6 +189,15 @@ export default function Inventory({
       }
     }
 
+    const cleanVariants = editVariants
+      .filter(v => v.label.trim() !== '')
+      .map(v => ({
+        id: v.id,
+        label: v.label.trim(),
+        price: parseFloat(String(v.price)) || 0,
+        cost: parseFloat(String(v.cost)) || undefined,
+      }));
+
     const updated: Product = {
       ...editingProduct,
       name: nameTrimmed,
@@ -181,11 +211,29 @@ export default function Inventory({
       barcode: editBarcode || undefined,
       imageUrl: editImageUrl || undefined,
       isService: editIsService,
+      variants: cleanVariants.length ? cleanVariants : undefined,
     };
 
     onUpdateProduct(updated);
     setEditingProduct(null);
     triggerToast(`Updated ${nameTrimmed}`, 'success');
+  };
+
+  const addNewVariant = () => {
+    setNewVariants(prev => [...prev, {
+      id: `var-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      label: '',
+      price: parseFloat(newPrice) || 0,
+      cost: parseFloat(newCost) || undefined,
+    }]);
+  };
+
+  const updateNewVariant = (id: string, patch: Partial<ProductVariant>) => {
+    setNewVariants(prev => prev.map(v => v.id === id ? { ...v, ...patch } : v));
+  };
+
+  const removeNewVariant = (id: string) => {
+    setNewVariants(prev => prev.filter(v => v.id !== id));
   };
 
   const handleCreateProduct = () => {
@@ -199,6 +247,15 @@ export default function Inventory({
     const stockNum = parseInt(newStock, 10) || 0;
     const thresholdNum = parseInt(newThreshold, 10) || 0;
 
+    const cleanVariants = newVariants
+      .filter(v => v.label.trim() !== '')
+      .map(v => ({
+        id: v.id,
+        label: v.label.trim(),
+        price: parseFloat(String(v.price)) || 0,
+        cost: parseFloat(String(v.cost)) || undefined,
+      }));
+
     const newProd: Product = {
       id: `prod-${Date.now()}`,
       name: newName,
@@ -211,12 +268,14 @@ export default function Inventory({
       imei: newImei || undefined,
       barcode: newBarcode || undefined,
       imageUrl: newImageUrl || undefined,
+      variants: cleanVariants.length ? cleanVariants : undefined,
     };
 
     onAddProduct(newProd);
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
     setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewImageUrl('');
+    setNewVariants([]);
     triggerToast(`Added "${newProd.name}"`, 'success');
   };
 
@@ -419,6 +478,40 @@ export default function Inventory({
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
                 </div>
               </div>
+
+              <div className="bg-zinc-900/60 rounded-xl p-3 border border-zinc-800/60">
+                <div className="flex justify-between items-center mb-1">
+                  <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <ListChecks className="w-3.5 h-3.5 text-gold-brand" /> Product Options
+                  </h4>
+                  <button onClick={addNewVariant} className="text-gold-brand text-xs font-bold flex items-center gap-1 hover:text-gold-light transition-colors">
+                    <PlusCircle className="w-3.5 h-3.5" /> Add
+                  </button>
+                </div>
+                <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this dish (e.g. Single / Couple / Big)</p>
+                {newVariants.length === 0 ? (
+                  <p className="text-xs text-zinc-600 italic">No options yet. Tap Add to create one.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {newVariants.map(v => (
+                      <div key={v.id} className="flex items-center gap-2">
+                        <input value={v.label} placeholder="Label"
+                          onChange={(e) => updateNewVariant(v.id, { label: e.target.value })}
+                          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none" />
+                        <input type="number" min="0" value={v.price || ''} placeholder="Price"
+                          onChange={(e) => updateNewVariant(v.id, { price: parseFloat(e.target.value) || 0 })}
+                          className="w-20 bg-zinc-950 border border-zinc-800 text-gold-brand rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold text-right" />
+                        <input type="number" min="0" value={v.cost ?? ''} placeholder="Cost?"
+                          onChange={(e) => updateNewVariant(v.id, { cost: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+                          className="w-16 bg-zinc-950 border border-zinc-800 text-zinc-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+                        <button onClick={() => removeNewVariant(v.id)} className="text-rose-400 hover:text-rose-300 p-1.5 shrink-0">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="pt-4 flex gap-3">
@@ -531,6 +624,40 @@ export default function Inventory({
                 <input type="text" value={editBarcode} onChange={(e) => setEditBarcode(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
               </div>
+            </div>
+
+            <div className="bg-zinc-900/60 rounded-xl p-3 border border-zinc-800/60">
+              <div className="flex justify-between items-center mb-1">
+                <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <ListChecks className="w-3.5 h-3.5 text-gold-brand" /> Product Options
+                </h4>
+                <button onClick={addVariant} className="text-gold-brand text-xs font-bold flex items-center gap-1 hover:text-gold-light transition-colors">
+                  <PlusCircle className="w-3.5 h-3.5" /> Add
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this dish (e.g. Single / Couple / Big)</p>
+              {editVariants.length === 0 ? (
+                <p className="text-xs text-zinc-600 italic">No options yet. Tap Add to create one.</p>
+              ) : (
+                <div className="space-y-2">
+                  {editVariants.map(v => (
+                    <div key={v.id} className="flex items-center gap-2">
+                      <input value={v.label} placeholder="Label"
+                        onChange={(e) => updateVariant(v.id, { label: e.target.value })}
+                        className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none" />
+                      <input type="number" min="0" value={v.price || ''} placeholder="Price"
+                        onChange={(e) => updateVariant(v.id, { price: parseFloat(e.target.value) || 0 })}
+                        className="w-20 bg-zinc-950 border border-zinc-800 text-gold-brand rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold text-right" />
+                      <input type="number" min="0" value={v.cost ?? ''} placeholder="Cost?"
+                        onChange={(e) => updateVariant(v.id, { cost: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+                        className="w-16 bg-zinc-950 border border-zinc-800 text-zinc-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+                      <button onClick={() => removeVariant(v.id)} className="text-rose-400 hover:text-rose-300 p-1.5 shrink-0">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="bg-zinc-900 p-4 rounded-xl space-y-3 border border-zinc-800/60">

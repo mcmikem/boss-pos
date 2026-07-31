@@ -15,7 +15,9 @@ interface ProductCardProps {
 const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
-  const cartItem = cart?.find(item => item.productId === product.id);
+  const hasVariants = !!product.variants && product.variants.length > 0;
+  const minPrice = hasVariants ? Math.min(...(product.variants as { price: number }[]).map(v => v.price)) : product.price;
+  const cartItem = cart?.find(item => item.productId === product.id && !item.variantId);
   const catVis = CATEGORY_VISUALS[product.category] || DEFAULT_CATEGORY_VISUAL;
   const CatIcon = catVis.icon;
 
@@ -81,12 +83,16 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         </h3>
         <div className="flex items-center justify-between mt-auto gap-1">
           <div>
-            <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(product.price)}</p>
+            <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}</p>
             {product.cost > 0 && (
               <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">Cost: {formatCurrency(product.cost)}</p>
             )}
           </div>
-          {cartItem && onAdjustQty ? (
+          {hasVariants ? (
+            <span className="text-[9px] text-amber-400/80 font-black uppercase tracking-wider border border-amber-400/30 bg-amber-950/30 rounded-lg px-2 py-1.5">
+              Options
+            </span>
+          ) : cartItem && onAdjustQty ? (
             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
               <button onClick={() => onAdjustQty(product.id, -1)} className="touch-target rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-lg font-bold flex items-center justify-center transition-all active:scale-90">-</button>
               <span className="text-sm font-black text-white px-1 min-w-[20px] text-center font-mono">{cartItem.qty}</span>

@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { 
-  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap
+  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
@@ -17,6 +17,7 @@ import SyncProductsButton from './components/SyncProductsButton';
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Inventory = lazy(() => import('./components/Inventory'));
 const Analytics = lazy(() => import('./components/Analytics'));
+const Expenses = lazy(() => import('./components/Expenses'));
 
 const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
@@ -40,7 +41,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics'>('sales');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics' | 'expenses'>('sales');
   const [currency, setCurrency] = useState<'UGX' | 'USD'>('UGX');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -371,6 +372,22 @@ export default function App() {
           </Suspense>
           </ErrorBoundary>
         );
+      case 'expenses':
+        return (
+          <ErrorBoundary key="expenses">
+          <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
+          <Expenses 
+            expenses={expenses} expenseCategories={expenseCategories}
+            products={products}
+            onAddExpense={handleAddExpense} onDeleteExpense={handleDeleteExpense}
+            onAddExpenseCategory={handleAddExpenseCategory}
+            onUpdateExpenseCategory={handleUpdateExpenseCategory}
+            onDeleteExpenseCategory={handleDeleteExpenseCategory}
+            formatCurrency={formatCurrency} triggerToast={triggerToast}
+          />
+          </Suspense>
+          </ErrorBoundary>
+        );
       case 'analytics':
         return (
           <ErrorBoundary key="analytics">
@@ -503,6 +520,10 @@ export default function App() {
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Stock</span>
+        </button>
+        <button onClick={() => { setActiveTab('expenses'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
+          <Wallet className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">Spend</span>
         </button>
         <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />

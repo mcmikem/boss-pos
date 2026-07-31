@@ -17,9 +17,10 @@ async function initDB() {
     cost DOUBLE PRECISION DEFAULT 0, price DOUBLE PRECISION DEFAULT 0,
     stockqty INTEGER DEFAULT 0, lowstockthreshold INTEGER DEFAULT 5,
     supplierid TEXT, isservice BOOLEAN DEFAULT false,
-    imei TEXT, barcode TEXT, imageurl TEXT
+    imei TEXT, barcode TEXT, imageurl TEXT, variants TEXT
   )`;
   try { await sql`ALTER TABLE products ADD COLUMN imageurl TEXT`; } catch {}
+  try { await sql`ALTER TABLE products ADD COLUMN variants TEXT`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
@@ -146,9 +147,24 @@ async function seedDatabase() {
     { id:'prod-92',name:'T-Shirt (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:25,lowStockThreshold:5,supplierId:'sup-1' },
     { id:'prod-93',name:'T-Shirt (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:20,lowStockThreshold:5,supplierId:'sup-1' },
     { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
+    { id:'prod-100',name:'Chappati',category:'Eatery',cost:250,price:500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5' },
+    { id:'prod-101',name:'Samosa / Sumbusa',category:'Eatery',cost:120,price:300,stockQty:120,lowStockThreshold:20,supplierId:'sup-5',
+      variants:[{id:'v-single',label:'Single',price:300,cost:120},{id:'v-couple',label:'Couple / Pair',price:500,cost:250},{id:'v-big',label:'Big Size',price:500,cost:300}] },
+    { id:'prod-102',name:'Egg Roll',category:'Eatery',cost:500,price:1000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5' },
+    { id:'prod-103',name:'Coconut Cookies',category:'Eatery',cost:200,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+      variants:[{id:'v-pair',label:'Pair',price:500,cost:200},{id:'v-plate',label:'Plate',price:2500,cost:1200}] },
+    { id:'prod-104',name:'Shortbread Cookies',category:'Eatery',cost:250,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+      variants:[{id:'v-pair',label:'Pair',price:500,cost:250},{id:'v-plate',label:'Plate',price:2500,cost:1300}] },
+    { id:'prod-105',name:'Sausage',category:'Eatery',cost:600,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5' },
+    { id:'prod-106',name:'Half Cake',category:'Eatery',cost:250,price:500,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',
+      variants:[{id:'v-small',label:'Small',price:500,cost:250},{id:'v-large',label:'Large',price:1000,cost:500}] },
+    { id:'prod-107',name:'Meat Samosa',category:'Eatery',cost:550,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5' },
+    { id:'prod-108',name:'Black Tea',category:'Eatery',cost:150,price:500,stockQty:200,lowStockThreshold:30,supplierId:'sup-5' },
+    { id:'prod-109',name:'Milk Tea',category:'Eatery',cost:400,price:1000,stockQty:150,lowStockThreshold:25,supplierId:'sup-5' },
+    { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5' },
   ];
-  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode'],
-    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null })));
+  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','variants'],
+    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, variants: p.variants ? JSON.stringify(p.variants) : null })));
 
   const expenses = [
     { id:'exp-1',timestamp:'2026-07-15T08:30:00Z',description:'Phone accessories restock',amount:85000,category:'Stock Purchase' },
@@ -199,7 +215,35 @@ async function syncLibraryProducts() {
   await sql`DELETE FROM products WHERE category='Movies' OR category='Music' OR category='Software (Android)' OR category='Software (Windows)'`;
 }
 
-initPromise = initPromise.then(() => syncLibraryProducts()).catch(err => {
+const EATERY_MENU = [
+  { id:'prod-100',name:'Chappati',category:'Eatery',cost:250,price:500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5',variants:null },
+  { id:'prod-101',name:'Samosa / Sumbusa',category:'Eatery',cost:120,price:300,stockQty:120,lowStockThreshold:20,supplierId:'sup-5',
+    variants:[{id:'v-single',label:'Single',price:300,cost:120},{id:'v-couple',label:'Couple / Pair',price:500,cost:250},{id:'v-big',label:'Big Size',price:500,cost:300}] },
+  { id:'prod-102',name:'Egg Roll',category:'Eatery',cost:500,price:1000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5',variants:null },
+  { id:'prod-103',name:'Coconut Cookies',category:'Eatery',cost:200,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+    variants:[{id:'v-pair',label:'Pair',price:500,cost:200},{id:'v-plate',label:'Plate',price:2500,cost:1200}] },
+  { id:'prod-104',name:'Shortbread Cookies',category:'Eatery',cost:250,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+    variants:[{id:'v-pair',label:'Pair',price:500,cost:250},{id:'v-plate',label:'Plate',price:2500,cost:1300}] },
+  { id:'prod-105',name:'Sausage',category:'Eatery',cost:600,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-106',name:'Half Cake',category:'Eatery',cost:250,price:500,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',
+    variants:[{id:'v-small',label:'Small',price:500,cost:250},{id:'v-large',label:'Large',price:1000,cost:500}] },
+  { id:'prod-107',name:'Meat Samosa',category:'Eatery',cost:550,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-108',name:'Black Tea',category:'Eatery',cost:150,price:500,stockQty:200,lowStockThreshold:30,supplierId:'sup-5',variants:null },
+  { id:'prod-109',name:'Milk Tea',category:'Eatery',cost:400,price:1000,stockQty:150,lowStockThreshold:25,supplierId:'sup-5',variants:null },
+  { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+];
+
+async function syncEateryMenu() {
+  for (const p of EATERY_MENU) {
+    await sql`
+      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,variants)
+      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},false,null,${p.variants ? JSON.stringify(p.variants) : null})
+      ON CONFLICT (id) DO NOTHING
+    `;
+  }
+}
+
+initPromise = initPromise.then(() => syncLibraryProducts()).then(() => syncEateryMenu()).catch(err => {
   console.error('Library sync failed:', err);
 });
 
@@ -217,13 +261,13 @@ app.get('/api/products', asHandler(async (req, res) => {
 
 app.post('/api/products', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null})`;
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null},${p.variants ? JSON.stringify(p.variants) : null})`;
   res.json(p);
 }));
 
 app.put('/api/products/:id', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null} WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null},variants=${p.variants ? JSON.stringify(p.variants) : null} WHERE id=${req.params.id}`;
   res.json(p);
 }));
 
@@ -361,11 +405,16 @@ app.post('/api/sync-products', asHandler(async (req, res) => {
 }));
 
 function mapProduct(r) {
+  let variants = null;
+  if (r.variants) {
+    try { variants = JSON.parse(r.variants); } catch { variants = null; }
+  }
   return {
     id: r.id, name: r.name, category: r.category, cost: r.cost, price: r.price,
     stockQty: r.stockqty, lowStockThreshold: r.lowstockthreshold,
     supplierId: r.supplierid, isService: !!r.isservice,
     imei: r.imei, barcode: r.barcode, imageUrl: r.imageurl || '',
+    variants: variants || undefined,
   };
 }
 

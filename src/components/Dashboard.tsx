@@ -381,7 +381,10 @@ export default function Dashboard({
                 <div className="space-y-1.5 py-1">
                   {selectedSaleForModal.items.map((item, i) => (
                     <div key={i} className="flex justify-between items-start gap-3 py-0.5">
-                      <span className="truncate flex-1 uppercase text-zinc-200">{item.productName}</span>
+                      <span className="truncate flex-1">
+                        <span className="uppercase text-zinc-200">{item.productName}</span>
+                        {item.variantLabel && <span className="block text-[10px] text-zinc-500 uppercase">{item.variantLabel}</span>}
+                      </span>
                       <span className="text-zinc-500 shrink-0">x{item.qty}</span>
                       <span className="text-gold-light shrink-0">{formatCurrency(item.lineTotal)}</span>
                     </div>

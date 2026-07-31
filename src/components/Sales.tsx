@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateActio
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
-  Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors
+  Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, StoreSettings } from '../types';
 import ProductCard from './ProductCard';
@@ -44,6 +44,7 @@ export default function Sales({
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
+  const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
     if (settings?.defaultPaymentMethod === 'MTN MoMo') return 'MTN MoMo';
@@ -97,26 +98,42 @@ export default function Sales({
       triggerToast(`${product.name} is out of stock!`, 'error');
       return;
     }
+    if (product.variants && product.variants.length > 0) {
+      setVariantProduct(product);
+      return;
+    }
+    addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService);
+  };
+
+  const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean) => {
     setCart(prev => {
-      const existing = prev.find(item => item.productId === product.id);
+      const key = `${productId}::${variantId || ''}`;
+      const existing = prev.find(i => `${i.productId}::${i.variantId || ''}` === key);
       if (existing) {
-        const nextQty = existing.qty + 1;
-        if (nextQty > product.stockQty && !product.isService) {
-          triggerToast(`Cannot exceed remaining stock (${product.stockQty})!`, 'error');
+        const nextQty = existing.qty + qty;
+        if (nextQty > stockQty && !isService) {
+          triggerToast(`Cannot exceed remaining stock (${stockQty})!`, 'error');
           return prev;
         }
-        return prev.map(item => 
-          item.productId === product.id
-            ? { ...item, qty: nextQty, lineTotal: nextQty * item.unitPrice }
+        return prev.map(item =>
+          `${item.productId}::${item.variantId || ''}` === key
+            ? { ...item, qty: nextQty, lineTotal: nextQty * unitPrice }
             : item
         );
-      } else {
-        return [...prev, {
-          productId: product.id, productName: product.name, qty: 1,
-          unitPrice: product.price, unitCost: product.cost, lineTotal: product.price,
-        }];
       }
+      return [...prev, {
+        productId, variantId: variantId || undefined, variantLabel: variantLabel || undefined,
+        productName: variantLabel ? `${productName} — ${variantLabel}` : productName,
+        qty, unitPrice, unitCost, lineTotal: unitPrice * qty,
+      } as SaleItem];
     });
+  };
+
+  const handleVariantAdd = (variant: { id: string; label: string; price: number; cost?: number }) => {
+    if (!variantProduct) return;
+    addCartLine(variantProduct.id, variant.id, variant.label, variantProduct.name, 1, variant.price, variant.cost ?? variantProduct.cost, variantProduct.stockQty, !!variantProduct.isService);
+    triggerToast(`${variantProduct.name} (${variant.label}) added`, 'success');
+    setVariantProduct(null);
   };
 
   const handleCompleteSaleRef = useRef<() => void | null>(null);
@@ -142,10 +159,11 @@ export default function Sales({
     }
   };
 
-  const handleAdjustQty = (productId: string, delta: number) => {
+  const handleAdjustQty = (productId: string, variantId: string | undefined, delta: number) => {
     const product = products.find(p => p.id === productId);
+    const key = `${productId}::${variantId || ''}`;
     setCart(prev => prev.map(item => {
-      if (item.productId === productId) {
+      if (`${item.productId}::${item.variantId || ''}` === key) {
         const nextQty = item.qty + delta;
         if (nextQty <= 0) return null;
         if (product && nextQty > product.stockQty && !product.isService) {
@@ -159,28 +177,30 @@ export default function Sales({
     setRemoveConfirmId(null);
   };
 
-  const handleDirectQtyChange = (productId: string, val: number) => {
+  const handleDirectQtyChange = (productId: string, variantId: string | undefined, val: number) => {
     const product = products.find(p => p.id === productId);
-    if (val <= 0) { handleRemoveItem(productId); setEditingItemId(null); return; }
+    const key = `${productId}::${variantId || ''}`;
+    if (val <= 0) { handleRemoveItem(productId, variantId); setEditingItemId(null); return; }
     if (product && val > product.stockQty && !product.isService) {
       triggerToast(`Only ${product.stockQty} remaining in stock!`, 'error');
       val = product.stockQty;
     }
     setCart(prev => prev.map(item =>
-      item.productId === productId
+      `${item.productId}::${item.variantId || ''}` === key
         ? { ...item, qty: val, lineTotal: val * item.unitPrice }
         : item
     ));
     setEditingItemId(null);
   };
 
-  const handleRemoveItem = (productId: string) => {
-    const item = cart.find(i => i.productId === productId);
+  const handleRemoveItem = (productId: string, variantId: string | undefined) => {
+    const key = `${productId}::${variantId || ''}`;
+    const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
     if (item && item.qty > 1 && !removeConfirmId) {
-      setRemoveConfirmId(productId);
+      setRemoveConfirmId(key);
       return;
     }
-    setCart(prev => prev.filter(item => item.productId !== productId));
+    setCart(prev => prev.filter(item => `${item.productId}::${item.variantId || ''}` !== key));
     setRemoveConfirmId(null);
   };
 
@@ -222,12 +242,16 @@ export default function Sales({
   handleCompleteSaleRef.current = handleCompleteSale;
 
   const renderCartItem = (item: SaleItem) => {
-    const isEditing = editingItemId === item.productId;
-    const isRemoveConfirm = removeConfirmId === item.productId;
+    const lineKey = `${item.productId}::${item.variantId || ''}`;
+    const isEditing = editingItemId === lineKey;
+    const isRemoveConfirm = removeConfirmId === lineKey;
     return (
-      <div key={item.productId} className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl flex flex-col justify-between gap-3">
+      <div key={lineKey} className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl flex flex-col justify-between gap-3">
         <div className="flex justify-between items-start gap-2">
-          <span className="text-sm font-bold text-white uppercase tracking-wide truncate max-w-[180px]" title={item.productName}>{item.productName}</span>
+          <div className="min-w-0">
+            <span className="text-sm font-bold text-white uppercase tracking-wide truncate max-w-[180px] block" title={item.productName}>{item.productName}</span>
+            {item.variantLabel && <span className="text-[10px] text-zinc-500 uppercase font-bold block">{item.variantLabel}</span>}
+          </div>
           <p className="text-sm font-black text-gold-brand font-display shrink-0">{formatCurrency(item.lineTotal)}</p>
         </div>
         <div className="flex justify-between items-center">
@@ -236,33 +260,33 @@ export default function Sales({
               <input type="number" autoFocus value={editingQtyValue}
                 onChange={(e) => setEditingQtyValue(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleDirectQtyChange(item.productId, parseInt(editingQtyValue, 10) || 0);
+                  if (e.key === 'Enter') handleDirectQtyChange(item.productId, item.variantId, parseInt(editingQtyValue, 10) || 0);
                   if (e.key === 'Escape') setEditingItemId(null);
                 }}
                 className="w-16 bg-zinc-900 border border-gold-brand text-gold-light rounded text-center text-sm h-11 p-1 focus:outline-none" />
-              <button onClick={() => handleDirectQtyChange(item.productId, parseInt(editingQtyValue, 10) || 0)}
+              <button onClick={() => handleDirectQtyChange(item.productId, item.variantId, parseInt(editingQtyValue, 10) || 0)}
                 className="p-2 bg-gold-brand text-black rounded text-sm hover:opacity-90 cursor-pointer touch-target"><Check className="w-4 h-4" /></button>
             </div>
           ) : (
-            <button onClick={() => { setEditingItemId(item.productId); setEditingQtyValue(String(item.qty)); }}
+            <button onClick={() => { setEditingItemId(lineKey); setEditingQtyValue(String(item.qty)); }}
               className="text-xs font-bold text-zinc-400 bg-zinc-900 hover:text-gold-brand hover:bg-zinc-800 px-3 py-1.5 rounded-lg cursor-pointer transition-all touch-target">
               Qty: <span className="text-gold-light underline font-black">{item.qty}</span>
             </button>
           )}
           <div className="flex items-center gap-1.5">
-            <button onClick={() => handleAdjustQty(item.productId, -1)}
+            <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Minus className="w-4 h-4" /></button>
-            <button onClick={() => handleAdjustQty(item.productId, 1)}
+            <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Plus className="w-4 h-4" /></button>
             {isRemoveConfirm ? (
               <div className="flex items-center gap-1">
-                <button onClick={() => handleRemoveItem(item.productId)}
+                <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
                   className="touch-target bg-rose-600 text-white rounded-lg flex items-center justify-center text-xs font-black cursor-pointer">Yes</button>
                 <button onClick={() => setRemoveConfirmId(null)}
                   className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center text-xs font-bold cursor-pointer">No</button>
               </div>
             ) : (
-              <button onClick={() => handleRemoveItem(item.productId)}
+              <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
                 className="touch-target bg-rose-950/20 hover:bg-rose-950 hover:text-rose-400 text-rose-500 rounded-lg flex items-center justify-center transition-all cursor-pointer"><Trash2 className="w-4 h-4" /></button>
             )}
           </div>
@@ -359,7 +383,7 @@ export default function Sales({
                   cart={cart}
                   formatCurrency={formatCurrency}
                   onAddToCart={handleAddToCart}
-                  onAdjustQty={handleAdjustQty}
+                  onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
                 />
               ))}
               {filteredProducts.length === 0 && (
@@ -561,18 +585,19 @@ export default function Sales({
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] max-h-[40vh]">
             {cart.map(item => (
-              <div key={item.productId} className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
+              <div key={`${item.productId}::${item.variantId || ''}`} className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
                 <div className="min-w-0 flex-1">
                   <h4 className="text-sm font-bold text-white uppercase truncate max-w-[160px]" title={item.productName}>{item.productName}</h4>
+                  {item.variantLabel && <p className="text-[10px] text-zinc-500 uppercase font-bold">{item.variantLabel}</p>}
                   <p className="text-xs text-gold-brand font-black mt-0.5">{formatCurrency(item.lineTotal)}</p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => handleAdjustQty(item.productId, -1)}
+                  <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
                     className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
                   <span className="text-sm font-black text-white min-w-[24px] text-center">{item.qty}</span>
-                  <button onClick={() => handleAdjustQty(item.productId, 1)}
+                  <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
                     className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
-                  <button onClick={() => handleRemoveItem(item.productId)}
+                  <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
                     className="touch-target bg-rose-950/20 hover:bg-rose-950/40 text-rose-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">x</button>
                 </div>
               </div>
@@ -693,18 +718,19 @@ export default function Sales({
             <div className="border-t border-white/5 p-4 space-y-3 bg-zinc-950">
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {cart.map(item => (
-                  <div key={item.productId} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 p-3 rounded-xl">
+                  <div key={`${item.productId}::${item.variantId || ''}`} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 p-3 rounded-xl">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-bold text-white uppercase truncate">{item.productName}</p>
+                      {item.variantLabel && <p className="text-[10px] text-zinc-500 uppercase font-bold">{item.variantLabel}</p>}
                       <p className="text-xs font-black text-gold-brand">{formatCurrency(item.lineTotal)}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0 ml-2">
-                      <button onClick={() => handleAdjustQty(item.productId, -1)}
+                      <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
                         className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">-</button>
                       <span className="text-sm font-black text-white min-w-[20px] text-center">{item.qty}</span>
-                      <button onClick={() => handleAdjustQty(item.productId, 1)}
+                      <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
                         className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">+</button>
-                      <button onClick={() => handleRemoveItem(item.productId)}
+                      <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
                         className="touch-target bg-rose-950/20 text-rose-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">x</button>
                     </div>
                   </div>
@@ -770,6 +796,43 @@ export default function Sales({
         cart={cart}
         formatCurrency={formatCurrency}
       />
+
+      {/* Variant picker */}
+      {variantProduct && variantProduct.variants && (
+        <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onClick={() => setVariantProduct(null)}>
+          <div className="bg-[#141414] w-full max-w-md rounded-t-3xl border border-white/10 p-5 animate-slide-up max-h-[70vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-amber-950/30 border border-amber-800/40 flex items-center justify-center text-amber-400">
+                  <ChefHat className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white uppercase tracking-tight font-display">{variantProduct.name}</h3>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">{variantProduct.category} • choose a size/unit</p>
+                </div>
+              </div>
+              <button onClick={() => setVariantProduct(null)}
+                className="p-1.5 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer touch-target">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {variantProduct.variants.map(variant => (
+                <button key={variant.id} onClick={() => handleVariantAdd(variant)}
+                  className="w-full flex items-center justify-between p-4 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 active:scale-[0.98] transition-all cursor-pointer touch-target min-h-[56px]">
+                  <span className="text-sm font-bold text-white uppercase tracking-wide">{variant.label}</span>
+                  <span className="text-base font-black text-gold-brand font-display">{formatCurrency(variant.price)}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setVariantProduct(null)}
+              className="mt-4 w-full h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl cursor-pointer touch-target">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* More tools FAB */}
       {fabOpen && <div className="fixed inset-0 z-30" onClick={() => setFabOpen(false)} />}

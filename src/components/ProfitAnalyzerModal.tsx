@@ -32,6 +32,44 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
         <div className="space-y-3">
           <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Per-Product Profitability</p>
           {eateryProducts.length > 0 ? eateryProducts.map(product => {
+            const variants = product.variants || [];
+            if (variants.length > 0) {
+              return (
+                <div key={product.id} className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <ChefHat className="w-3.5 h-3.5 text-amber-400" />
+                      <h4 className="text-sm font-bold text-white uppercase">{product.name}</h4>
+                      <span className="text-[10px] text-zinc-500">{product.category}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    {variants.map(v => {
+                      const vCost = v.cost ?? product.cost;
+                      const profitPerUnit = v.price - vCost;
+                      const marginPct = v.price > 0 ? (profitPerUnit / v.price) * 100 : 0;
+                      const isLoss = profitPerUnit <= 0;
+                      const totalSold = cart.filter(c => c.productId === product.id && (c.variantId || '') === v.id).reduce((s, c) => s + c.qty, 0);
+                      return (
+                        <div key={v.id} className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl px-3 py-2 ${isLoss ? 'bg-rose-950/10 border border-rose-500/30' : 'bg-zinc-950 border border-white/5'}`}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isLoss ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+                            <span className="text-xs font-bold text-white uppercase truncate">{v.label}</span>
+                            {totalSold > 0 && <span className="text-[10px] text-gold-brand font-bold shrink-0">{totalSold} in cart</span>}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-[10px] text-zinc-500 font-bold uppercase">Cost {formatCurrency(vCost)}</span>
+                            <span className="text-xs font-black text-gold-brand">{formatCurrency(v.price)}</span>
+                            <span className={`text-xs font-black ${isLoss ? 'text-rose-400' : 'text-emerald-400'}`}>{isLoss ? '-' : '+'}{formatCurrency(Math.abs(profitPerUnit))}</span>
+                            <span className={`text-[10px] font-black ${isLoss ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{marginPct.toFixed(0)}%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
             const profitPerUnit = product.price - product.cost;
             const marginPct = product.price > 0 ? (profitPerUnit / product.price) * 100 : 0;
             const isLoss = profitPerUnit <= 0;
