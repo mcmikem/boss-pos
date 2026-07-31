@@ -4,8 +4,9 @@ import {
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier, CreditPayment } from '../types';
+import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings } from '../types';
 import CreditsLedger from './CreditsLedger';
+import Dashboard from './Dashboard';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -27,6 +28,10 @@ interface AnalyticsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
   setShowSuppliers: (show: boolean) => void;
+  onNavigate: (tab: 'sales' | 'inventory' | 'analytics') => void;
+  onRepeatLastSale: () => void;
+  onRefundSale: (saleId: string) => void;
+  settings: StoreSettings;
 }
 
 export default function Analytics({
@@ -48,7 +53,11 @@ export default function Analytics({
   formatCurrency,
   triggerToast,
   showSuppliers,
-  setShowSuppliers
+  setShowSuppliers,
+  onNavigate,
+  onRepeatLastSale,
+  onRefundSale,
+  settings
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
   
@@ -394,6 +403,14 @@ const colorsMap: { [key: string]: string } = {
         </section>
       ) : (
         <>
+          <Dashboard
+            sales={sales} expenses={expenses} products={products}
+            formatCurrency={formatCurrency} onNavigate={onNavigate}
+            onRepeatLastSale={onRepeatLastSale} onRefundSale={onRefundSale}
+            settings={settings}
+            onAddExpense={onAddExpense}
+            expenseCategories={expenseCategories}
+          />
           <nav className="flex gap-2 pb-2 overflow-x-auto no-scrollbar">
             {['Daily', 'Weekly', 'Monthly'].map(filter => (
               <button key={filter} onClick={() => setTimeFilter(filter as any)}

@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { 
-  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet
+  ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
@@ -14,7 +14,6 @@ import Sales from './components/Sales';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
 import SyncProductsButton from './components/SyncProductsButton';
-const Dashboard = lazy(() => import('./components/Dashboard'));
 const Inventory = lazy(() => import('./components/Inventory'));
 const Analytics = lazy(() => import('./components/Analytics'));
 const Expenses = lazy(() => import('./components/Expenses'));
@@ -41,7 +40,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics' | 'expenses'>('sales');
+  const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses'>('sales');
   const [currency, setCurrency] = useState<'UGX' | 'USD'>('UGX');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -327,21 +326,6 @@ export default function App() {
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'dashboard':
-        return (
-          <ErrorBoundary key="dashboard">
-          <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
-          <Dashboard 
-            sales={sales} expenses={expenses} products={products}
-            formatCurrency={formatCurrency} onNavigate={(tab) => setActiveTab(tab)}
-            onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
-            settings={settings}
-            onAddExpense={handleAddExpense}
-            expenseCategories={expenseCategories}
-          />
-          </Suspense>
-          </ErrorBoundary>
-        );
       case 'sales':
         return (
           <ErrorBoundary key="sales">
@@ -407,6 +391,9 @@ export default function App() {
             onPayCredit={handlePayCredit}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
+            onNavigate={(tab) => setActiveTab(tab)}
+            onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
+            settings={settings}
           />
           </Suspense>
           </ErrorBoundary>
@@ -512,10 +499,6 @@ export default function App() {
           <div className="w-10 h-10 rounded-xl bg-gold-brand text-black flex items-center justify-center shadow-[0_0_12px_rgba(255,204,0,0.3)]">
             <Zap className="w-5 h-5" />
           </div>
-        </button>
-        <button onClick={() => { setActiveTab('dashboard'); setShowSuppliers(false); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'dashboard' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="dashboard-nav-btn">
-          <LayoutGrid className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Today</span>
         </button>
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />

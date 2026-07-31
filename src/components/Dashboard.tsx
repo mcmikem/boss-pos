@@ -20,7 +20,7 @@ interface DashboardProps {
   expenses: Expense[];
   products: Product[];
   formatCurrency: (val: number) => string;
-  onNavigate: (tab: 'sales' | 'dashboard' | 'inventory' | 'analytics') => void;
+  onNavigate: (tab: 'sales' | 'inventory' | 'analytics') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
   settings: StoreSettings;
