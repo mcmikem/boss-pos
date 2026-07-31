@@ -1,7 +1,8 @@
 import type { Product } from '../types';
 
-const CACHE_KEY = 'boss_pos_products_cache';
-const CACHE_TIMESTAMP_KEY = 'boss_pos_products_cache_ts';
+const CACHE_VERSION = 'v2';
+const CACHE_KEY = `boss_pos_products_cache_${CACHE_VERSION}`;
+const CACHE_TIMESTAMP_KEY = `boss_pos_products_cache_ts_${CACHE_VERSION}`;
 const CACHE_TTL = 1000 * 60 * 30;
 
 export function saveProducts(products: Product[]): void {
