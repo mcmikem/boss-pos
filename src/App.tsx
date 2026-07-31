@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { 
-  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Scissors
+  LayoutGrid, ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
@@ -14,8 +14,6 @@ import Sales from './components/Sales';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
 import SyncProductsButton from './components/SyncProductsButton';
-import TailoringOrders from './components/TailoringOrders';
-
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const Inventory = lazy(() => import('./components/Inventory'));
 const Analytics = lazy(() => import('./components/Analytics'));
@@ -42,7 +40,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics' | 'tailoring'>('sales');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sales' | 'inventory' | 'analytics'>('sales');
   const [currency, setCurrency] = useState<'UGX' | 'USD'>('UGX');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -396,12 +394,6 @@ export default function App() {
           </Suspense>
           </ErrorBoundary>
         );
-      case 'tailoring':
-        return (
-          <ErrorBoundary key="tailoring">
-          <TailoringOrders triggerToast={triggerToast} />
-          </ErrorBoundary>
-        );
     }
   };
 
@@ -503,10 +495,6 @@ export default function App() {
           <div className="w-10 h-10 rounded-xl bg-gold-brand text-black flex items-center justify-center shadow-[0_0_12px_rgba(255,204,0,0.3)]">
             <Zap className="w-5 h-5" />
           </div>
-        </button>
-        <button onClick={() => { setActiveTab('tailoring'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'tailoring' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="tailoring-nav-btn">
-          <Scissors className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Tailor</span>
         </button>
         <button onClick={() => { setActiveTab('dashboard'); setShowSuppliers(false); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'dashboard' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="dashboard-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
