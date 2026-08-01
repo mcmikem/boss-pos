@@ -1,5 +1,6 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -55,6 +56,13 @@ async function initDB() {
   )`;
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN measurements TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN materialcost DOUBLE PRECISION DEFAULT 0`; } catch {}
+  await sql`CREATE TABLE IF NOT EXISTS cash_transfers (
+    id TEXT PRIMARY KEY, fromcategory TEXT NOT NULL, tocategory TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
+    settledat TEXT
+  )`;
+  try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
 }
 
 function escapeId(id) {
@@ -206,10 +214,7 @@ async function syncLibraryProducts() {
     await sql`
       INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl)
       VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},${p.isService},null)
-      ON CONFLICT (id) DO UPDATE SET
-        name=EXCLUDED.name, category=EXCLUDED.category, cost=EXCLUDED.cost,
-        price=EXCLUDED.price, stockQty=EXCLUDED.stockQty,
-        lowStockThreshold=EXCLUDED.lowStockThreshold, isService=EXCLUDED.isService
+      ON CONFLICT (id) DO NOTHING
     `;
   }
   await sql`DELETE FROM products WHERE category='Movies' OR category='Music' OR category='Software (Android)' OR category='Software (Windows)'`;
@@ -252,6 +257,85 @@ app.use((req, res, next) => {
     res.status(500).json({ error: 'Database initialization failed' });
   });
 });
+
+// === AUTH ===
+// Stateless HMAC-signed tokens. The PIN hash lives in the settings table.
+const AUTH_SECRET = process.env.AUTH_SECRET || createHash('sha256').update(DATABASE_URL || 'imac').digest('hex');
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function sha256Hex(s) {
+  return createHash('sha256').update(String(s || '')).digest('hex');
+}
+
+function signToken() {
+  const exp = Date.now() + TOKEN_TTL_MS;
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  const sig = createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyToken(token) {
+  if (!token) return false;
+  const [payload, sig] = String(token).split('.');
+  if (!payload || !sig) return false;
+  const expected = createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return false;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (!exp || Date.now() > exp) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const header = req.headers['authorization'] || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
+  if (!verifyToken(token)) return res.status(401).json({ error: 'Unauthorized', code: 'AUTH_REQUIRED' });
+  next();
+}
+
+// Verify a PIN and mint a token. Open (no PIN required on the server yet).
+app.post('/api/auth/verify', asHandler(async (req, res) => {
+  const { pin } = req.body || {};
+  const rows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
+  const stored = rows.length ? rows[0].value : '';
+  if (stored && sha256Hex(pin) !== stored) {
+    return res.status(401).json({ error: 'Wrong PIN', code: 'WRONG_PIN' });
+  }
+  res.json({ ok: true, token: signToken(), hasPin: !!stored });
+}));
+
+// Every mutating request after this point requires a valid token.
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method)) return requireAuth(req, res, next);
+  next();
+});
+
+// Set or clear the PIN (empty string removes it). Accepts { pin } (hashed here)
+// or { hash } (stored as-is, used to migrate an existing client-side hash).
+app.post('/api/auth/set', asHandler(async (req, res) => {
+  const { pin, hash } = req.body || {};
+  const value = typeof hash === 'string' ? hash : (pin ? sha256Hex(pin) : '');
+  await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value=${value}`;
+  res.json({ ok: true, hasPin: !!value, hash: value });
+}));
+
+// Atomic, server-side order numbers (no more per-device counter collisions).
+app.post('/api/orders/next', asHandler(async (req, res) => {
+  const existing = await sql`SELECT value FROM settings WHERE key='orderCounter'`;
+  if (existing.length === 0) {
+    const m = await sql`SELECT COALESCE(MAX((split_part(ordernumber, '#', 2))::int), 8492) AS m FROM sales`;
+    const base = m.length ? m[0].m : 8492;
+    await sql`INSERT INTO settings (key, value) VALUES ('orderCounter', ${String(base)}) ON CONFLICT (key) DO NOTHING`;
+  }
+  const n = await sql`UPDATE settings SET value = (value::int) + 1 WHERE key='orderCounter' RETURNING (value::int) AS n`;
+  const next = n.length ? n[0].n : 8493;
+  res.json({ orderNumber: `Order #${next}`, number: next });
+}));
 
 // === PRODUCTS API ===
 app.get('/api/products', asHandler(async (req, res) => {
@@ -301,7 +385,15 @@ app.delete('/api/suppliers/:id', asHandler(async (req, res) => {
 
 // === SALES API ===
 app.get('/api/sales', asHandler(async (req, res) => {
-  const rows = await sql`SELECT * FROM sales ORDER BY timestamp DESC`;
+  const { from, to, limit, offset } = req.query;
+  let where = ' WHERE 1=1';
+  const params = [];
+  if (from) { params.push(from); where += ` AND timestamp >= $${params.length}`; }
+  if (to) { params.push(to); where += ` AND timestamp <= $${params.length}`; }
+  let query = `SELECT * FROM sales${where} ORDER BY timestamp DESC`;
+  if (limit) { params.push(parseInt(limit)); query += ` LIMIT $${params.length}`; }
+  if (offset) { params.push(parseInt(offset)); query += ` OFFSET $${params.length}`; }
+  const rows = await sql.query(query, params);
   res.json(rows.map(mapSale));
 }));
 
@@ -326,9 +418,30 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// Soft refund: keep the sale row for the audit trail, restore stock, flag it.
+app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
+  const sale = await sql`SELECT * FROM sales WHERE id=${req.params.id}`;
+  if (sale.length === 0) return res.status(404).json({ error: 'Sale not found' });
+  if (sale[0].refunded) return res.json({ success: true });
+  const items = JSON.parse(sale[0].items);
+  for (const item of items) {
+    await sql`UPDATE products SET stockQty = stockQty + ${item.qty} WHERE id=${item.productId} AND isService=false`;
+  }
+  await sql`UPDATE sales SET refunded=true, refundedat=${new Date().toISOString()} WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 // === EXPENSES API ===
 app.get('/api/expenses', asHandler(async (req, res) => {
-  const rows = await sql`SELECT * FROM expenses ORDER BY timestamp DESC`;
+  const { from, to, limit, offset } = req.query;
+  let where = ' WHERE 1=1';
+  const params = [];
+  if (from) { params.push(from); where += ` AND timestamp >= $${params.length}`; }
+  if (to) { params.push(to); where += ` AND timestamp <= $${params.length}`; }
+  let query = `SELECT * FROM expenses${where} ORDER BY timestamp DESC`;
+  if (limit) { params.push(parseInt(limit)); query += ` LIMIT $${params.length}`; }
+  if (offset) { params.push(parseInt(offset)); query += ` OFFSET $${params.length}`; }
+  const rows = await sql.query(query, params);
   res.json(rows);
 }));
 
@@ -350,6 +463,9 @@ app.get('/api/settings', asHandler(async (req, res) => {
   for (const r of rows) {
     try { obj[r.key] = JSON.parse(r.value); } catch { obj[r.key] = r.value; }
   }
+  const hasPin = !!obj.pinHash;
+  delete obj.pinHash;
+  obj.hasPin = hasPin;
   res.json(obj);
 }));
 
@@ -373,6 +489,23 @@ app.post('/api/credit-payments', asHandler(async (req, res) => {
   const p = req.body;
   await sql`INSERT INTO credit_payments (id,saleid,amount,createdat) VALUES (${p.id},${p.saleId},${p.amount},${p.createdAt})`;
   res.json(p);
+}));
+
+// === CASH TRANSFERS API ===
+app.get('/api/cash-transfers', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM cash_transfers ORDER BY createdat DESC`;
+  res.json(rows.map(mapTransfer));
+}));
+
+app.post('/api/cash-transfers', asHandler(async (req, res) => {
+  const t = req.body;
+  await sql`INSERT INTO cash_transfers (id,fromcategory,tocategory,amount,reason,createdat,settledat) VALUES (${t.id},${t.fromCategory},${t.toCategory},${t.amount},${t.reason||''},${t.createdAt},${t.settledAt||null})`;
+  res.json(t);
+}));
+
+app.put('/api/cash-transfers/:id/settle', asHandler(async (req, res) => {
+  await sql`UPDATE cash_transfers SET settledat=${new Date().toISOString()} WHERE id=${req.params.id}`;
+  res.json({ success: true });
 }));
 
 // === TAILORING ORDERS API ===
@@ -402,6 +535,76 @@ app.delete('/api/tailoring-orders/:id', asHandler(async (req, res) => {
 app.post('/api/sync-products', asHandler(async (req, res) => {
   await syncLibraryProducts();
   res.json({ success: true, updated: 8 });
+}));
+
+// === SERVER-SIDE SUMMARY (date-range aggregates) ===
+app.get('/api/summary', asHandler(async (req, res) => {
+  const { from, to } = req.query;
+  const salesWhere = ['refunded=false'];
+  const salesParams = [];
+  if (from) { salesParams.push(from); salesWhere.push(`timestamp >= $${salesParams.length}`); }
+  if (to) { salesParams.push(to); salesWhere.push(`timestamp <= $${salesParams.length}`); }
+  const salesRows = await sql.query(
+    `SELECT items, total FROM sales WHERE ${salesWhere.join(' AND ')}`, salesParams);
+  let revenue = 0;
+  let cogs = 0;
+  for (const r of salesRows) {
+    revenue += r.total || 0;
+    let items = [];
+    try { items = JSON.parse(r.items); } catch {}
+    for (const it of items) cogs += (it.unitCost || 0) * (it.qty || 0);
+  }
+
+  const expWhere = ['1=1'];
+  const expParams = [];
+  if (from) { expParams.push(from); expWhere.push(`timestamp >= $${expParams.length}`); }
+  if (to) { expParams.push(to); expWhere.push(`timestamp <= $${expParams.length}`); }
+  const expRows = await sql.query(
+    `SELECT COALESCE(SUM(amount),0)::float AS total FROM expenses WHERE ${expWhere.join(' AND ')}`, expParams);
+
+  const creditRows = await sql`SELECT COALESCE(SUM(total),0)::float AS total FROM sales WHERE paymentmethod='Credit / Book' AND refunded=false`;
+  const paidRows = await sql`SELECT COALESCE(SUM(amount),0)::float AS total FROM credit_payments`;
+  const lowRows = await sql`SELECT COUNT(*)::int AS n FROM products WHERE isservice=false AND stockqty <= lowstockthreshold`;
+
+  const grossProfit = revenue - cogs;
+  const expenseTotal = expRows.length ? expRows[0].total : 0;
+  res.json({
+    from: from || null,
+    to: to || null,
+    salesCount: salesRows.length,
+    revenue,
+    cogs,
+    grossProfit,
+    expenseTotal,
+    netProfit: grossProfit - expenseTotal,
+    creditOutstanding: (creditRows.length ? creditRows[0].total : 0) - (paidRows.length ? paidRows[0].total : 0),
+    lowStockCount: lowRows.length ? lowRows[0].n : 0,
+  });
+}));
+
+// === FULL DATA EXPORT / BACKUP ===
+app.get('/api/export', requireAuth, asHandler(async (req, res) => {
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring] = await Promise.all([
+    sql`SELECT * FROM products`,
+    sql`SELECT * FROM suppliers`,
+    sql`SELECT * FROM sales`,
+    sql`SELECT * FROM expenses`,
+    sql`SELECT * FROM settings`,
+    sql`SELECT * FROM credit_payments`,
+    sql`SELECT * FROM cash_transfers`,
+    sql`SELECT * FROM tailoring_orders`,
+  ]);
+  res.json({
+    exportedAt: new Date().toISOString(),
+    products: products.map(mapProduct),
+    suppliers: suppliers.map(mapSupplier),
+    sales: sales.map(mapSale),
+    expenses,
+    settings: settingsRows,
+    creditPayments: credit.map(r => ({ id: r.id, saleId: r.saleid, amount: r.amount, createdAt: r.createdat })),
+    cashTransfers: transfers.map(mapTransfer),
+    tailoringOrders: tailoring.map(mapTailoringOrder),
+  });
 }));
 
 function mapProduct(r) {
@@ -437,7 +640,14 @@ function mapSale(r) {
     id: r.id, orderNumber: r.ordernumber, timestamp: r.timestamp,
     items: JSON.parse(r.items), subtotal: r.subtotal, tax: r.tax, total: r.total,
     paymentMethod: r.paymentmethod, customerName: r.customername,
-    discount: r.discount, notes: r.notes,
+    discount: r.discount, notes: r.notes, refunded: !!r.refunded,
+  };
+}
+
+function mapTransfer(r) {
+  return {
+    id: r.id, fromCategory: r.fromcategory, toCategory: r.tocategory,
+    amount: r.amount, reason: r.reason, createdAt: r.createdat, settledAt: r.settledat,
   };
 }
 

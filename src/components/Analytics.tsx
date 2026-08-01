@@ -95,7 +95,7 @@ export default function Analytics({
   }, [timeFilter]);
 
   const filteredSales = useMemo(() => {
-    return sales.filter(s => timeRange.filter(s.timestamp));
+    return sales.filter(s => !s.refunded && timeRange.filter(s.timestamp));
   }, [sales, timeRange]);
 
   const filteredExpenses = useMemo(() => {

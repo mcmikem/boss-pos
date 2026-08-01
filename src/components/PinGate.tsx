@@ -1,20 +1,19 @@
 import { useState, useRef, useEffect } from 'react';
 import { Lock } from 'lucide-react';
-import { hashPin } from '../utils/crypto';
 
 interface PinGateProps {
-  onUnlock: () => void;
-  onSetPin: (pin: string) => void;
-  storedPinHash: string | null;
+  onUnlock: (pin: string) => Promise<void>;
   shopName: string;
 }
 
-export default function PinGate({ onUnlock, onSetPin, storedPinHash, shopName }: PinGateProps) {
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 30 * 1000;
+
+export default function PinGate({ onUnlock, shopName }: PinGateProps) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
-  const isSettingPin = !storedPinHash;
-  const [confirmPin, setConfirmPin] = useState('');
-  const [step, setStep] = useState<'enter' | 'confirm'>('enter');
+  const [attempts, setAttempts] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState<number>(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -22,61 +21,51 @@ export default function PinGate({ onUnlock, onSetPin, storedPinHash, shopName }:
   }, []);
 
   const handleDigit = async (d: string) => {
+    if (Date.now() < lockedUntil) return;
     setError('');
-    if (isSettingPin) {
-      if (step === 'enter') {
-        const next = pin + d;
-        if (next.length <= 4) setPin(next);
-        if (next.length === 4) { setStep('confirm'); setConfirmPin(''); setTimeout(() => inputRef.current?.focus(), 50); }
-      } else {
-        const next = confirmPin + d;
-        if (next.length <= 4) setConfirmPin(next);
-        if (next.length === 4) {
-          if (next === pin) { onSetPin(pin); }
-          else { setError('PINs do not match'); setPin(''); setConfirmPin(''); setStep('enter'); }
+    const next = pin + d;
+    if (next.length > 4) return;
+    setPin(next);
+    if (next.length === 4) {
+      try {
+        await onUnlock(next);
+      } catch {
+        const newAttempts = attempts + 1;
+        setAttempts(newAttempts);
+        setPin('');
+        if (newAttempts >= MAX_ATTEMPTS) {
+          const until = Date.now() + LOCKOUT_MS;
+          setLockedUntil(until);
+          setAttempts(0);
+          setError(`Too many attempts. Try again in ${LOCKOUT_MS / 1000}s.`);
+          setTimeout(() => setError(''), LOCKOUT_MS);
+        } else {
+          setError('Wrong PIN');
         }
-      }
-    } else {
-      const next = pin + d;
-      if (next.length <= 4) setPin(next);
-      if (next.length === 4) {
-        const enteredHash = await hashPin(next);
-        if (enteredHash === storedPinHash) { onUnlock(); }
-        else { setError('Wrong PIN'); setPin(''); }
       }
     }
   };
 
   const handleClear = () => {
     setPin('');
-    setConfirmPin('');
     setError('');
-    if (isSettingPin) { setStep('enter'); }
   };
 
   const handleBackspace = () => {
-    if (isSettingPin && step === 'confirm') {
-      setConfirmPin(prev => prev.slice(0, -1));
-    } else {
-      setPin(prev => prev.slice(0, -1));
-    }
+    setPin(prev => prev.slice(0, -1));
   };
-
-  const dots = isSettingPin && step === 'confirm' ? confirmPin : pin;
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0A] z-[200] flex flex-col items-center justify-center p-6">
       <div className="w-16 h-16 rounded-full bg-gold-brand/10 border border-gold-brand/30 flex items-center justify-center mb-6">
-        {isSettingPin ? <Lock className="w-7 h-7 text-gold-brand" /> : <Lock className="w-7 h-7 text-gold-brand" />}
+        <Lock className="w-7 h-7 text-gold-brand" />
       </div>
       <h1 className="text-lg font-black text-white uppercase tracking-wider mb-1">{shopName}</h1>
-      <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-8">
-        {isSettingPin ? (step === 'enter' ? 'Set a 4-digit PIN' : 'Confirm your PIN') : 'Enter PIN'}
-      </p>
+      <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-8">Enter PIN</p>
 
       <div className="flex gap-3 mb-8">
         {[0, 1, 2, 3].map(i => (
-          <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${dots.length > i ? 'bg-gold-brand border-gold-brand' : 'border-zinc-600'}`} />
+          <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${pin.length > i ? 'bg-gold-brand border-gold-brand' : 'border-zinc-600'}`} />
         ))}
       </div>
 
@@ -103,11 +92,6 @@ export default function PinGate({ onUnlock, onSetPin, storedPinHash, shopName }:
         </button>
       </div>
 
-      {!isSettingPin && (
-        <button onClick={() => { onUnlock(); }} className="mt-6 text-[10px] text-zinc-600 hover:text-zinc-400 font-bold uppercase tracking-wider cursor-pointer">
-          Skip PIN (not secure)
-        </button>
-      )}
       <input ref={inputRef} type="text" className="absolute opacity-0 pointer-events-none" readOnly tabIndex={-1} />
     </div>
   );

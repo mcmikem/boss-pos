@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowRightLeft, X } from 'lucide-react';
 import { CashTransfer } from '../types';
+import { cashTransferApi } from '../api';
 
 interface CashTransferModalProps {
   isOpen: boolean;
@@ -15,16 +16,16 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
   const [transferTo, setTransferTo] = useState('');
   const [transferAmt, setTransferAmt] = useState('');
   const [transferReason, setTransferReason] = useState('');
-  const [transfers, setTransfers] = useState<CashTransfer[]>(() => {
-    try {
-      const saved = localStorage.getItem('boss_pos_cash_transfers');
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  const [transfers, setTransfers] = useState<CashTransfer[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    cashTransferApi.list().then(setTransfers).catch(() => triggerToast('Failed to load transfers', 'error'));
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleRecordTransfer = () => {
+  const handleRecordTransfer = async () => {
     if (!transferFrom || !transferTo) {
       triggerToast('Select both drawers', 'error');
       return;
@@ -39,7 +40,7 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
       return;
     }
     const newTransfer: CashTransfer = {
-      id: `ct-${Date.now()}`,
+      id: `ct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       fromCategory: transferFrom,
       toCategory: transferTo,
       amount: amtNum,
@@ -48,17 +49,27 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
       settledAt: null,
     };
     setTransfers(prev => [newTransfer, ...prev]);
-    localStorage.setItem('boss_pos_cash_transfers', JSON.stringify([newTransfer, ...transfers]));
-    triggerToast(`Recorded: ${formatCurrency(amtNum)} from ${transferFrom} → ${transferTo}`, 'info');
+    try {
+      await cashTransferApi.create(newTransfer);
+      triggerToast(`Recorded: ${formatCurrency(amtNum)} from ${transferFrom} → ${transferTo}`, 'info');
+    } catch {
+      setTransfers(prev => prev.filter(t => t.id !== newTransfer.id));
+      triggerToast('Failed to save transfer', 'error');
+    }
     setTransferAmt('');
     setTransferReason('');
   };
 
-  const handleSettleTransfer = (id: string) => {
-    const updated = transfers.map(t => t.id === id ? { ...t, settledAt: new Date().toISOString() } : t);
-    setTransfers(updated);
-    localStorage.setItem('boss_pos_cash_transfers', JSON.stringify(updated));
-    triggerToast('Marked as settled', 'success');
+  const handleSettleTransfer = async (id: string) => {
+    const settledAt = new Date().toISOString();
+    setTransfers(prev => prev.map(t => t.id === id ? { ...t, settledAt } : t));
+    try {
+      await cashTransferApi.settle(id);
+      triggerToast('Marked as settled', 'success');
+    } catch {
+      setTransfers(prev => prev.map(t => t.id === id ? { ...t, settledAt: null } : t));
+      triggerToast('Failed to settle transfer', 'error');
+    }
   };
 
   const quickAmounts = [500, 1000, 2000, 5000, 10000, 20000];

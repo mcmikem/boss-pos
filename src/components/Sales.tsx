@@ -5,6 +5,7 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, StoreSettings } from '../types';
+import { nextOrderNumber } from '../api';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
 import KeyboardShortcuts from './KeyboardShortcuts';
@@ -31,7 +32,7 @@ interface SalesProps {
   categories: string[];
 }
 
-const getNextOrderNumber = () => {
+const localOrderNumber = () => {
   const key = 'boss_pos_order_counter';
   const current = parseInt(localStorage.getItem(key) || '8492', 10);
   const next = current + 1;
@@ -136,7 +137,7 @@ export default function Sales({
     setVariantProduct(null);
   };
 
-  const handleCompleteSaleRef = useRef<() => void | null>(null);
+  const handleCompleteSaleRef = useRef<(() => void | Promise<void>) | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -217,14 +218,15 @@ export default function Sales({
     : '';
   const tax = 0;
 
-  const handleCompleteSale = () => {
+  const handleCompleteSale = async () => {
     if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return; }
     const cashPaidNum = parseFloat(customCashReceived);
     let changeMsg = '';
     if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= total) {
       changeMsg = ` Change: ${formatCurrency(cashPaidNum - total)}`;
     }
-    const orderNumber = getNextOrderNumber();
+    let orderNumber = await nextOrderNumber();
+    if (!orderNumber) orderNumber = localOrderNumber();
     const newSale: Sale = {
       id: `sale-${Date.now()}`, orderNumber, timestamp: new Date().toISOString(),
       items: [...cart], subtotal: total, tax, total, paymentMethod,

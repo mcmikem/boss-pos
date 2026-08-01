@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
+import { getAuthToken } from '../api';
 
 interface SyncProductsButtonProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -13,7 +14,11 @@ export default function SyncProductsButton({ triggerToast, onSynced }: SyncProdu
     if (syncing) return;
     setSyncing(true);
     try {
-      const res = await fetch('/api/sync-products', { method: 'POST' });
+      const token = getAuthToken();
+      const res = await fetch('/api/sync-products', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error('Sync failed');
       const data = await res.json();
       triggerToast(`Updated ${data.updated} products`, 'success');

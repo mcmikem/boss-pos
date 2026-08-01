@@ -70,6 +70,8 @@ export interface Sale {
   customerName?: string;
   discount?: number;
   notes?: string;
+  refunded?: boolean;
+  refundedAt?: string;
 }
 
 export interface Expense {
@@ -122,5 +124,9 @@ export interface StoreSettings {
   dailyGoalNum: number;
   shopType?: 'general' | 'eatery' | 'phone' | 'tailor';
   language?: 'english' | 'luganda' | 'swahili';
+  usdRate?: number;
+  categories?: string[];
+  expenseCategories?: string[];
+  hasPin?: boolean;
 }
 

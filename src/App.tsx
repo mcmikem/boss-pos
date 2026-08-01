@@ -1,9 +1,9 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, lazy, Suspense, useRef } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet
+  ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, authVerify, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -31,12 +31,15 @@ const THEME_MAP = new Map(THEMES_LIST.map(t => [t.id, t]));
 const DEFAULT_CATEGORIES = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'];
 
+const IDLE_LOCK_MS = 10 * 60 * 1000; // re-lock after 10 minutes of inactivity
+
 const DEFAULT_SETTINGS: StoreSettings = {
   shopName: 'IMAC Enterprises',
   themeId: 'gold',
   vibe: 'General Store',
   defaultPaymentMethod: 'Cash',
   dailyGoalNum: 10,
+  usdRate: UGX_TO_USD_RATE,
 };
 
 export default function App() {
@@ -45,6 +48,7 @@ export default function App() {
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
   const [products, setProducts] = useState<Product[]>([]);
@@ -63,52 +67,99 @@ export default function App() {
   const [cart, setCart] = useState<SaleItem[]>([]);
 
   const [isQuickSale, setIsQuickSale] = useState(false);
-  const [isUnlocked, setIsUnlocked] = useState(() => !localStorage.getItem('boss_pos_pin'));
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
   const [apiError, setApiError] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  const readyRef = useRef(false);
 
   const triggerToast = (msg: string, type: 'success' | 'error' | 'info') => {
     setToastMessage(msg);
     setToastType(type);
   };
 
-  useEffect(() => {
+  const fetchAllData = async () => {
     const cached = loadProducts();
     if (cached) {
       setProducts(enrichProductsWithIcons(cached));
       setLoading(false);
     }
 
-    const errors: string[] = [];
-    Promise.all([
-      settingsApi.get().then(setSettings).catch(() => { errors.push('settings'); }),
+    const failed: string[] = [];
+    const fail = (name: string) => () => { failed.push(name); };
+    await Promise.all([
+      settingsApi.get().then((s) => {
+        setSettings(s);
+        if (s.categories && Array.isArray(s.categories) && s.categories.length > 0) setCategories(s.categories);
+        if (s.expenseCategories && Array.isArray(s.expenseCategories) && s.expenseCategories.length > 0) setExpenseCategories(s.expenseCategories);
+      }).catch(fail('settings')),
       productApi.list().then(p => {
         const enriched = enrichProductsWithIcons(p);
         setProducts(enriched);
         saveProducts(enriched);
-      }).catch(() => { errors.push('products'); if (!cached) setLoading(false); }),
-      supplierApi.list().then(setSuppliers).catch(() => { errors.push('suppliers'); }),
-      saleApi.list().then(setSales).catch(() => { errors.push('sales'); }),
-      expenseApi.list().then(setExpenses).catch(() => { errors.push('expenses'); }),
-      creditPaymentApi.list().then(setCreditPayments).catch(() => {}),
-    ]).then(() => {
-      setLoading(false);
-      if (errors.length === 5) {
-        setApiError(true);
-      } else if (errors.length > 0) {
-        triggerToast(`Failed to load: ${errors.join(', ')}. Check connection.`, 'error');
+      }).catch(fail('products')),
+      supplierApi.list().then(setSuppliers).catch(fail('suppliers')),
+      saleApi.list().then(setSales).catch(fail('sales')),
+      expenseApi.list().then(setExpenses).catch(fail('expenses')),
+      creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
+    ]);
+    setLoading(false);
+    if (failed.length === 6) {
+      setApiError(true);
+    } else if (failed.length > 0) {
+      triggerToast(`Failed to load: ${failed.join(', ')}. Check connection.`, 'error');
+    }
+  };
+
+  // Boot: try open-mode auth, migrate an existing client PIN, then load data.
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await authVerify('');
+        localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+        if (!data.hasPin) {
+          const localPin = localStorage.getItem('boss_pos_pin');
+          if (localPin && !localPin.startsWith('fb_')) {
+            try {
+              await authMigratePin(localPin);
+              localStorage.removeItem('boss_pos_pin');
+              localStorage.setItem('boss_pos_has_pin', 'true');
+            } catch {}
+          }
+        }
+        await fetchAllData();
+        setAuthState('ready');
+      } catch {
+        const storedHasPin = localStorage.getItem('boss_pos_has_pin') === 'true';
+        const token = getAuthToken();
+        if (!navigator.onLine && (token || !storedHasPin)) {
+          await fetchAllData();
+          setAuthState('ready');
+        } else {
+          setAuthState('locked');
+        }
       }
-    });
+    })();
   }, []);
+
+  useEffect(() => {
+    readyRef.current = authState === 'ready';
+  }, [authState]);
 
   useEffect(() => {
     if (products.length > 0) saveProducts(products);
   }, [products]);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
+    const handleOnline = async () => {
+      setIsOnline(true);
+      const n = await flushOutbox();
+      if (n > 0) {
+        triggerToast(`Synced ${n} offline change(s)`, 'success');
+        fetchAllData();
+      }
+    };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -118,16 +169,22 @@ export default function App() {
     };
   }, []);
 
+  // Persist settings (skip the very first render so we never clobber server
+  // values with defaults before the real settings finish loading).
   useEffect(() => {
-    settingsApi.update(settings).catch(() => triggerToast('Failed to save settings', 'error'));
+    if (!readyRef.current) return;
+    const { hasPin: _hp, ...toSend } = settings;
+    settingsApi.update(toSend).catch(() => triggerToast('Failed to save settings', 'error'));
   }, [settings]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_categories', JSON.stringify(categories));
+    if (readyRef.current) setSettings(prev => ({ ...prev, categories }));
   }, [categories]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_expense_categories', JSON.stringify(expenseCategories));
+    if (readyRef.current) setSettings(prev => ({ ...prev, expenseCategories }));
   }, [expenseCategories]);
 
   useEffect(() => {
@@ -156,9 +213,75 @@ export default function App() {
     }
   }, [loading, products]);
 
+  // Idle re-lock
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    let last = Date.now();
+    const bump = () => { last = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'mousemove', 'scroll'];
+    events.forEach(e => window.addEventListener(e, bump, { passive: true }));
+    const iv = setInterval(() => {
+      if (Date.now() - last > IDLE_LOCK_MS) {
+        setAuthToken(null);
+        setAuthState('locked');
+        triggerToast('Locked after inactivity', 'info');
+      }
+    }, 30000);
+    return () => {
+      events.forEach(e => window.removeEventListener(e, bump));
+      clearInterval(iv);
+    };
+  }, [authState]);
+
+  const handleUnlock = async (pin: string) => {
+    try {
+      const data = await authVerify(pin);
+      localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+      await fetchAllData();
+      setAuthState('ready');
+    } catch (err) {
+      // Offline: verify against the locally-stored hash so sales can still run.
+      if (!navigator.onLine) {
+        const local = localStorage.getItem('boss_pos_pin');
+        if (local && !local.startsWith('fb_')) {
+          const entered = await hashPin(pin);
+          if (entered === local) {
+            setAuthState('ready');
+            return;
+          }
+        }
+      }
+      throw err;
+    }
+  };
+
+  const handleSetPin = async (pin: string) => {
+    const res = await authSetPin(pin);
+    if (pin) localStorage.setItem('boss_pos_pin', res.hash);
+    else localStorage.removeItem('boss_pos_pin');
+    localStorage.setItem('boss_pos_has_pin', String(res.hasPin));
+    triggerToast(pin ? 'PIN set successfully' : 'PIN removed', 'success');
+  };
+
+  const handleExportData = async () => {
+    try {
+      const data = await exportApi.download();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `imac-pos-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      triggerToast('Backup downloaded', 'success');
+    } catch {
+      triggerToast('Failed to export data', 'error');
+    }
+  };
+
   const formatCurrency = (ugxVal: number) => {
     if (currency === 'USD') {
-      const usdVal = ugxVal / UGX_TO_USD_RATE;
+      const usdVal = ugxVal / (settings.usdRate || UGX_TO_USD_RATE);
       return new Intl.NumberFormat('en-US', {
         style: 'currency', currency: 'USD',
         minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -203,8 +326,8 @@ export default function App() {
 
   const handleRefundSale = async (saleId: string) => {
     const saleToRefund = sales.find(s => s.id === saleId);
-    if (!saleToRefund) return;
-    setSales(prev => prev.filter(s => s.id !== saleId));
+    if (!saleToRefund || saleToRefund.refunded) return;
+    setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
         const soldItem = saleToRefund.items.find(item => item.productId === prod.id);
@@ -214,7 +337,7 @@ export default function App() {
         return prod;
       });
     });
-    try { await saleApi.remove(saleId); } catch { triggerToast('Failed to refund sale', 'error'); }
+    try { await saleApi.refund(saleId); } catch { triggerToast('Failed to refund sale', 'error'); }
     triggerToast(`${saleToRefund.orderNumber} refunded. Stock restored.`, 'info');
   };
 
@@ -276,18 +399,6 @@ export default function App() {
       const filtered = prev.filter(c => c !== name);
       return filtered.includes('Uncategorized') ? filtered : [...filtered, 'Uncategorized'];
     });
-  };
-
-  const handleSetPin = async (pin: string) => {
-    const hashed = await hashPin(pin);
-    localStorage.setItem('boss_pos_pin', hashed);
-    setIsUnlocked(true);
-    triggerToast('PIN set successfully', 'success');
-  };
-
-  const handleDisablePin = () => {
-    localStorage.removeItem('boss_pos_pin');
-    triggerToast('PIN removed', 'info');
   };
 
   const handlePayCredit = async (saleId: string, amount: number) => {
@@ -403,6 +514,10 @@ export default function App() {
 
   const handleRetry = () => window.location.reload();
 
+  if (authState === 'locked') {
+    return <PinGate onUnlock={handleUnlock} shopName={settings.shopName} />;
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#0A0A0A]">
@@ -428,11 +543,6 @@ export default function App() {
         </div>
       </div>
     );
-  }
-
-  if (!isUnlocked) {
-    const storedPinHash = localStorage.getItem('boss_pos_pin');
-    return <PinGate onUnlock={() => setIsUnlocked(true)} onSetPin={handleSetPin} storedPinHash={storedPinHash} shopName={settings.shopName} />;
   }
 
   return (
@@ -580,25 +690,38 @@ export default function App() {
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
               </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">USD Exchange Rate (UGX per $)</label>
+                <input type="number" min="1" value={settings.usdRate || UGX_TO_USD_RATE}
+                  onChange={(e) => setSettings(prev => ({ ...prev, usdRate: Math.max(1, parseFloat(e.target.value) || UGX_TO_USD_RATE) }))}
+                  className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+              </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
                 <div className="flex gap-2">
-                  <button onClick={() => {
-                    const newPin = prompt('Enter new 4-digit PIN:');
-                    if (newPin && /^\d{4}$/.test(newPin)) { handleSetPin(newPin); }
+                  <button onClick={async () => {
+                    const newPin = prompt(settings.hasPin ? 'Enter new 4-digit PIN:' : 'Set a 4-digit PIN:');
+                    if (newPin && /^\d{4}$/.test(newPin)) { try { await handleSetPin(newPin); } catch { triggerToast('Failed to save PIN', 'error'); } }
                     else if (newPin) { triggerToast('PIN must be 4 digits', 'error'); }
                   }}
                     className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
-                    {localStorage.getItem('boss_pos_pin') ? 'Change PIN' : 'Set PIN'}
+                    {settings.hasPin ? 'Change PIN' : 'Set PIN'}
                   </button>
-                  {localStorage.getItem('boss_pos_pin') && (
-                    <button onClick={() => { if (confirm('Remove PIN security?')) handleDisablePin(); }}
+                  {settings.hasPin && (
+                    <button onClick={async () => { if (confirm('Remove PIN security?')) { try { await handleSetPin(''); } catch { triggerToast('Failed to remove PIN', 'error'); } } }}
                       className="h-10 px-3 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
                       Remove
                     </button>
                   )}
                 </div>
-                <p className="text-[10px] text-zinc-600">App will require PIN on every page load.</p>
+                <p className="text-[10px] text-zinc-600">App locks automatically after 10 minutes idle. PIN is required on load.</p>
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
+                <button onClick={handleExportData}
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
+                  <Download className="w-4 h-4" /> Download Backup
+                </button>
               </div>
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();

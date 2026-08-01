@@ -3,7 +3,7 @@ import { SaleItem } from '../types';
 interface ConfirmSaleModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   cart: SaleItem[];
   total: number;
   discountNum: number;
@@ -41,7 +41,7 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, cart, tot
         <div className="flex gap-2">
           <button onClick={onClose}
             className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider">Cancel</button>
-          <button onClick={() => { onConfirm(); onClose(); }}
+          <button onClick={() => { Promise.resolve(onConfirm()).finally(onClose); }}
             className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest">Confirm</button>
         </div>
       </div>

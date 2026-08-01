@@ -11,9 +11,11 @@ import {
   ArrowRight,
   X,
   Share2,
-  Plus
+  Plus,
+  Printer
 } from 'lucide-react';
 import type { Sale, Expense, Product, StoreSettings } from '../types';
+import { printReceipt } from '../utils/receipt';
 
 interface DashboardProps {
   sales: Sale[];
@@ -49,7 +51,8 @@ export default function Dashboard({
 
   const todayStr = new Date().toISOString().split('T')[0];
   
-  const todaySales = sales.filter(s => s.timestamp.startsWith(todayStr));
+  const todayAllSales = sales.filter(s => s.timestamp.startsWith(todayStr));
+  const todaySales = todayAllSales.filter(s => !s.refunded);
   const todaySalesSum = todaySales.reduce((acc, s) => acc + s.total, 0);
 
   const cashCollected = todaySales
@@ -313,7 +316,7 @@ export default function Dashboard({
         </div>
 
         <div className="space-y-2">
-          {todaySales.slice(0, 5).map((sale) => {
+          {todayAllSales.slice(0, 5).map((sale) => {
             let paymentBadge = null;
             if (sale.paymentMethod === 'Cash') {
               paymentBadge = <span className="text-[10px] font-bold bg-emerald-950/40 text-emerald-400 px-2 py-0.5 border border-emerald-800/30 rounded uppercase tracking-wider">Cash</span>;
@@ -336,6 +339,7 @@ export default function Dashboard({
                     <div className="flex items-center gap-2">
                       <p className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-gold-light transition-colors">{sale.orderNumber}</p>
                       {paymentBadge}
+                      {sale.refunded && <span className="text-[10px] font-bold bg-rose-950/40 text-rose-400 px-2 py-0.5 border border-rose-800/30 rounded uppercase tracking-wider">Refunded</span>}
                     </div>
                     <p className="text-xs text-zinc-500 font-bold mt-0.5">
                       {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.items.length} items{sale.customerName ? ` • ${sale.customerName}` : ''}
@@ -404,19 +408,33 @@ export default function Dashboard({
                 </div>
               </div>
 
+            {selectedSaleForModal.refunded && (
+              <div className="mt-3 bg-rose-950/25 border border-rose-800/30 rounded-xl py-2 text-center text-xs font-black text-rose-400 uppercase tracking-widest">
+                Refunded {selectedSaleForModal.refundedAt ? `• ${new Date(selectedSaleForModal.refundedAt).toLocaleDateString()}` : ''}
+              </div>
+            )}
+
             <div className="flex gap-2 mt-4">
+              <button onClick={() => printReceipt(selectedSaleForModal, settings, formatCurrency)}
+                className="flex-1 h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2">
+                <Printer className="w-4 h-4" /> Print
+              </button>
               <button onClick={() => shareReceiptViaWhatsApp(selectedSaleForModal)}
                 className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2">
                 <Share2 className="w-4 h-4" /> Share
               </button>
-              <button onClick={() => {
-                if (confirm('Refund this sale? Stock will be restored.')) {
-                  onRefundSale(selectedSaleForModal.id);
-                  setSelectedSaleForModal(null);
-                }
-              }} className="flex-1 h-11 bg-rose-600 hover:bg-rose-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95">
-                Refund
-              </button>
+            </div>
+            <div className="flex gap-2 mt-2">
+              {!selectedSaleForModal.refunded && (
+                <button onClick={() => {
+                  if (confirm('Refund this sale? Stock will be restored.')) {
+                    onRefundSale(selectedSaleForModal.id);
+                    setSelectedSaleForModal(null);
+                  }
+                }} className="flex-1 h-11 bg-rose-600 hover:bg-rose-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95">
+                  Refund
+                </button>
+              )}
               <button onClick={() => setSelectedSaleForModal(null)} className="flex-1 h-11 bg-gold-brand text-black font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 shadow-[0_4px_12px_rgba(255,204,0,0.15)]">Done</button>
             </div>
           </div>
