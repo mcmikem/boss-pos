@@ -574,8 +574,8 @@ export default function Sales({
           </button>
         )}
         {isMobileCartOpen && <div onClick={() => setIsMobileCartOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40"></div>}
-        <div className={`fixed bottom-0 inset-x-0 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl p-5 z-50 transform transition-transform duration-300 max-h-[85vh] overflow-y-auto flex flex-col ${
-          isMobileCartOpen ? 'translate-y-0' : 'translate-y-full'
+        <div className={`fixed bottom-0 left-0 right-0 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl p-5 z-50 max-h-[85vh] overflow-y-auto flex flex-col ${
+          isMobileCartOpen ? '' : 'hidden'
         }`}>
           <div className="flex justify-between items-center pb-4 border-b border-zinc-800 mb-4">
             <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">

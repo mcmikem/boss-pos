@@ -3,10 +3,142 @@ import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 import {browserslistToTargets, transform as lightningcss} from 'lightningcss';
 import path from 'path';
+import postcss, {type Declaration} from 'postcss';
 import {defineConfig, type Plugin} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 const LEGACY_CSS_TARGETS = browserslistToTargets(['Android >= 5', 'Chrome >= 49', 'iOS >= 12', 'Safari >= 12']);
+
+const NATIVE_TRANSFORMS = ['translate', 'scale', 'rotate'] as const;
+
+function splitList(v: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = 0; i < v.length; i++) {
+    const c = v[i];
+    if (c === '(') depth++;
+    if (c === ')') depth--;
+    if (/\s/.test(c) && depth === 0) {
+      if (cur) {
+        parts.push(cur);
+        cur = '';
+      }
+    } else {
+      cur += c;
+    }
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+
+function nativeFallback(prop: string, value: string): string {
+  const parts = splitList(value);
+  if (prop === 'translate') {
+    if (parts.length === 1) return `translateX(${parts[0]})`;
+    if (parts.length === 2) return `translateX(${parts[0]}) translateY(${parts[1]})`;
+    return `translate3d(${parts[0]}, ${parts[1]}, ${parts[2]})`;
+  }
+  if (prop === 'scale') {
+    if (parts.length === 1) return `scale(${parts[0]})`;
+    if (parts.length === 2) return `scale(${parts[0]}, ${parts[1]})`;
+    return `scale3d(${parts[0]}, ${parts[1]}, ${parts[2]})`;
+  }
+  if (prop === 'rotate') {
+    if (parts.length === 1) return `rotate(${parts[0]})`;
+    return `rotate3d(${parts[1]}, ${parts[2]}, ${parts[3]}, ${parts[0]})`;
+  }
+  return '';
+}
+
+// Convert modern logical/inset properties to physical (LTR) equivalents so old
+// Android (Chrome < 87) layouts aren't jumbled.
+function physical(prop: string, value: string): {prop: string; value: string}[] | null {
+  if (value.trim() === 'initial') return null;
+  const parts = splitList(value);
+  const one = (p: string) => [{prop: p, value: parts[0] ?? value}];
+  const two = (a: string, b: string) =>
+    parts.length === 1
+      ? [{prop: a, value: parts[0]}, {prop: b, value: parts[0]}]
+      : [{prop: a, value: parts[0]}, {prop: b, value: parts[1]}];
+  switch (prop) {
+    case 'inset':
+      if (parts.length === 1) return [
+        {prop: 'top', value: parts[0]}, {prop: 'right', value: parts[0]},
+        {prop: 'bottom', value: parts[0]}, {prop: 'left', value: parts[0]},
+      ];
+      if (parts.length === 2) return [
+        {prop: 'top', value: parts[0]}, {prop: 'right', value: parts[1]},
+        {prop: 'bottom', value: parts[0]}, {prop: 'left', value: parts[1]},
+      ];
+      if (parts.length === 3) return [
+        {prop: 'top', value: parts[0]}, {prop: 'right', value: parts[1]},
+        {prop: 'bottom', value: parts[2]}, {prop: 'left', value: parts[1]},
+      ];
+      return [
+        {prop: 'top', value: parts[0]}, {prop: 'right', value: parts[1]},
+        {prop: 'bottom', value: parts[2]}, {prop: 'left', value: parts[3]},
+      ];
+    case 'inset-inline': return two('left', 'right');
+    case 'inset-inline-start': return one('left');
+    case 'inset-inline-end': return one('right');
+    case 'inset-block': return two('top', 'bottom');
+    case 'inset-block-start': return one('top');
+    case 'inset-block-end': return one('bottom');
+    case 'margin-inline': return two('margin-left', 'margin-right');
+    case 'margin-inline-start': return one('margin-left');
+    case 'margin-inline-end': return one('margin-right');
+    case 'margin-block': return two('margin-top', 'margin-bottom');
+    case 'margin-block-start': return one('margin-top');
+    case 'margin-block-end': return one('margin-bottom');
+    case 'padding-inline': return two('padding-left', 'padding-right');
+    case 'padding-inline-start': return one('padding-left');
+    case 'padding-inline-end': return one('padding-right');
+    case 'padding-block': return two('padding-top', 'padding-bottom');
+    case 'padding-block-start': return one('padding-top');
+    case 'padding-block-end': return one('padding-bottom');
+  }
+  return null;
+}
+
+// Downlevel modern CSS features unsupported by old Android:
+//  - logical properties (inset/margin/padding inline/block) -> physical
+//  - `inset` shorthand -> top/right/bottom/left
+//  - native `translate`/`scale`/`rotate` -> `transform` (pure replacement;
+//    runs AFTER lightningcss so it can't be merged or re-shortened by it)
+function downlevelModern(css: string): string {
+  const root = postcss.parse(css);
+  root.walkRules(rule => {
+    const logical: {decl: Declaration; out: {prop: string; value: string}[]}[] = [];
+    const natives: {decl: Declaration; prop: string; value: string}[] = [];
+    rule.walkDecls(decl => {
+      const v = decl.value.trim();
+      const ph = physical(decl.prop, v);
+      if (ph) {
+        logical.push({decl, out: ph});
+        return;
+      }
+      if ((NATIVE_TRANSFORMS as readonly string[]).includes(decl.prop) && v !== 'initial') {
+        natives.push({decl, prop: decl.prop, value: v});
+      }
+    });
+    logical.forEach(({decl, out}) => {
+      decl.replaceWith(...out.map(o => postcss.decl({prop: o.prop, value: o.value})));
+    });
+    if (natives.length > 0) {
+      const fallback = natives.map(n => nativeFallback(n.prop, n.value)).join(' ');
+      const existingTransform = rule.nodes.find((n): n is Declaration => n.type === 'decl' && n.prop === 'transform') || null;
+      if (existingTransform) {
+        existingTransform.value = existingTransform.value ? `${existingTransform.value} ${fallback}` : fallback;
+        natives.forEach(n => n.decl.remove());
+      } else {
+        natives[0].decl.replaceWith(postcss.decl({prop: 'transform', value: fallback}));
+        natives.slice(1).forEach(n => n.decl.remove());
+      }
+    }
+  });
+  return root.toString();
+}
 
 function deLayerCSS(): Plugin {
   return {
@@ -23,7 +155,7 @@ function deLayerCSS(): Plugin {
             minify: true,
             targets: LEGACY_CSS_TARGETS,
           });
-          file.source = result.code.toString();
+          file.source = downlevelModern(result.code.toString());
         }
       }
     },
