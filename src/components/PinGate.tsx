@@ -29,18 +29,20 @@ export default function PinGate({ onUnlock, shopName }: PinGateProps) {
     if (next.length === 4) {
       try {
         await onUnlock(next);
-      } catch {
+      } catch (err) {
+        const msg = (err as Error)?.message || 'Wrong PIN';
+        const serverLocked = msg.includes('Too many attempts');
         const newAttempts = attempts + 1;
         setAttempts(newAttempts);
         setPin('');
-        if (newAttempts >= MAX_ATTEMPTS) {
+        if (serverLocked || newAttempts >= MAX_ATTEMPTS) {
           const until = Date.now() + LOCKOUT_MS;
           setLockedUntil(until);
           setAttempts(0);
-          setError(`Too many attempts. Try again in ${LOCKOUT_MS / 1000}s.`);
+          setError(serverLocked ? msg : `Too many attempts. Try again in ${LOCKOUT_MS / 1000}s.`);
           setTimeout(() => setError(''), LOCKOUT_MS);
         } else {
-          setError('Wrong PIN');
+          setError(msg);
         }
       }
     }

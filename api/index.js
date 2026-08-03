@@ -61,6 +61,10 @@ async function initDB() {
     amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
     settledat TEXT
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS auth_attempts (
+    id TEXT PRIMARY KEY, failures INT NOT NULL DEFAULT 0,
+    lastfailedat TEXT NOT NULL DEFAULT '', lockeduntil TEXT NOT NULL DEFAULT ''
+  )`;
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
 }
@@ -298,20 +302,67 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Rate limiting for brute-force protection (DB-backed so it survives cold starts).
+const LOCKOUT_FAILURES = 5;
+const LOCKOUT_MS = 30 * 1000;
+
+function clientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return String(fwd).split(',')[0].trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function attemptKey(ip) {
+  return 'ip:' + sha256Hex(ip).slice(0, 24);
+}
+
 // Verify a PIN and mint a token. Open (no PIN required on the server yet).
 app.post('/api/auth/verify', asHandler(async (req, res) => {
+  const key = attemptKey(clientIp(req));
+  const now = Date.now();
+  const attempts = await sql`SELECT failures, lockeduntil FROM auth_attempts WHERE id=${key}`;
+  const lockedUntil = attempts.length ? parseInt(attempts[0].lockeduntil || '0', 10) : 0;
+  if (lockedUntil > now) {
+    return res.status(429).json({
+      error: 'Too many attempts. Try again later.',
+      code: 'RATE_LIMITED',
+      retryAfterMs: lockedUntil - now,
+    });
+  }
+
   const { pin } = req.body || {};
   const rows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
   const stored = rows.length ? rows[0].value : '';
   if (stored && sha256Hex(pin) !== stored) {
+    if (attempts.length === 0) {
+      await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
+    } else {
+      const failures = (attempts[0].failures || 0) + 1;
+      if (failures >= LOCKOUT_FAILURES) {
+        await sql`UPDATE auth_attempts SET failures=0, lastfailedat=${String(now)}, lockeduntil=${String(now + LOCKOUT_MS)} WHERE id=${key}`;
+      } else {
+        await sql`UPDATE auth_attempts SET failures=${failures}, lastfailedat=${String(now)} WHERE id=${key}`;
+      }
+    }
     return res.status(401).json({ error: 'Wrong PIN', code: 'WRONG_PIN' });
+  }
+  if (attempts.length > 0) {
+    await sql`DELETE FROM auth_attempts WHERE id=${key}`;
   }
   res.json({ ok: true, token: signToken(), hasPin: !!stored });
 }));
 
-// Every mutating request after this point requires a valid token.
+// Public pre-auth status: only the fields the lock screen needs (no financial data).
+app.get('/api/auth/status', asHandler(async (req, res) => {
+  const rows = await sql`SELECT key, value FROM settings WHERE key IN ('shopName', 'pinHash')`;
+  const obj = {};
+  for (const r of rows) obj[r.key] = r.value;
+  res.json({ shopName: obj.shopName || '', hasPin: !!(obj.pinHash) });
+}));
+
+// Everything after this point requires a valid token — writes AND reads.
 app.use((req, res, next) => {
-  if (['POST', 'PUT', 'DELETE'].includes(req.method)) return requireAuth(req, res, next);
+  if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return requireAuth(req, res, next);
   next();
 });
 

@@ -107,6 +107,15 @@ export async function authVerify(pin: string): Promise<{ token: string; hasPin: 
   return data;
 }
 
+// Public pre-auth status: shop name + whether a PIN is set. Safe to call
+// before unlock because it exposes no financial data.
+export async function authStatus(): Promise<{ shopName: string; hasPin: boolean }> {
+  const res = await fetch(`${BASE}/api/auth/status`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Status failed');
+  return { shopName: data.shopName || '', hasPin: !!data.hasPin };
+}
+
 export async function authSetPin(pin: string): Promise<{ hasPin: boolean; hash: string }> {
   const res = await fetch(`${BASE}/api/auth/set`, {
     method: 'POST',

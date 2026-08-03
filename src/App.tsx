@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, authVerify, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -115,6 +115,11 @@ export default function App() {
   // Boot: try open-mode auth, migrate an existing client PIN, then load data.
   useEffect(() => {
     (async () => {
+      let shopName = '';
+      try {
+        const status = await authStatus();
+        shopName = status.shopName || '';
+      } catch {}
       try {
         const data = await authVerify('');
         localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
@@ -137,6 +142,7 @@ export default function App() {
           await fetchAllData();
           setAuthState('ready');
         } else {
+          if (shopName) setSettings(prev => ({ ...prev, shopName }));
           setAuthState('locked');
         }
       }
