@@ -115,11 +115,25 @@ export default function App() {
   // Boot: try open-mode auth, migrate an existing client PIN, then load data.
   useEffect(() => {
     (async () => {
+      let serverHasPin: boolean | null = null;
       let shopName = '';
       try {
         const status = await authStatus();
+        serverHasPin = status.hasPin;
         shopName = status.shopName || '';
       } catch {}
+
+      // Server explicitly has no PIN -> truly open mode. Never show the lock
+      // screen (otherwise any PIN "works", which is confusing).
+      if (serverHasPin === false) {
+        localStorage.setItem('boss_pos_has_pin', 'false');
+        try { await authVerify(''); } catch {}
+        await fetchAllData();
+        setAuthState('ready');
+        return;
+      }
+      if (serverHasPin === true) localStorage.setItem('boss_pos_has_pin', 'true');
+
       try {
         const data = await authVerify('');
         localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
