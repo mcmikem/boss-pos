@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Plus } from 'lucide-react';
 import { Product, SaleItem } from '../types';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
+import { effectiveCost } from '../utils/recipe';
 
 interface ProductCardProps {
   product: Product;
@@ -20,6 +21,9 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   const cartItem = cart?.find(item => item.productId === product.id && !item.variantId);
   const catVis = CATEGORY_VISUALS[product.category] || DEFAULT_CATEGORY_VISUAL;
   const CatIcon = catVis.icon;
+  const isEatery = product.category === 'Eatery';
+  const effCost = isEatery ? effectiveCost(product) : product.cost;
+  const marginPct = isEatery && effCost > 0 && product.price > 0 ? ((product.price - effCost) / product.price) * 100 : null;
 
   if (compact) {
     return (
@@ -84,8 +88,14 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         <div className="flex items-center justify-between mt-auto gap-1">
           <div>
             <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}</p>
-            {product.cost > 0 && (
-              <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">Cost: {formatCurrency(product.cost)}</p>
+            {marginPct !== null ? (
+              <p className={`text-[10px] font-black uppercase mt-0.5 ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {marginPct <= 0 ? 'LOSS' : `+${marginPct.toFixed(0)}%`}
+              </p>
+            ) : (
+              product.cost > 0 && (
+                <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">{isEatery ? 'COGS' : 'Cost'}: {formatCurrency(product.cost)}</p>
+              )
             )}
           </div>
           {hasVariants ? (

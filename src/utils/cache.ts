@@ -1,6 +1,6 @@
 import type { Product } from '../types';
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_KEY = `boss_pos_products_cache_${CACHE_VERSION}`;
 const CACHE_TIMESTAMP_KEY = `boss_pos_products_cache_ts_${CACHE_VERSION}`;
 const CACHE_TTL = 1000 * 60 * 30;

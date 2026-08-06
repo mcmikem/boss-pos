@@ -1,10 +1,11 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import { 
   Search, Plus, AlertTriangle, Edit, Package, Save, X,
-  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks
+  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat
 } from 'lucide-react';
-import type { Product, ProductVariant, Supplier } from '../types';
+import type { Product, ProductVariant, Supplier, Recipe, RecipeIngredient } from '../types';
 import CategoryManager from './CategoryManager';
+import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
 
 interface InventoryProps {
   products: Product[];
@@ -54,6 +55,7 @@ export default function Inventory({
   const [newBarcode, setNewBarcode] = useState('');
   const [newImageUrl, setNewImageUrl] = useState('');
   const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
+  const [newRecipe, setNewRecipe] = useState<Recipe | null>(null);
 
   const [editName, setEditName] = useState('');
   const [editCost, setEditCost] = useState('');
@@ -66,6 +68,7 @@ export default function Inventory({
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editIsService, setEditIsService] = useState(false);
   const [editVariants, setEditVariants] = useState<ProductVariant[]>([]);
+  const [editRecipe, setEditRecipe] = useState<Recipe | null>(null);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -138,6 +141,7 @@ export default function Inventory({
     setEditImageUrl(product.imageUrl || '');
     setEditIsService(product.isService || false);
     setEditVariants(product.variants ? product.variants.map(v => ({ ...v })) : []);
+    setEditRecipe(product.recipe ? JSON.parse(JSON.stringify(product.recipe)) : null);
     setStockAdjustment(0);
     setAdjustmentType('add');
     setConfirmDelete(false);
@@ -212,6 +216,7 @@ export default function Inventory({
       imageUrl: editImageUrl || undefined,
       isService: editIsService,
       variants: cleanVariants.length ? cleanVariants : undefined,
+      recipe: sanitizeRecipe(editRecipe),
     };
 
     onUpdateProduct(updated);
@@ -269,6 +274,7 @@ export default function Inventory({
       barcode: newBarcode || undefined,
       imageUrl: newImageUrl || undefined,
       variants: cleanVariants.length ? cleanVariants : undefined,
+      recipe: sanitizeRecipe(newRecipe),
     };
 
     onAddProduct(newProd);
@@ -280,6 +286,153 @@ export default function Inventory({
   };
 
   const categoriesList = categories;
+
+  const sanitizeRecipe = (recipe: Recipe | null): Recipe | undefined => {
+    if (!recipe) return undefined;
+    const ingredients = recipe.ingredients
+      .filter(i => i.name.trim() !== '')
+      .map(i => ({
+        ...i,
+        name: i.name.trim(),
+        qty: Math.max(0, parseFloat(String(i.qty)) || 0),
+        unitCost: Math.max(0, parseFloat(String(i.unitCost)) || 0),
+        wastePct: Math.min(99, Math.max(0, parseFloat(String(i.wastePct)) || 0)),
+      }));
+    const yieldVal = Math.max(0, parseFloat(String(recipe.yield)) || 0);
+    if (ingredients.length === 0 || yieldVal <= 0) return undefined;
+    return {
+      ingredients,
+      yield: yieldVal,
+      overhead: Math.max(0, parseFloat(String(recipe.overhead)) || 0),
+      targetMarginPct: Math.min(99, Math.max(1, parseFloat(String(recipe.targetMarginPct)) || 60)),
+    };
+  };
+
+  const renderRecipeCard = (
+    recipe: Recipe | null,
+    setRecipe: Dispatch<SetStateAction<Recipe | null>>,
+    price: string,
+    setPrice: Dispatch<SetStateAction<string>>,
+    setVariants: Dispatch<SetStateAction<ProductVariant[]>>,
+  ) => {
+    if (!recipe) return null;
+    const calc = calculateRecipe(recipe, parseFloat(price) || 0);
+
+    const updateIng = (id: string, patch: Partial<RecipeIngredient>) => {
+      setRecipe(prev => prev && {
+        ...prev,
+        ingredients: prev.ingredients.map(i => i.id === id ? { ...i, ...patch } : i),
+      });
+    };
+    const removeIng = (id: string) => {
+      setRecipe(prev => prev && { ...prev, ingredients: prev.ingredients.filter(i => i.id !== id) });
+    };
+    const addIng = () => {
+      setRecipe(prev => prev && {
+        ...prev,
+        ingredients: [...prev.ingredients, { id: `ing-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: '', qty: 1, unit: 'kg', unitCost: 0, wastePct: 0 }],
+      });
+    };
+    const applySuggested = () => {
+      if (!calc) return;
+      setPrice(String(Math.round(calc.suggestedPrice)));
+      setVariants(prev => prev.map(v => ({
+        ...v,
+        price: Math.round(suggestedFor(v.cost ?? calc.cogsPerUnit, recipe.targetMarginPct)),
+      })));
+      triggerToast('Suggested prices applied', 'success');
+    };
+
+    return (
+      <div className="bg-zinc-900/60 rounded-xl p-3 border border-gold-brand/20 space-y-3">
+        <div className="flex justify-between items-center mb-1">
+          <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+            <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe Costing
+          </h4>
+          <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery dish</span>
+        </div>
+
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem] gap-1.5 text-[10px] text-zinc-500 font-bold uppercase">
+            <span>Ingredient</span><span>Qty</span><span>Unit</span><span>Cost/Unit</span><span>Waste %</span><span></span>
+          </div>
+          {recipe.ingredients.map(ing => (
+            <div key={ing.id} className="grid grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem] gap-1.5 items-center">
+              <input value={ing.name} placeholder="e.g. Chicken breast"
+                onChange={(e) => updateIng(ing.id, { name: e.target.value })}
+                className="min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none" />
+              <input type="number" min="0" step="any" value={ing.qty || ''}
+                onChange={(e) => updateIng(ing.id, { qty: parseFloat(e.target.value) || 0 })}
+                className="bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+              <select value={ing.unit}
+                onChange={(e) => updateIng(ing.id, { unit: e.target.value })}
+                className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg h-9 px-1 text-xs focus:border-gold-brand focus:outline-none">
+                {RECIPE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <input type="number" min="0" step="any" value={ing.unitCost || ''}
+                onChange={(e) => updateIng(ing.id, { unitCost: parseFloat(e.target.value) || 0 })}
+                className="bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+              <input type="number" min="0" max="99" value={ing.wastePct || ''}
+                onChange={(e) => updateIng(ing.id, { wastePct: Math.min(99, Math.max(0, parseFloat(e.target.value) || 0)) })}
+                className="bg-zinc-950 border border-zinc-800 text-amber-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+              <button onClick={() => removeIng(ing.id)} className="text-rose-400 hover:text-rose-300 p-1.5"><X className="w-4 h-4" /></button>
+            </div>
+          ))}
+          <button onClick={addIng} className="text-gold-brand text-xs font-bold flex items-center gap-1 hover:text-gold-light transition-colors">
+            <PlusCircle className="w-3.5 h-3.5" /> Add ingredient
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Batch Yield</label>
+            <input type="number" min="1" value={recipe.yield || ''}
+              onChange={(e) => setRecipe(prev => prev && { ...prev, yield: Math.max(1, parseFloat(e.target.value) || 1) })}
+              className="w-full bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+          </div>
+          <div>
+            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Overhead (UGX)</label>
+            <input type="number" min="0" value={recipe.overhead || ''}
+              onChange={(e) => setRecipe(prev => prev && { ...prev, overhead: Math.max(0, parseFloat(e.target.value) || 0) })}
+              className="w-full bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+          </div>
+          <div>
+            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Target Margin %</label>
+            <input type="number" min="1" max="99" value={recipe.targetMarginPct || ''}
+              onChange={(e) => setRecipe(prev => prev && { ...prev, targetMarginPct: Math.min(99, Math.max(1, parseFloat(e.target.value) || 60)) })}
+              className="w-full bg-zinc-950 border border-zinc-800 text-amber-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+          </div>
+        </div>
+
+        {calc && (
+          <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3 space-y-1.5 text-xs">
+            <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">Batch cost</span><span className="text-zinc-300 font-bold">{formatCurrency(calc.batchCost)}</span></div>
+            <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">+ Overhead</span><span className="text-zinc-300 font-bold">{formatCurrency(calc.totalCost - calc.batchCost)}</span></div>
+            <div className="flex justify-between border-t border-zinc-800 pt-1.5"><span className="text-zinc-500 font-bold uppercase">COGS / unit</span><span className="text-gold-light font-black">{formatCurrency(calc.cogsPerUnit)}</span></div>
+            <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">Sell price</span><span className="text-zinc-300 font-bold">{formatCurrency(parseFloat(price) || 0)}</span></div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500 font-bold uppercase">Profit / unit</span>
+              <span className={`font-black ${calc.isLoss ? 'text-rose-400' : 'text-emerald-400'}`}>{formatCurrency(calc.profitPerUnit)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500 font-bold uppercase">Margin</span>
+              <span className={`font-black ${calc.marginPct <= 0 ? 'text-rose-400' : calc.marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{calc.marginPct.toFixed(1)}%</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-zinc-500 font-bold uppercase">Suggested price</span>
+              <span className="text-gold-brand font-black">{formatCurrency(Math.round(calc.suggestedPrice))}</span>
+            </div>
+            {calc.isLoss && <p className="text-rose-400 text-[11px] font-bold">You are selling this below cost!</p>}
+            {!calc.isLoss && calc.isUnderpriced && <p className="text-amber-400 text-[11px] font-bold">Under target margin — tap apply suggested price.</p>}
+          </div>
+        )}
+
+        <button onClick={applySuggested} className="w-full h-10 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl transition-colors">
+          Apply Suggested Prices
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6" id="inventory-tab-content">
@@ -361,7 +514,7 @@ export default function Inventory({
                 <div className="text-right flex items-center gap-4">
                   <div>
                     <p className="text-xs font-black text-white font-display">{formatCurrency(product.price)}</p>
-                    <p className="text-xs text-zinc-500 font-bold uppercase mt-0.5">Cost: {formatCurrency(product.cost)}</p>
+                    <p className="text-xs text-zinc-500 font-bold uppercase mt-0.5">{product.category === 'Eatery' ? 'COGS' : 'Cost'}: {formatCurrency(effectiveCost(product))}</p>
                   </div>
                   <Edit className="w-4 h-4 text-zinc-600 group-hover:text-gold-brand transition-colors" />
                 </div>
@@ -421,7 +574,7 @@ export default function Inventory({
                       <Settings2 className="w-3 h-3" />
                     </button>
                   </label>
-                  <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
+                  <select value={newCategory} onChange={(e) => { const v = e.target.value; setNewCategory(v); if (v === 'Eatery' && !newRecipe) setNewRecipe(emptyRecipe()); }}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                     {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
@@ -512,6 +665,8 @@ export default function Inventory({
                   </div>
                 )}
               </div>
+
+            {newCategory === 'Eatery' && renderRecipeCard(newRecipe, setNewRecipe, newPrice, setNewPrice, setNewVariants)}
             </div>
 
             <div className="pt-4 flex gap-3">
@@ -570,7 +725,7 @@ export default function Inventory({
                     <Settings2 className="w-3 h-3" />
                   </button>
                 </label>
-                <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
+                <select value={editCategory} onChange={(e) => { const v = e.target.value; setEditCategory(v); if (v === 'Eatery' && !editRecipe) setEditRecipe(emptyRecipe()); }}
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                   {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
@@ -659,6 +814,8 @@ export default function Inventory({
                 </div>
               )}
             </div>
+
+            {editCategory === 'Eatery' && renderRecipeCard(editRecipe, setEditRecipe, editPrice, setEditPrice, setEditVariants)}
 
             <div className="bg-zinc-900 p-4 rounded-xl space-y-3 border border-zinc-800/60">
               <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">

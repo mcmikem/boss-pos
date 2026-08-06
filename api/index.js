@@ -22,6 +22,7 @@ async function initDB() {
   )`;
   try { await sql`ALTER TABLE products ADD COLUMN imageurl TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN variants TEXT`; } catch {}
+  try { await sql`ALTER TABLE products ADD COLUMN recipe TEXT`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
@@ -428,7 +429,7 @@ async function logStockMovement(db, m) {
 
 app.post('/api/products', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null},${p.variants ? JSON.stringify(p.variants) : null})`;
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null})`;
   if (!p.isService && (p.stockQty || 0) > 0) {
     await logStockMovement(sql, { productId: p.id, productName: p.name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
   }
@@ -438,7 +439,7 @@ app.post('/api/products', asHandler(async (req, res) => {
 app.put('/api/products/:id', asHandler(async (req, res) => {
   const p = req.body;
   const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
-  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null},variants=${p.variants ? JSON.stringify(p.variants) : null} WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null} WHERE id=${req.params.id}`;
   if (!p.isService) {
     const prev = old.length ? (old[0].stockqty || 0) : 0;
     const next = p.stockQty || 0;
@@ -800,12 +801,17 @@ function mapProduct(r) {
   if (r.variants) {
     try { variants = JSON.parse(r.variants); } catch { variants = null; }
   }
+  let recipe = null;
+  if (r.recipe) {
+    try { recipe = JSON.parse(r.recipe); } catch { recipe = null; }
+  }
   return {
     id: r.id, name: r.name, category: r.category, cost: r.cost, price: r.price,
     stockQty: r.stockqty, lowStockThreshold: r.lowstockthreshold,
     supplierId: r.supplierid, isService: !!r.isservice,
     imei: r.imei, barcode: r.barcode, imageUrl: r.imageurl || '',
     variants: variants || undefined,
+    recipe: recipe || undefined,
   };
 }
 

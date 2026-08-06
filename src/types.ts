@@ -5,6 +5,22 @@ export interface ProductVariant {
   cost?: number;
 }
 
+export interface RecipeIngredient {
+  id: string;
+  name: string;
+  qty: number;
+  unit: string;
+  unitCost: number;
+  wastePct: number;
+}
+
+export interface Recipe {
+  ingredients: RecipeIngredient[];
+  yield: number;
+  overhead: number;
+  targetMarginPct: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -19,6 +35,7 @@ export interface Product {
   imei?: string;
   barcode?: string;
   variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
+  recipe?: Recipe; // ingredient cost breakdown for a dish; COGS is derived from this
 }
 
 export interface CashTransfer {

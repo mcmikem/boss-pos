@@ -1,5 +1,6 @@
 import { X, ChefHat } from 'lucide-react';
 import { Product, SaleItem } from '../types';
+import { effectiveCost } from '../utils/recipe';
 
 interface ProfitAnalyzerModalProps {
   isOpen: boolean;
@@ -45,7 +46,7 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
                   </div>
                   <div className="space-y-1.5">
                     {variants.map(v => {
-                      const vCost = v.cost ?? product.cost;
+                      const vCost = v.cost ?? effectiveCost(product);
                       const profitPerUnit = v.price - vCost;
                       const marginPct = v.price > 0 ? (profitPerUnit / v.price) * 100 : 0;
                       const isLoss = profitPerUnit <= 0;
@@ -70,7 +71,7 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
                 </div>
               );
             }
-            const profitPerUnit = product.price - product.cost;
+            const profitPerUnit = product.price - effectiveCost(product);
             const marginPct = product.price > 0 ? (profitPerUnit / product.price) * 100 : 0;
             const isLoss = profitPerUnit <= 0;
             const totalSold = cart.filter(c => c.productId === product.id).reduce((s, c) => s + c.qty, 0);
