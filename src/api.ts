@@ -224,6 +224,16 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean })
     throw new Error('Offline and no cached data');
   }
 
+  // Idempotency: attach a stable client_write_id to every create/update body so
+  // an offline outbox replay can't double-insert a sale/expense/etc. The same
+  // id rides along when the request is queued, so the server can dedupe it.
+  if (!isRead && options?.method && (options.method === 'POST' || options.method === 'PUT')) {
+    let parsed: Record<string, unknown> = {};
+    try { parsed = (options.body as string) ? JSON.parse(options.body as string) : {}; } catch {}
+    if (!parsed.clientWriteId) parsed.clientWriteId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    options = { ...options, body: JSON.stringify(parsed) };
+  }
+
   try {
     const res = await fetch(`${BASE}${path}`, {
       headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },

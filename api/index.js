@@ -1,6 +1,6 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
-import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -65,8 +65,35 @@ async function initDB() {
     id TEXT PRIMARY KEY, failures INT NOT NULL DEFAULT 0,
     lastfailedat TEXT NOT NULL DEFAULT '', lockeduntil TEXT NOT NULL DEFAULT ''
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS stock_movements (
+    id TEXT PRIMARY KEY, product_id TEXT, product_name TEXT NOT NULL,
+    delta INTEGER NOT NULL, type TEXT NOT NULL, qty_after INTEGER NOT NULL,
+    sale_id TEXT, note TEXT DEFAULT '', createdat TEXT NOT NULL
+  )`;
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders']) {
+    try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
+  }
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_cwid ON expenses(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_creditpay_cwid ON credit_payments(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_cashtrans_cwid ON cash_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tailoring_cwid ON tailoring_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
+  // Random HMAC secret, stored in the DB so all serverless instances agree.
+  // No longer derived from DATABASE_URL (which would let anyone with the DB
+  // URL forge tokens). An explicit AUTH_SECRET env var takes precedence.
+  if (!AUTH_SECRET) {
+    const existing = await sql`SELECT value FROM settings WHERE key='authSecret'`;
+    if (existing.length && existing[0].value) {
+      AUTH_SECRET = existing[0].value;
+    } else {
+      AUTH_SECRET = randomBytes(32).toString('hex');
+      await sql`INSERT INTO settings (key, value) VALUES ('authSecret', ${AUTH_SECRET}) ON CONFLICT (key) DO NOTHING`;
+      const again = await sql`SELECT value FROM settings WHERE key='authSecret'`;
+      AUTH_SECRET = again.length && again[0].value ? again[0].value : AUTH_SECRET;
+    }
+  }
 }
 
 function escapeId(id) {
@@ -82,6 +109,35 @@ async function batchInsert(table, columns, rows) {
   const flat = rows.flatMap(r => columns.map(c => r[c] != null ? r[c] : null));
   await sql.query(`INSERT INTO ${escapeId(table)} (${cols}) VALUES ${vals}`, flat);
 }
+
+const LIBRARY_MENU = [
+  { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+];
+
+const EATERY_MENU = [
+  { id:'prod-100',name:'Chappati',category:'Eatery',cost:250,price:500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5',variants:null },
+  { id:'prod-101',name:'Samosa / Sumbusa',category:'Eatery',cost:120,price:300,stockQty:120,lowStockThreshold:20,supplierId:'sup-5',
+    variants:[{id:'v-single',label:'Single',price:300,cost:120},{id:'v-couple',label:'Couple / Pair',price:500,cost:250},{id:'v-big',label:'Big Size',price:500,cost:300}] },
+  { id:'prod-102',name:'Egg Roll',category:'Eatery',cost:500,price:1000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5',variants:null },
+  { id:'prod-103',name:'Coconut Cookies',category:'Eatery',cost:200,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+    variants:[{id:'v-pair',label:'Pair',price:500,cost:200},{id:'v-plate',label:'Plate',price:2500,cost:1200}] },
+  { id:'prod-104',name:'Shortbread Cookies',category:'Eatery',cost:250,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
+    variants:[{id:'v-pair',label:'Pair',price:500,cost:250},{id:'v-plate',label:'Plate',price:2500,cost:1300}] },
+  { id:'prod-105',name:'Sausage',category:'Eatery',cost:600,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-106',name:'Half Cake',category:'Eatery',cost:250,price:500,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',
+    variants:[{id:'v-small',label:'Small',price:500,cost:250},{id:'v-large',label:'Large',price:1000,cost:500}] },
+  { id:'prod-107',name:'Meat Samosa',category:'Eatery',cost:550,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-108',name:'Black Tea',category:'Eatery',cost:150,price:500,stockQty:200,lowStockThreshold:30,supplierId:'sup-5',variants:null },
+  { id:'prod-109',name:'Milk Tea',category:'Eatery',cost:400,price:1000,stockQty:150,lowStockThreshold:25,supplierId:'sup-5',variants:null },
+  { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+];
 
 async function seedDatabase() {
   const result = await sql`SELECT COUNT(*)::int as count FROM products`;
@@ -111,13 +167,8 @@ async function seedDatabase() {
     { id:'prod-12',name:'Memory Card (64GB)',category:'Electronics',cost:25000,price:55000,stockQty:20,lowStockThreshold:4,supplierId:'sup-4' },
     { id:'prod-13',name:'Bluetooth Speaker',category:'Electronics',cost:30000,price:70000,stockQty:10,lowStockThreshold:2,supplierId:'sup-4' },
     { id:'prod-14',name:'Flash Disk (32GB)',category:'Electronics',cost:20000,price:45000,stockQty:15,lowStockThreshold:3,supplierId:'sup-4' },
-    { id:'prod-20',name:'Double Egg Rolex',category:'Eatery',cost:1800,price:3500,stockQty:50,lowStockThreshold:10,supplierId:'sup-5' },
-    { id:'prod-21',name:'Single Egg Rolex',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:10,supplierId:'sup-5' },
-    { id:'prod-22',name:'Plain Chapati',category:'Eatery',cost:500,price:1500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5' },
-    { id:'prod-23',name:'Samosa (Beef, 3pcs)',category:'Eatery',cost:1200,price:3000,stockQty:40,lowStockThreshold:8,supplierId:'sup-5' },
     { id:'prod-24',name:'Soda (Glass Bottle)',category:'Eatery',cost:1200,price:2000,stockQty:60,lowStockThreshold:15,supplierId:'sup-5' },
     { id:'prod-25',name:'Bottled Water (500ml)',category:'Eatery',cost:700,price:1500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5' },
-    { id:'prod-26',name:'African Milk Tea',category:'Eatery',cost:700,price:2000,stockQty:40,lowStockThreshold:8,supplierId:'sup-5' },
     { id:'prod-27',name:'Fresh Juice (Passion)',category:'Eatery',cost:2000,price:4000,stockQty:25,lowStockThreshold:5,supplierId:'sup-5' },
     { id:'prod-28',name:'Crisps (Packet)',category:'Eatery',cost:1500,price:3000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5' },
     { id:'prod-29',name:'Biscuits (Assorted)',category:'Eatery',cost:500,price:1500,stockQty:60,lowStockThreshold:12,supplierId:'sup-5' },
@@ -139,14 +190,7 @@ async function seedDatabase() {
     { id:'prod-53',name:'School Uniform (Full)',category:'Tailoring',cost:20000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-54',name:'Men\'s Shirt (Fitted)',category:'Tailoring',cost:15000,price:35000,stockQty:8,lowStockThreshold:2,supplierId:'sup-3' },
     { id:'prod-55',name:'Work/Corporate Uniform',category:'Tailoring',cost:25000,price:50000,stockQty:5,lowStockThreshold:2,supplierId:'sup-3' },
-    { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+    ...LIBRARY_MENU,
     { id:'prod-70',name:'Soccer Ball (Size 5)',category:'Sports',cost:28000,price:50000,stockQty:8,lowStockThreshold:2,supplierId:'sup-1' },
     { id:'prod-71',name:'Skipping Rope',category:'Sports',cost:5000,price:12000,stockQty:15,lowStockThreshold:3,supplierId:'sup-1' },
     { id:'prod-72',name:'Whistle (Referee)',category:'Sports',cost:3000,price:8000,stockQty:20,lowStockThreshold:4,supplierId:'sup-1' },
@@ -159,21 +203,7 @@ async function seedDatabase() {
     { id:'prod-92',name:'T-Shirt (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:25,lowStockThreshold:5,supplierId:'sup-1' },
     { id:'prod-93',name:'T-Shirt (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:20,lowStockThreshold:5,supplierId:'sup-1' },
     { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
-    { id:'prod-100',name:'Chappati',category:'Eatery',cost:250,price:500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5' },
-    { id:'prod-101',name:'Samosa / Sumbusa',category:'Eatery',cost:120,price:300,stockQty:120,lowStockThreshold:20,supplierId:'sup-5',
-      variants:[{id:'v-single',label:'Single',price:300,cost:120},{id:'v-couple',label:'Couple / Pair',price:500,cost:250},{id:'v-big',label:'Big Size',price:500,cost:300}] },
-    { id:'prod-102',name:'Egg Roll',category:'Eatery',cost:500,price:1000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5' },
-    { id:'prod-103',name:'Coconut Cookies',category:'Eatery',cost:200,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
-      variants:[{id:'v-pair',label:'Pair',price:500,cost:200},{id:'v-plate',label:'Plate',price:2500,cost:1200}] },
-    { id:'prod-104',name:'Shortbread Cookies',category:'Eatery',cost:250,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
-      variants:[{id:'v-pair',label:'Pair',price:500,cost:250},{id:'v-plate',label:'Plate',price:2500,cost:1300}] },
-    { id:'prod-105',name:'Sausage',category:'Eatery',cost:600,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5' },
-    { id:'prod-106',name:'Half Cake',category:'Eatery',cost:250,price:500,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',
-      variants:[{id:'v-small',label:'Small',price:500,cost:250},{id:'v-large',label:'Large',price:1000,cost:500}] },
-    { id:'prod-107',name:'Meat Samosa',category:'Eatery',cost:550,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5' },
-    { id:'prod-108',name:'Black Tea',category:'Eatery',cost:150,price:500,stockQty:200,lowStockThreshold:30,supplierId:'sup-5' },
-    { id:'prod-109',name:'Milk Tea',category:'Eatery',cost:400,price:1000,stockQty:150,lowStockThreshold:25,supplierId:'sup-5' },
-    { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5' },
+    ...EATERY_MENU,
   ];
   await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','variants'],
     products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, variants: p.variants ? JSON.stringify(p.variants) : null })));
@@ -189,7 +219,7 @@ async function seedDatabase() {
 
   const sales = [
     { id:'sale-1',orderNumber:'Order #8492',timestamp:'2026-07-15T11:10:00+03:00',items:[{productId:'prod-4',productName:'Phone Charger (USB-C)',qty:1,unitPrice:15000,unitCost:6000,lineTotal:15000},{productId:'prod-7',productName:'Bluetooth Earphones (TWS)',qty:1,unitPrice:55000,unitCost:25000,lineTotal:55000}],subtotal:70000,tax:0,total:70000,paymentMethod:'MTN MoMo' },
-    { id:'sale-2',orderNumber:'Order #8491',timestamp:'2026-07-15T09:45:00+03:00',items:[{productId:'prod-20',productName:'Double Egg Rolex',qty:2,unitPrice:3500,unitCost:1800,lineTotal:7000},{productId:'prod-24',productName:'Soda (Glass Bottle)',qty:2,unitPrice:2000,unitCost:1200,lineTotal:4000}],subtotal:11000,tax:0,total:11000,paymentMethod:'Cash' },
+    { id:'sale-2',orderNumber:'Order #8491',timestamp:'2026-07-15T09:45:00+03:00',items:[{productId:'prod-102',productName:'Egg Roll',qty:2,unitPrice:1000,unitCost:500,lineTotal:2000},{productId:'prod-24',productName:'Soda (Glass Bottle)',qty:2,unitPrice:2000,unitCost:1200,lineTotal:4000}],subtotal:6000,tax:0,total:6000,paymentMethod:'Cash' },
     { id:'sale-3',orderNumber:'Order #8490',timestamp:'2026-07-15T08:30:00+03:00',items:[{productId:'prod-10',productName:'Phone Case (Silicone)',qty:2,unitPrice:12000,unitCost:4000,lineTotal:24000},{productId:'prod-4',productName:'Phone Charger (USB-C)',qty:1,unitPrice:15000,unitCost:6000,lineTotal:15000}],subtotal:39000,tax:0,total:39000,paymentMethod:'Cash' },
   ];
   await batchInsert('sales', ['id','ordernumber','timestamp','items','subtotal','tax','total','paymentmethod','customername','discount','notes'],
@@ -204,56 +234,44 @@ let initPromise = initDB().then(() => seedDatabase()).catch(err => {
 });
 
 async function syncLibraryProducts() {
-  const libraryProducts = [
-    { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-    { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-  ];
-  for (const p of libraryProducts) {
-    await sql`
+  let inserted = 0;
+  for (const p of LIBRARY_MENU) {
+    const r = await sql`
       INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl)
       VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},${p.isService},null)
       ON CONFLICT (id) DO NOTHING
+      RETURNING id
     `;
+    inserted += r.length;
   }
   await sql`DELETE FROM products WHERE category='Movies' OR category='Music' OR category='Software (Android)' OR category='Software (Windows)'`;
+  return inserted;
 }
 
-const EATERY_MENU = [
-  { id:'prod-100',name:'Chappati',category:'Eatery',cost:250,price:500,stockQty:100,lowStockThreshold:20,supplierId:'sup-5',variants:null },
-  { id:'prod-101',name:'Samosa / Sumbusa',category:'Eatery',cost:120,price:300,stockQty:120,lowStockThreshold:20,supplierId:'sup-5',
-    variants:[{id:'v-single',label:'Single',price:300,cost:120},{id:'v-couple',label:'Couple / Pair',price:500,cost:250},{id:'v-big',label:'Big Size',price:500,cost:300}] },
-  { id:'prod-102',name:'Egg Roll',category:'Eatery',cost:500,price:1000,stockQty:50,lowStockThreshold:10,supplierId:'sup-5',variants:null },
-  { id:'prod-103',name:'Coconut Cookies',category:'Eatery',cost:200,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
-    variants:[{id:'v-pair',label:'Pair',price:500,cost:200},{id:'v-plate',label:'Plate',price:2500,cost:1200}] },
-  { id:'prod-104',name:'Shortbread Cookies',category:'Eatery',cost:250,price:500,stockQty:80,lowStockThreshold:15,supplierId:'sup-5',
-    variants:[{id:'v-pair',label:'Pair',price:500,cost:250},{id:'v-plate',label:'Plate',price:2500,cost:1300}] },
-  { id:'prod-105',name:'Sausage',category:'Eatery',cost:600,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
-  { id:'prod-106',name:'Half Cake',category:'Eatery',cost:250,price:500,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',
-    variants:[{id:'v-small',label:'Small',price:500,cost:250},{id:'v-large',label:'Large',price:1000,cost:500}] },
-  { id:'prod-107',name:'Meat Samosa',category:'Eatery',cost:550,price:1000,stockQty:60,lowStockThreshold:12,supplierId:'sup-5',variants:null },
-  { id:'prod-108',name:'Black Tea',category:'Eatery',cost:150,price:500,stockQty:200,lowStockThreshold:30,supplierId:'sup-5',variants:null },
-  { id:'prod-109',name:'Milk Tea',category:'Eatery',cost:400,price:1000,stockQty:150,lowStockThreshold:25,supplierId:'sup-5',variants:null },
-  { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5',variants:null },
-];
-
 async function syncEateryMenu() {
+  let inserted = 0;
   for (const p of EATERY_MENU) {
-    await sql`
+    const r = await sql`
       INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,variants)
       VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},false,null,${p.variants ? JSON.stringify(p.variants) : null})
       ON CONFLICT (id) DO NOTHING
+      RETURNING id
     `;
+    inserted += r.length;
   }
+  return inserted;
 }
 
-initPromise = initPromise.then(() => syncLibraryProducts()).then(() => syncEateryMenu()).catch(err => {
-  console.error('Library sync failed:', err);
+async function ensureCatalogSynced() {
+  const rows = await sql`SELECT value FROM settings WHERE key='catalogSynced'`;
+  if (rows.length && rows[0].value === 'true') return;
+  await syncLibraryProducts();
+  await syncEateryMenu();
+  await sql`INSERT INTO settings (key,value) VALUES ('catalogSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
+}
+
+initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
+  console.error('Catalog sync failed:', err);
 });
 
 app.use((req, res, next) => {
@@ -263,8 +281,9 @@ app.use((req, res, next) => {
 });
 
 // === AUTH ===
-// Stateless HMAC-signed tokens. The PIN hash lives in the settings table.
-const AUTH_SECRET = process.env.AUTH_SECRET || createHash('sha256').update(DATABASE_URL || 'imac').digest('hex');
+// Stateless HMAC-signed tokens. The PIN hash and the HMAC secret live in the
+// settings table; AUTH_SECRET is seeded on first boot (see initDB).
+let AUTH_SECRET = process.env.AUTH_SECRET || null;
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function sha256Hex(s) {
@@ -394,20 +413,48 @@ app.get('/api/products', asHandler(async (req, res) => {
   res.json(rows.map(mapProduct));
 }));
 
+// Stock audit trail. Pass the transaction handle when inside one.
+// Best-effort: a failed audit insert never fails the main operation.
+async function logStockMovement(db, m) {
+  try {
+    await db`INSERT INTO stock_movements (id, product_id, product_name, delta, type, qty_after, sale_id, note, createdat)
+      VALUES (${'sm-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)},
+        ${m.productId || null}, ${m.productName || ''}, ${m.delta}, ${m.type},
+        ${m.qtyAfter || 0}, ${m.saleId || null}, ${m.note || ''}, ${new Date().toISOString()})`;
+  } catch (e) {
+    console.error('Audit log failed:', e.message);
+  }
+}
+
 app.post('/api/products', asHandler(async (req, res) => {
   const p = req.body;
   await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null},${p.variants ? JSON.stringify(p.variants) : null})`;
+  if (!p.isService && (p.stockQty || 0) > 0) {
+    await logStockMovement(sql, { productId: p.id, productName: p.name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
+  }
   res.json(p);
 }));
 
 app.put('/api/products/:id', asHandler(async (req, res) => {
   const p = req.body;
+  const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
   await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null},variants=${p.variants ? JSON.stringify(p.variants) : null} WHERE id=${req.params.id}`;
+  if (!p.isService) {
+    const prev = old.length ? (old[0].stockqty || 0) : 0;
+    const next = p.stockQty || 0;
+    if (next !== prev) {
+      await logStockMovement(sql, { productId: p.id, productName: p.name, delta: next - prev, type: 'adjust', qtyAfter: next, note: `Stock edited ${prev} -> ${next}` });
+    }
+  }
   res.json(p);
 }));
 
 app.delete('/api/products/:id', asHandler(async (req, res) => {
+  const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
   await sql`DELETE FROM products WHERE id=${req.params.id}`;
+  if (old.length && !old[0].isservice && (old[0].stockqty || 0) > 0) {
+    await logStockMovement(sql, { productId: old[0].id, productName: old[0].name, delta: -(old[0].stockqty || 0), type: 'delete', qtyAfter: 0, note: 'Product deleted' });
+  }
   res.json({ success: true });
 }));
 
@@ -450,35 +497,86 @@ app.get('/api/sales', asHandler(async (req, res) => {
 
 app.post('/api/sales', asHandler(async (req, res) => {
   const s = req.body;
+  const cwid = s.clientWriteId || null;
   const itemsJson = JSON.stringify(s.items);
-  await sql`INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes) VALUES (${s.id},${s.orderNumber},${s.timestamp},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${s.customerName||null},${s.discount||null},${s.notes||null})`;
-  for (const item of s.items) {
-    await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${item.qty}) WHERE id=${item.productId} AND isService=false`;
+  // Atomic: insert the sale and decrement stock in one statement. On a
+  // duplicate client_write_id (outbox replay) the insert no-ops and no stock
+  // is moved.
+  const r = await sql`
+    WITH ins AS (
+      INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,client_write_id)
+      VALUES (${s.id},${s.orderNumber},${s.timestamp},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${s.customerName||null},${s.discount||null},${s.notes||null},${cwid})
+      ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING
+      RETURNING id, items
+    ),
+    stock AS (
+      UPDATE products p SET stockQty = GREATEST(0, p.stockQty - sub.qty)
+      FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub(productId text, qty int)
+      WHERE p.id = sub.productId AND p.isService = false
+      RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
+    )
+    SELECT (SELECT count(*)::int FROM ins) AS inserted,
+           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock
+  `;
+  if (r.length === 0) return res.status(500).json({ error: 'Failed to create sale' });
+  const { inserted, stock } = r[0];
+
+  if (inserted === 0) {
+    const existing = await sql`SELECT * FROM sales WHERE client_write_id=${cwid}`;
+    return res.json(existing.length ? mapSale(existing[0]) : s);
+  }
+
+  for (const row of stock || []) {
+    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: -(row.qty || 0), type: 'sale', qtyAfter: row.stockqty, saleId: s.id, note: `Order ${s.orderNumber}` });
   }
   res.json(s);
 }));
 
 app.delete('/api/sales/:id', asHandler(async (req, res) => {
-  const sale = await sql`SELECT * FROM sales WHERE id=${req.params.id}`;
-  if (sale.length === 0) return res.status(404).json({ error: 'Sale not found' });
-  const items = JSON.parse(sale[0].items);
-  for (const item of items) {
-    await sql`UPDATE products SET stockQty = stockQty + ${item.qty} WHERE id=${item.productId} AND isService=false`;
+  // Atomic: delete the sale and restore stock in one statement.
+  const r = await sql`
+    WITH del AS (
+      DELETE FROM sales WHERE id=${req.params.id} RETURNING id, items
+    ),
+    stock AS (
+      UPDATE products p SET stockQty = p.stockQty + sub.qty
+      FROM del, jsonb_to_recordset(del.items::jsonb) AS sub(productId text, qty int)
+      WHERE p.id = sub.productId AND p.isService = false
+      RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
+    )
+    SELECT (SELECT count(*)::int FROM del) AS deleted,
+           (SELECT items FROM del LIMIT 1) AS items,
+           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock
+  `;
+  if (r.length === 0 || r[0].deleted === 0) return res.status(404).json({ error: 'Sale not found' });
+  for (const row of r[0].stock || []) {
+    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.qty || 0, type: 'sale_deleted', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Sale deleted' });
   }
-  await sql`DELETE FROM sales WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
 
 // Soft refund: keep the sale row for the audit trail, restore stock, flag it.
 app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
-  const sale = await sql`SELECT * FROM sales WHERE id=${req.params.id}`;
-  if (sale.length === 0) return res.status(404).json({ error: 'Sale not found' });
-  if (sale[0].refunded) return res.json({ success: true });
-  const items = JSON.parse(sale[0].items);
-  for (const item of items) {
-    await sql`UPDATE products SET stockQty = stockQty + ${item.qty} WHERE id=${item.productId} AND isService=false`;
+  // Atomic: mark refunded (only if not already) and restore stock together.
+  const r = await sql`
+    WITH upd AS (
+      UPDATE sales SET refunded=true, refundedat=${new Date().toISOString()}
+      WHERE id=${req.params.id} AND refunded=false
+      RETURNING id, items
+    ),
+    stock AS (
+      UPDATE products p SET stockQty = p.stockQty + sub.qty
+      FROM upd, jsonb_to_recordset(upd.items::jsonb) AS sub(productId text, qty int)
+      WHERE p.id = sub.productId AND p.isService = false
+      RETURNING p.id, p.name, p.stockqty
+    )
+    SELECT (SELECT count(*)::int FROM upd) AS updated,
+           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty)) FROM stock), '[]'::json) AS stock
+  `;
+  if (r.length === 0 || r[0].updated === 0) return res.status(404).json({ error: 'Sale not found or already refunded' });
+  for (const row of r[0].stock || []) {
+    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.stockqty >= 0 ? 0 : 0, type: 'refund', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Refunded' });
   }
-  await sql`UPDATE sales SET refunded=true, refundedat=${new Date().toISOString()} WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
 
@@ -498,7 +596,13 @@ app.get('/api/expenses', asHandler(async (req, res) => {
 
 app.post('/api/expenses', asHandler(async (req, res) => {
   const e = req.body;
-  await sql`INSERT INTO expenses (id,timestamp,description,amount,category) VALUES (${e.id},${e.timestamp},${e.description},${e.amount},${e.category||''})`;
+  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,client_write_id)
+    VALUES (${e.id},${e.timestamp},${e.description},${e.amount},${e.category||''},${e.clientWriteId||null})
+    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
+    return res.json(existing.length ? existing[0] : e);
+  }
   res.json(e);
 }));
 
@@ -538,7 +642,13 @@ app.get('/api/credit-payments', asHandler(async (req, res) => {
 
 app.post('/api/credit-payments', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`INSERT INTO credit_payments (id,saleid,amount,createdat) VALUES (${p.id},${p.saleId},${p.amount},${p.createdAt})`;
+  const inserted = await sql`INSERT INTO credit_payments (id,saleid,amount,createdat,client_write_id)
+    VALUES (${p.id},${p.saleId},${p.amount},${p.createdAt},${p.clientWriteId||null})
+    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM credit_payments WHERE client_write_id=${p.clientWriteId}`;
+    return res.json(existing.length ? existing[0] : p);
+  }
   res.json(p);
 }));
 
@@ -550,7 +660,13 @@ app.get('/api/cash-transfers', asHandler(async (req, res) => {
 
 app.post('/api/cash-transfers', asHandler(async (req, res) => {
   const t = req.body;
-  await sql`INSERT INTO cash_transfers (id,fromcategory,tocategory,amount,reason,createdat,settledat) VALUES (${t.id},${t.fromCategory},${t.toCategory},${t.amount},${t.reason||''},${t.createdAt},${t.settledAt||null})`;
+  const inserted = await sql`INSERT INTO cash_transfers (id,fromcategory,tocategory,amount,reason,createdat,settledat,client_write_id)
+    VALUES (${t.id},${t.fromCategory},${t.toCategory},${t.amount},${t.reason||''},${t.createdAt},${t.settledAt||null},${t.clientWriteId||null})
+    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM cash_transfers WHERE client_write_id=${t.clientWriteId}`;
+    return res.json(existing.length ? existing[0] : t);
+  }
   res.json(t);
 }));
 
@@ -567,7 +683,13 @@ app.get('/api/tailoring-orders', asHandler(async (req, res) => {
 
 app.post('/api/tailoring-orders', asHandler(async (req, res) => {
   const o = req.body;
-  await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat) VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.workType},${o.workDescription},${o.totalAmount||0},${o.depositPaid||0},${o.materialCost||0},${o.status||'pending'},${o.notes||''},${o.measurements||''},${o.createdAt})`;
+  const inserted = await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat,client_write_id)
+    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.workType},${o.workDescription},${o.totalAmount||0},${o.depositPaid||0},${o.materialCost||0},${o.status||'pending'},${o.notes||''},${o.measurements||''},${o.createdAt},${o.clientWriteId||null})
+    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM tailoring_orders WHERE client_write_id=${o.clientWriteId}`;
+    return res.json(existing.length ? existing[0] : o);
+  }
   res.json(o);
 }));
 
@@ -584,8 +706,21 @@ app.delete('/api/tailoring-orders/:id', asHandler(async (req, res) => {
 
 // === SYNC PRODUCT CATALOG ===
 app.post('/api/sync-products', asHandler(async (req, res) => {
-  await syncLibraryProducts();
-  res.json({ success: true, updated: 8 });
+  const libCount = await syncLibraryProducts();
+  const eateryCount = await syncEateryMenu();
+  res.json({ success: true, updated: libCount + eateryCount });
+}));
+
+// === STOCK MOVEMENTS AUDIT TRAIL ===
+app.get('/api/stock-movements', asHandler(async (req, res) => {
+  const { limit, productId } = req.query;
+  const params = [];
+  let where = ' WHERE 1=1';
+  if (productId) { params.push(productId); where += ` AND product_id = $${params.length}`; }
+  let query = `SELECT * FROM stock_movements${where} ORDER BY createdat DESC`;
+  if (limit) { params.push(parseInt(limit)); query += ` LIMIT $${params.length}`; }
+  const rows = await sql.query(query, params);
+  res.json(rows.map(mapStockMovement));
 }));
 
 // === SERVER-SIDE SUMMARY (date-range aggregates) ===
@@ -635,7 +770,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring] = await Promise.all([
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, stockMoves] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM sales`,
@@ -644,6 +779,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM credit_payments`,
     sql`SELECT * FROM cash_transfers`,
     sql`SELECT * FROM tailoring_orders`,
+    sql`SELECT * FROM stock_movements`,
   ]);
   res.json({
     exportedAt: new Date().toISOString(),
@@ -655,6 +791,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     creditPayments: credit.map(r => ({ id: r.id, saleId: r.saleid, amount: r.amount, createdAt: r.createdat })),
     cashTransfers: transfers.map(mapTransfer),
     tailoringOrders: tailoring.map(mapTailoringOrder),
+    stockMovements: stockMoves.map(mapStockMovement),
   });
 }));
 
@@ -706,6 +843,14 @@ function mapSupplier(r) {
   return {
     id: r.id, name: r.name, contactPerson: r.contactperson,
     phone: r.phone, email: r.email,
+  };
+}
+
+function mapStockMovement(r) {
+  return {
+    id: r.id, productId: r.product_id, productName: r.product_name,
+    delta: r.delta, type: r.type, qtyAfter: r.qty_after,
+    saleId: r.sale_id, note: r.note, createdAt: r.createdat,
   };
 }
 

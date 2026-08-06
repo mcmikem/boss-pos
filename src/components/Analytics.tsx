@@ -280,7 +280,7 @@ export default function Analytics({
 
 const colorsMap: { [key: string]: string } = {
     'Electronics': '#f1c100',
-    'Eatery': '#4ade80',
+    'Eatery': '#f59e0b',
     'Stationery': '#60a5fa',
     'Printing': '#f472b6',
     'Tailoring': '#a78bfa',

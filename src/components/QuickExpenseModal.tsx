@@ -118,7 +118,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                 <select value={expenseBatchProductId} onChange={(e) => setExpenseBatchProductId(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-11 px-2 text-xs outline-none font-bold">
                   <option value="">Select product...</option>
-                  {products.filter(p => p.category === 'Eatery' || p.category === 'Custom').map(p => (
+                  {products.filter(p => ['Eatery', 'Custom', 'Uncategorized'].includes(p.category)).map(p => (
                     <option key={p.id} value={p.id}>{p.name} — Sell: {formatCurrency(p.price)}</option>
                   ))}
                 </select>
