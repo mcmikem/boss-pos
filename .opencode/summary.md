@@ -32,6 +32,7 @@
 - **ProductCard.tsx**: Eatery margin badge (`+N%` emerald/amber, red `LOSS`); **ProfitAnalyzerModal.tsx**: recipe-aware COGS (`effectiveCost`, per-variant fallback)
 - **Cache version v3** so stale products reload. Committed/pushed: `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `68f8452` (recipe costing)
 - **Offline readiness fixes**: `/api/auth/verify` returns the stored PIN `hash` and `authVerify()` caches it to `boss_pos_pin`, so a fresh device that unlocks once online can unlock offline later; `api()` gained a `store` TTL flag so `settingsApi.get` caches settings for 24h (offline boot keeps shop name/categories). Pushed: `bb0b57c`
+- **Offline unlock on flaky Android**: `handleUnlock` no longer gates the local-hash fallback on `navigator.onLine` (unreliable on old Android — it can report online with no network), so the "Failed to fetch" error on PIN unlock is replaced by local-hash verification whenever `authVerify` throws. Pushed: `d8850cd`
 
 ### In Progress
 - (none)
@@ -54,7 +55,7 @@
 - If user wants deeper costing: track ingredient stock / auto-deduct on sale (Level 3)
 
 ## Critical Context
-- Commits pushed: `bb0b57c` (HEAD, offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
+- Commits pushed: `d8850cd` (HEAD, offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
 - Vercel prod: `https://imac-pos.vercel.app` (project `imac-pos`, CLI 51.7.0 at `/usr/local/bin/vercel`)
 - Old-Android stack already live: `@vitejs/plugin-legacy@^6.1.1` (NOT v8), `lightningcss@^1.33.0`, `deLayerCSS()` unwraps `@layer` + converts `oklch()`→`rgb()`, targets `Android >= 5 / Chrome >= 49 / iOS >= 12 / Safari >= 12`, all 107 `color-mix` guarded by `@supports`
 - `src/utils/crypto.ts`: SHA-256 via `crypto.subtle` with `cyrb53` fallback prefixed `fb_`
