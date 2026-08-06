@@ -260,15 +260,16 @@ export default function App() {
       await fetchAllData();
       setAuthState('ready');
     } catch (err) {
-      // Offline: verify against the locally-stored hash so sales can still run.
-      if (!navigator.onLine) {
-        const local = localStorage.getItem('boss_pos_pin');
-        if (local && !local.startsWith('fb_')) {
-          const entered = await hashPin(pin);
-          if (entered === local) {
-            setAuthState('ready');
-            return;
-          }
+      // Offline / flaky network (navigator.onLine is unreliable on some Androids,
+      // so we can't gate on it): fall back to the locally-stored hash so sales
+      // can still run. Only possible once this device has unlocked online before
+      // (authVerify caches the hash to boss_pos_pin).
+      const local = localStorage.getItem('boss_pos_pin');
+      if (local && !local.startsWith('fb_')) {
+        const entered = await hashPin(pin);
+        if (entered === local) {
+          setAuthState('ready');
+          return;
         }
       }
       throw err;
