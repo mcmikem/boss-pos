@@ -95,7 +95,7 @@ export async function flushOutbox(): Promise<number> {
 }
 
 // Server-side PIN auth (plain PIN over HTTPS; hashing happens on the server).
-export async function authVerify(pin: string): Promise<{ token: string; hasPin: boolean }> {
+export async function authVerify(pin: string): Promise<{ token: string; hasPin: boolean; hash?: string }> {
   const res = await fetch(`${BASE}/api/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -104,6 +104,10 @@ export async function authVerify(pin: string): Promise<{ token: string; hasPin: 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Auth failed');
   setAuthToken(data.token);
+  // Persist the verified hash so a later unlock still works offline.
+  if (data.hash) {
+    try { localStorage.setItem('boss_pos_pin', data.hash); } catch {}
+  }
   return data;
 }
 
@@ -210,7 +214,7 @@ function clearRelatedCaches(path: string): void {
   saveCacheKeys(keys);
 }
 
-async function api<T>(path: string, options?: RequestInit & { fresh?: boolean }): Promise<T> {
+async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number }): Promise<T> {
   const isRead = !options || !options.method || options.method === 'GET';
 
   if (isRead && !options?.fresh) {
@@ -242,7 +246,12 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean })
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
 
-    if (isRead) setCache(path, data);
+    if (isRead) {
+      if (!options || !options.fresh || options.store) {
+        const ttl = typeof options?.store === 'number' ? options.store : undefined;
+        setCache(path, data, ttl);
+      }
+    }
 
     if (!isRead) {
       clearRelatedCaches(path);
@@ -316,7 +325,7 @@ export const tailoringOrderApi = {
 };
 
 export const settingsApi = {
-  get: () => api<StoreSettings>('/api/settings', { fresh: true }),
+  get: () => api<StoreSettings>('/api/settings', { fresh: true, store: 24 * 60 * 60 * 1000 }),
   update: (s: StoreSettings) => api<{ success: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
 };
 

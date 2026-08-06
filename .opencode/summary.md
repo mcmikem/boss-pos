@@ -2,6 +2,7 @@
 
 ## Goal
 - Add an Expenses tab to the bottom bar so expenses can be tracked and categorized by what's taking the most, and give the cookery/Eatery business a custom format (dish variants/pricing) — starting with cookery first as requested.
+- Level 2 recipe costing for Eatery dishes (itemized ingredients, batch yield, overhead, waste %, auto COGS/profit/margin, one-tap suggested-price apply) inside the Stock editor.
 
 ## Constraints & Preferences
 - Bottom nav stays visible on scroll; now includes Expenses (user: "expenses shd b among the bottom bar... see wats taking more")
@@ -25,6 +26,11 @@
 - **ProfitAnalyzer**: variant-aware rows (per-variant cost/price/profit/margin)
 - **Cache version stamp**: `boss_pos_products_cache_v2` so old cached products (without variants/Eatery) are ignored after redeploy
 - All committed/pushed/deployed: `22803d3` (feat: expenses + variants), `59d9bc9` (fix: cache version)
+- **Recipe costing (Level 2)**: `RecipeIngredient { id, name, qty, unit, unitCost, wastePct }`, `Recipe { ingredients, yield, overhead, targetMarginPct }`, `Product.recipe?`; `src/utils/recipe.ts` (NEW) with `RECIPE_UNITS`, `emptyRecipe()`, `ingredientCost()` (waste-adjusted `qty×cost÷(1−waste%)`), `calculateRecipe()` (batchCost/totalCost/COGS-unit/profit/margin/suggestedPrice/isLoss/isUnderpriced), `suggestedFor()`, `effectiveCost()` (recipe COGS else typed cost)
+- **api/index.js**: guarded `recipe TEXT` column, INSERT/UPDATE persist JSON, `mapProduct` parses
+- **Inventory.tsx**: `renderRecipeCard` (ingredient rows + unit dropdowns + waste %, yield/overhead/target-margin inputs, live calc panel, "Apply Suggested Prices" button) shown only when category is Eatery in both Add & Edit modals; `sanitizeRecipe()`; category-select seeds `emptyRecipe()` on Eatery; stock list label `COGS` for Eatery via `effectiveCost`
+- **ProductCard.tsx**: Eatery margin badge (`+N%` emerald/amber, red `LOSS`); **ProfitAnalyzerModal.tsx**: recipe-aware COGS (`effectiveCost`, per-variant fallback)
+- **Cache version v3** so stale products reload. Committed/pushed: `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `68f8452` (recipe costing)
 
 ### In Progress
 - (none)
@@ -41,21 +47,27 @@
 - Continue shipped stack: legacy build for old Android, `deLayerCSS` + lightningcss downlevel, SHA-256 PNG hashing
 
 ## Next Steps
-- Ask user to verify on device (hard refresh loads fresh products due to cache v2)
+- Ask user to verify on device (hard refresh loads fresh products due to cache v3)
 - If user wants: default Sales category to Eatery when `shopType === 'eatery'`; variant-aware sales history/Analytics export
 - Later: lightly tune other categories (printing jobs, library rentals, etc.) when user requests
+- If user wants deeper costing: track ingredient stock / auto-deduct on sale (Level 3)
 
 ## Critical Context
-- Commits pushed: `59d9bc9` (HEAD, cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
+- Commits pushed: `68f8452` (HEAD, recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
 - Vercel prod: `https://imac-pos.vercel.app` (project `imac-pos`, CLI 51.7.0 at `/usr/local/bin/vercel`)
 - Old-Android stack already live: `@vitejs/plugin-legacy@^6.1.1` (NOT v8), `lightningcss@^1.33.0`, `deLayerCSS()` unwraps `@layer` + converts `oklch()`→`rgb()`, targets `Android >= 5 / Chrome >= 49 / iOS >= 12 / Safari >= 12`, all 107 `color-mix` guarded by `@supports`
 - `src/utils/crypto.ts`: SHA-256 via `crypto.subtle` with `cyrb53` fallback prefixed `fb_`
 - Old plaintext PINs won't match new hashes — users must clear/re-set PIN
 - `products.imageurl` + `variants` via CREATE TABLE + guarded ALTER TABLE; upload 200px / JPEG 0.6 / max 100KB
+- Recipe costing: `recipe TEXT` column (guarded ALTER); suggested price = `COGS/unit ÷ (1 − targetMargin/100)`; waste lowers ingredient cost via `÷(1−waste/100)`
 - Tailoring: routes `GET/POST /api/tailoring-orders`, `PUT/DELETE /api/tailoring-orders/:id`; workTypes `repair | custom | sportswear`; statuses `pending | in_progress | completed | delivered`
-- Caches: `boss_pos_products_cache_v2` (30min localStorage), `boss_api_cache_*` (5min API)
+- Caches: `boss_pos_products_cache_v3` (30min localStorage), `boss_api_cache_*` (5min API)
 
 ## Relevant Files
+- `src/utils/recipe.ts` (NEW): recipe math + unit options + `effectiveCost`
+- `src/components/Inventory.tsx`: Recipe Costing card in Add/Edit modals (Eatery only), `sanitizeRecipe`, COGS label
+- `src/components/ProductCard.tsx`: Eatery margin badge
+- `src/components/ProfitAnalyzerModal.tsx`: recipe-aware COGS
 - `src/components/Expenses.tsx` (NEW): expenses tab — breakdown, history, QuickExpenseModal, category manager
 - `src/App.tsx`: Expenses lazy route + "Spend" nav button
 - `src/types.ts`: `ProductVariant`, `Product.variants`, `SaleItem.variantId/variantLabel`

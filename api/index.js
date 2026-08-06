@@ -369,7 +369,7 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   if (attempts.length > 0) {
     await sql`DELETE FROM auth_attempts WHERE id=${key}`;
   }
-  res.json({ ok: true, token: signToken(), hasPin: !!stored });
+  res.json({ ok: true, token: signToken(), hasPin: !!stored, hash: stored || undefined });
 }));
 
 // Public pre-auth status: only the fields the lock screen needs (no financial data).
