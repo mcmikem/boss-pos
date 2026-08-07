@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { Palette, Plus, Calendar, X, Search, User, Layers, Ruler, Calculator, ChevronRight, RotateCcw } from 'lucide-react';
+import { Palette, Plus, Calendar, X, Search, User, Layers, Ruler, Calculator, ChevronRight, RotateCcw, Printer, MessageCircle, FileText } from 'lucide-react';
 import type { DesignOrder } from '../types';
 import { designOrderApi } from '../api';
 
@@ -7,6 +7,7 @@ const WORK_PRESETS: Record<string, string[]> = {
   logo: ['Logo Design', 'Brand Identity', 'Letterhead', 'Business Card + Logo', 'Full Branding Pack'],
   flyer: ['Flyer (A5)', 'Flyer (A4)', 'Poster', 'Brochure / Menu', 'Invitation Card'],
   banner: ['PVC Banner (per sq m)', 'Roll-Up Banner', 'Fleet / Store Front Branding'],
+  sticker: ['Vinyl Sticker (per sq m)', 'Die-cut Sticker', 'Window Decal', 'Vehicle Decal'],
   cards: ['Business Cards (100pcs)', 'Business Cards (250pcs)', 'Business Cards (500pcs)'],
   print: ['Black & White Print', 'Color Print', 'Lamination', 'Spiral Binding', 'Photocopy'],
   branding: ['Label / Sticker', 'Clothing / T-Shirt Print', 'Packaging / Box', 'Uniform Branding'],
@@ -25,19 +26,25 @@ const TYPE_CFG: Record<string, { label: string; icon: string }> = {
   logo:     { label: 'Logo / Brand', icon: '🎨' },
   flyer:    { label: 'Flyer / Poster', icon: '📄' },
   banner:   { label: 'Banner', icon: '🖼️' },
+  sticker:  { label: 'Stickers', icon: '🏷️' },
   cards:    { label: 'Business Cards', icon: '💳' },
   print:    { label: 'Printing', icon: '🖨️' },
-  branding: { label: 'Branding', icon: '🏷️' },
+  branding: { label: 'Branding', icon: '📦' },
   other:    { label: 'Other', icon: '📋' },
 };
 
 const STATUS_ORDER = ['pending', 'in_progress', 'review', 'completed', 'delivered'];
 
+// Large-format (banners & stickers) are priced by area: Length(m) × Width(m) × Rate/m² × Qty.
+const LARGE_FORMAT_TYPES = ['banner', 'sticker'];
+const RATE_PRESETS = [13000, 25000, 45000];
+
 interface DesignOrdersProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  shopName?: string;
 }
 
-export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
+export default function DesignOrders({ triggerToast, shopName = 'Design & Print' }: DesignOrdersProps) {
   const [orders, setOrders] = useState<DesignOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -45,13 +52,19 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
   const [showPanel, setShowPanel] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [invoiceOrder, setInvoiceOrder] = useState<DesignOrder | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const [f, setF] = useState({
     customerName: '', customerPhone: '', orderType: 'logo' as string,
-    designBrief: '', qty: '1', size: '', materialCost: '', laborCost: '',
+    designBrief: '', qty: '1', size: '', materialCost: '', laborCost: '', transportCost: '',
     unitPrice: '', totalAmount: '', depositPaid: '', targetMarginPct: '50',
     expectedDate: '', notes: '',
+  });
+
+  // Large-format print calculator state (banners / stickers).
+  const [lf, setLf] = useState({
+    material: 'sticker', unit: 'cm', width: '', height: '', rate: '13000', factor: '1',
   });
 
   const today = new Date().toISOString().split('T')[0];
@@ -92,22 +105,44 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
   const revenueToday = orders.filter(o => o.status === 'delivered' && o.createdAt.startsWith(today))
     .reduce((acc, o) => acc + o.totalAmount, 0);
 
-  // Live pricing calculator (material + labor vs. target margin).
+  // Generic pricing calc (non large-format jobs).
   const calc = useMemo(() => {
     const material = parseFloat(f.materialCost) || 0;
     const labor = parseFloat(f.laborCost) || 0;
+    const transport = parseFloat(f.transportCost) || 0;
     const qty = Math.max(1, parseFloat(f.qty) || 1);
     const margin = Math.min(95, Math.max(0, parseFloat(f.targetMarginPct) || 0));
     const totalCost = material + labor;
     const suggested = totalCost > 0 && margin < 100 ? totalCost / (1 - margin / 100) : 0;
     const unit = qty > 0 ? suggested / qty : 0;
     const actualTotal = parseFloat(f.totalAmount) || 0;
-    const actualProfit = actualTotal > 0 ? actualTotal - totalCost : 0;
+    const actualProfit = actualTotal > 0 ? actualTotal - totalCost - transport : 0;
     return { totalCost, suggested, unit, actualTotal, actualProfit };
-  }, [f.materialCost, f.laborCost, f.qty, f.targetMarginPct, f.totalAmount]);
+  }, [f.materialCost, f.laborCost, f.transportCost, f.qty, f.targetMarginPct, f.totalAmount]);
+
+  // Large-format area/price calc with cm ↔ m ↔ inch conversions.
+  const lfCalc = useMemo(() => {
+    const unit = lf.unit;
+    const toM = (v: number) => unit === 'm' ? v : unit === 'inch' ? (v * 2.54) / 100 : v / 100;
+    const w = parseFloat(lf.width) || 0;
+    const h = parseFloat(lf.height) || 0;
+    const wM = toM(w);
+    const hM = toM(h);
+    const areaM2 = wM * hM;
+    const rate = parseFloat(lf.rate) || 0;
+    const factor = parseFloat(lf.factor) || 1;
+    const qty = Math.max(1, parseFloat(f.qty) || 1);
+    const printCost = areaM2 * rate * factor * qty;
+    const wCm = unit === 'm' ? w * 100 : unit === 'inch' ? w * 2.54 : w;
+    const hCm = unit === 'm' ? h * 100 : unit === 'inch' ? h * 2.54 : h;
+    return { areaM2, printCost, wCm, hCm, wIn: wCm / 2.54, hIn: hCm / 2.54, wM, hM };
+  }, [lf, f.qty]);
+
+  const showLargeFormat = LARGE_FORMAT_TYPES.includes(f.orderType);
 
   function resetForm() {
-    setF({ customerName: '', customerPhone: '', orderType: 'logo', designBrief: '', qty: '1', size: '', materialCost: '', laborCost: '', unitPrice: '', totalAmount: '', depositPaid: '', targetMarginPct: '50', expectedDate: '', notes: '' });
+    setF({ customerName: '', customerPhone: '', orderType: 'logo', designBrief: '', qty: '1', size: '', materialCost: '', laborCost: '', transportCost: '', unitPrice: '', totalAmount: '', depositPaid: '', targetMarginPct: '50', expectedDate: '', notes: '' });
+    setLf({ material: 'sticker', unit: 'cm', width: '', height: '', rate: '13000', factor: '1' });
   }
 
   function openCreate() {
@@ -123,6 +158,7 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
       orderType: order.orderType, designBrief: order.designBrief,
       qty: String(order.qty), size: order.size,
       materialCost: String(order.materialCost), laborCost: String(order.laborCost),
+      transportCost: String(order.transportCost),
       unitPrice: String(order.unitPrice), totalAmount: String(order.totalAmount),
       depositPaid: String(order.depositPaid), targetMarginPct: String(order.targetMarginPct),
       expectedDate: order.expectedDate, notes: order.notes,
@@ -139,6 +175,24 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
     const total = Math.round(calc.suggested);
     setF(p => ({ ...p, totalAmount: String(total), unitPrice: String(Math.round(calc.unit)) }));
     triggerToast('Price applied from calculator', 'success');
+  }
+
+  function applyLargeFormat() {
+    if (lfCalc.printCost <= 0) { triggerToast('Enter banner/sticker size and rate', 'error'); return; }
+    const printCost = Math.round(lfCalc.printCost);
+    const design = parseFloat(f.laborCost) || 0;
+    const transport = parseFloat(f.transportCost) || 0;
+    const total = printCost + design + transport;
+    const qty = Math.max(1, parseFloat(f.qty) || 1);
+    const size = `${Math.round(lfCalc.wCm)}×${Math.round(lfCalc.hCm)} cm`;
+    setF(p => ({
+      ...p,
+      materialCost: String(printCost),
+      totalAmount: String(total),
+      unitPrice: String(Math.round(total / qty)),
+      size,
+    }));
+    triggerToast(`Print cost: ${printCost.toLocaleString()} UGX — applied`, 'success');
   }
 
   async function handleSave() {
@@ -161,6 +215,7 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
       size: f.size.trim(),
       materialCost: parseFloat(f.materialCost) || 0,
       laborCost: parseFloat(f.laborCost) || 0,
+      transportCost: parseFloat(f.transportCost) || 0,
       unitPrice: parseFloat(f.unitPrice) || 0,
       totalAmount: total,
       depositPaid: parseFloat(f.depositPaid) || 0,
@@ -231,6 +286,43 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
     return orders.filter(o => o.status === s).length;
   }
 
+  function fmt(n: number) {
+    return n.toLocaleString();
+  }
+
+  function invoiceText(o: DesignOrder) {
+    const t = TYPE_CFG[o.orderType];
+    const lines = [
+      `*${shopName}*`,
+      '🧾 *INVOICE*',
+      `Invoice: ${o.id}`,
+      `Date: ${o.orderDate}`,
+      `Customer: ${o.customerName}${o.customerPhone ? ` (${o.customerPhone})` : ''}`,
+      '',
+      `${t.icon} ${t.label}: ${o.designBrief}`,
+      `Qty: ${o.qty}${o.size ? `  |  Size: ${o.size}` : ''}`,
+      o.unitPrice > 0 ? `Unit: ${fmt(o.unitPrice)}` : '',
+      '',
+      `Printing: ${fmt(o.materialCost)}`,
+      o.laborCost > 0 ? `Design: ${fmt(o.laborCost)}` : '',
+      o.transportCost > 0 ? `Transport: ${fmt(o.transportCost)}` : '',
+      `*TOTAL: ${fmt(o.totalAmount)}*`,
+      o.depositPaid > 0 ? `Deposit paid: ${fmt(o.depositPaid)}` : '',
+      `Balance due: ${fmt(o.totalAmount - o.depositPaid)}`,
+      '',
+      `Status: ${STATUS_CFG[o.status].label}`,
+      '',
+      `Thank you! — ${shopName}`,
+    ].filter(l => l !== '');
+    return lines.join('\n');
+  }
+
+  function sendWhatsApp(o: DesignOrder) {
+    const phone = o.customerPhone?.replace(/\D/g, '');
+    const url = `https://wa.me/${phone || ''}?text=${encodeURIComponent(invoiceText(o))}`;
+    window.open(url, '_blank');
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -275,7 +367,7 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
       {revenueToday > 0 && (
         <div className="boss-card p-3 border-l-4 border-l-gold-brand flex items-center justify-between">
           <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Delivered today</span>
-          <span className="text-sm font-black text-gold-brand">{revenueToday.toLocaleString()} UGX</span>
+          <span className="text-sm font-black text-gold-brand">{fmt(revenueToday)} UGX</span>
         </div>
       )}
 
@@ -329,7 +421,7 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
             const tc = TYPE_CFG[order.orderType] || { label: order.orderType, icon: '📋' };
             const balance = order.totalAmount - order.depositPaid;
             const isOverdue = order.expectedDate < today && order.status !== 'delivered';
-            const profit = order.totalAmount - order.materialCost - order.laborCost;
+            const profit = order.totalAmount - order.materialCost - order.laborCost - order.transportCost;
 
             return (
               <div key={order.id} className="boss-card p-4 hover:bg-[#1C1C1C] transition-all">
@@ -369,15 +461,15 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-black text-gold-brand">{order.totalAmount.toLocaleString()}</p>
+                    <p className="text-sm font-black text-gold-brand">{fmt(order.totalAmount)}</p>
                     {order.unitPrice > 0 && order.qty > 1 && (
-                      <p className="text-[10px] text-zinc-600 font-bold">{order.unitPrice.toLocaleString()}/pc</p>
+                      <p className="text-[10px] text-zinc-600 font-bold">{fmt(order.unitPrice)}/pc</p>
                     )}
                     {order.depositPaid > 0 && (
-                      <p className="text-[10px] text-emerald-400 font-bold">Paid: {order.depositPaid.toLocaleString()}</p>
+                      <p className="text-[10px] text-emerald-400 font-bold">Paid: {fmt(order.depositPaid)}</p>
                     )}
                     {balance > 0 && order.status !== 'delivered' && (
-                      <p className="text-[10px] text-rose-400 font-bold">Bal: {balance.toLocaleString()}</p>
+                      <p className="text-[10px] text-rose-400 font-bold">Bal: {fmt(balance)}</p>
                     )}
                   </div>
                 </div>
@@ -386,8 +478,8 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
                   <p className="text-xs text-zinc-400 leading-relaxed mb-2">{order.designBrief}</p>
                 )}
 
-                {order.status === 'delivered' && (order.materialCost > 0 || order.laborCost > 0) && (
-                  <p className="text-[10px] text-emerald-400/80 font-bold mb-2">Profit: {profit.toLocaleString()} UGX</p>
+                {order.status === 'delivered' && (order.materialCost > 0 || order.laborCost > 0 || order.transportCost > 0) && (
+                  <p className="text-[10px] text-emerald-400/80 font-bold mb-2">Profit: {fmt(profit)} UGX</p>
                 )}
 
                 {order.notes && (
@@ -409,6 +501,10 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                   )}
+                  <button onClick={() => setInvoiceOrder(order)}
+                    className="h-9 px-3 bg-cyan-950/30 text-cyan-300 border border-cyan-800/40 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-cyan-900/40 active:scale-95 transition-all cursor-pointer flex items-center gap-1">
+                    <FileText className="w-3.5 h-3.5" /> Invoice
+                  </button>
                   <button onClick={() => openEdit(order)}
                     className="h-9 px-3 bg-zinc-800/30 text-zinc-400 hover:text-white border border-zinc-800/50 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer">
                     Edit
@@ -526,10 +622,10 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
               <section className="grid grid-cols-2 gap-3">
                 <div>
                   <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                    <Layers className="w-3 h-3" /> Quantity
+                    <Layers className="w-3 h-3" /> Quantity (copies)
                   </h4>
                   <input type="number" min="1" value={f.qty} onChange={e => setF(p => ({ ...p, qty: e.target.value }))}
-                    placeholder="e.g. 250"
+                    placeholder="e.g. 2"
                     className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                 </div>
                 <div>
@@ -542,90 +638,242 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
                 </div>
               </section>
 
-              {/* PRICING CALCULATOR */}
-              <section>
-                <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                  <Calculator className="w-3 h-3 text-gold-brand" /> Pricing Calculator
-                </h4>
-                <div className="bg-zinc-900/40 border border-gold-brand/20 rounded-xl p-3 space-y-2.5">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Materials (UGX)</label>
-                      <input type="number" value={f.materialCost} onChange={e => setF(p => ({ ...p, materialCost: e.target.value }))}
-                        placeholder="Paper, ink..."
-                        className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+              {/* LARGE-FORMAT CALCULATOR (banners & stickers) */}
+              {showLargeFormat && (
+                <section>
+                  <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                    <Calculator className="w-3 h-3 text-gold-brand" /> Large-Format Pricing (banner / sticker)
+                  </h4>
+                  <div className="bg-zinc-900/40 border border-gold-brand/20 rounded-xl p-3 space-y-2.5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Material</label>
+                        <select value={lf.material} onChange={e => {
+                          const v = e.target.value;
+                          setLf(p => ({ ...p, material: v, rate: v === 'flex' ? '13000' : '13000' }));
+                        }}
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none">
+                          <option value="sticker">Sticker (Vinyl)</option>
+                          <option value="flex">Flex Banner</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Unit</label>
+                        <select value={lf.unit} onChange={e => setLf(p => ({ ...p, unit: e.target.value }))}
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none">
+                          <option value="cm">cm</option>
+                          <option value="m">metres</option>
+                          <option value="inch">inches</option>
+                        </select>
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Labor / Design (UGX)</label>
-                      <input type="number" value={f.laborCost} onChange={e => setF(p => ({ ...p, laborCost: e.target.value }))}
-                        placeholder="Design fee"
-                        className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target Margin %</label>
-                      <input type="number" min="0" max="95" value={f.targetMarginPct} onChange={e => setF(p => ({ ...p, targetMarginPct: e.target.value }))}
-                        className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
-                      <span className="text-[10px] text-zinc-500 font-bold uppercase">Total cost</span>
-                      <span className="text-sm font-black text-zinc-300">{calc.totalCost.toLocaleString()}</span>
-                    </div>
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
-                      <span className="text-[10px] text-zinc-500 font-bold uppercase">Per unit</span>
-                      <span className="text-sm font-black text-cyan-300">{calc.unit ? Math.round(calc.unit).toLocaleString() : '—'}</span>
-                    </div>
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
-                      <span className="text-[10px] text-zinc-500 font-bold uppercase">Suggested price</span>
-                      <span className="text-sm font-black text-gold-brand">{calc.suggested ? Math.round(calc.suggested).toLocaleString() : '—'}</span>
-                    </div>
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
-                      <span className="text-[10px] text-zinc-500 font-bold uppercase">Est. profit</span>
-                      <span className="text-sm font-black text-emerald-400">{calc.suggested ? Math.round(calc.suggested - calc.totalCost).toLocaleString() : '—'}</span>
-                    </div>
-                  </div>
-                  <button onClick={applySuggested} disabled={calc.suggested <= 0}
-                    className="w-full h-10 bg-gold-brand hover:bg-gold-medium disabled:opacity-40 disabled:cursor-not-allowed text-black font-black uppercase tracking-widest text-xs rounded-lg transition-colors cursor-pointer">
-                    Apply Suggested Price
-                  </button>
-                </div>
 
-                <div className="grid grid-cols-3 gap-3 mt-3">
-                  <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Total (UGX) *</label>
-                    <input type="number" value={f.totalAmount} onChange={e => setF(p => ({ ...p, totalAmount: e.target.value }))}
-                      placeholder="e.g. 150000"
-                      className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Unit Price</label>
-                    <input type="number" value={f.unitPrice} onChange={e => setF(p => ({ ...p, unitPrice: e.target.value }))}
-                      placeholder="Auto"
-                      className="w-full bg-[#0A0A0A] border border-white/5 text-cyan-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Deposit</label>
-                    <input type="number" value={f.depositPaid} onChange={e => setF(p => ({ ...p, depositPaid: e.target.value }))}
-                      placeholder="e.g. 50000"
-                      className="w-full bg-[#0A0A0A] border border-white/5 text-emerald-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-                  </div>
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {f.totalAmount && calc.actualTotal > 0 && (
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
-                      <span className="text-xs text-zinc-500 font-bold uppercase">Profit</span>
-                      <span className="text-sm font-black text-amber-400">{calc.actualProfit.toLocaleString()} UGX</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Width</label>
+                        <input type="number" value={lf.width} onChange={e => setLf(p => ({ ...p, width: e.target.value }))}
+                          placeholder="e.g. 120"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Height</label>
+                        <input type="number" value={lf.height} onChange={e => setLf(p => ({ ...p, height: e.target.value }))}
+                          placeholder="e.g. 57"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
                     </div>
-                  )}
-                  {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
-                      <span className="text-xs text-zinc-500 font-bold uppercase">Balance Due</span>
-                      <span className="text-sm font-black text-rose-400">{(calc.actualTotal - (parseFloat(f.depositPaid) || 0)).toLocaleString()} UGX</span>
+
+                    <p className="text-[11px] text-zinc-400 font-bold">
+                      {lfCalc.wCm > 0 && lfCalc.hCm > 0 ? (
+                        <>
+                          {Math.round(lfCalc.wCm)} × {Math.round(lfCalc.hCm)} cm &nbsp;•&nbsp; {lfCalc.wIn.toFixed(1)} × {lfCalc.hIn.toFixed(1)} in &nbsp;•&nbsp; {lfCalc.areaM2.toFixed(3)} m²
+                        </>
+                      ) : (
+                        'Conversions (cm / inches / m²) show here automatically'
+                      )}
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Price / m² (UGX)</label>
+                        <input type="number" value={lf.rate} onChange={e => setLf(p => ({ ...p, rate: e.target.value }))}
+                          placeholder="e.g. 13000"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                        <div className="flex gap-1.5 mt-1.5">
+                          {RATE_PRESETS.map(r => (
+                            <button key={r} onClick={() => setLf(p => ({ ...p, rate: String(r) }))}
+                              className={`px-2 py-1 rounded-md border text-[10px] font-bold transition-all active:scale-95 cursor-pointer ${
+                                lf.rate === String(r) ? 'bg-gold-brand/20 border-gold-brand/50 text-gold-light' : 'bg-[#0A0A0A] border-white/5 text-zinc-500'
+                              }`}>
+                              {r.toLocaleString()}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Factor ×</label>
+                        <input type="number" min="1" value={lf.factor} onChange={e => setLf(p => ({ ...p, factor: e.target.value }))}
+                          placeholder="1"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                        <p className="text-[9px] text-zinc-600 font-bold mt-1.5">e.g. 2 = double-sided</p>
+                      </div>
                     </div>
-                  )}
-                </div>
-              </section>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Design fee (UGX)</label>
+                        <input type="number" value={f.laborCost} onChange={e => setF(p => ({ ...p, laborCost: e.target.value }))}
+                          placeholder="Your estimate"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Transport (UGX)</label>
+                        <input type="number" value={f.transportCost} onChange={e => setF(p => ({ ...p, transportCost: e.target.value }))}
+                          placeholder="e.g. 5000"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                    </div>
+
+                    <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2.5 space-y-1">
+                      <p className="text-[11px] text-zinc-400 font-bold">
+                        {(lfCalc.wM > 0 || lfCalc.hM > 0) ? `${lfCalc.wM.toFixed(2)}m × ${lfCalc.hM.toFixed(2)}m × ${(parseFloat(lf.rate) || 0).toLocaleString()} × ${Math.max(1, parseFloat(f.qty) || 1)} = ` : 'Formula: W(m) × H(m) × rate × qty'}
+                        {lfCalc.printCost > 0 && <span className="text-gold-brand font-black">{Math.round(lfCalc.printCost).toLocaleString()} UGX</span>}
+                      </p>
+                      <p className="text-[10px] text-zinc-500 font-bold">Printing cost (from printer)</p>
+                    </div>
+
+                    <button onClick={applyLargeFormat} disabled={lfCalc.printCost <= 0}
+                      className="w-full h-10 bg-gold-brand hover:bg-gold-medium disabled:opacity-40 disabled:cursor-not-allowed text-black font-black uppercase tracking-widest text-xs rounded-lg transition-colors cursor-pointer">
+                      Apply Print + Design + Transport
+                    </button>
+                    <p className="text-[9px] text-zinc-600 font-bold">Fills the printing cost, adds your design fee + transport, and sets the total.</p>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 mt-3">
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Total (UGX) *</label>
+                      <input type="number" value={f.totalAmount} onChange={e => setF(p => ({ ...p, totalAmount: e.target.value }))}
+                        placeholder="Auto"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Unit Price</label>
+                      <input type="number" value={f.unitPrice} onChange={e => setF(p => ({ ...p, unitPrice: e.target.value }))}
+                        placeholder="Auto"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-cyan-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Deposit</label>
+                      <input type="number" value={f.depositPaid} onChange={e => setF(p => ({ ...p, depositPaid: e.target.value }))}
+                        placeholder="e.g. 20000"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-emerald-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {(parseFloat(f.materialCost) || 0) > 0 && (
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                        <span className="text-xs text-zinc-500 font-bold uppercase">Breakdown</span>
+                        <span className="text-[11px] font-black text-zinc-300">
+                          Print {(parseFloat(f.materialCost) || 0).toLocaleString()} + Dsn {(parseFloat(f.laborCost) || 0).toLocaleString()} + TP {(parseFloat(f.transportCost) || 0).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                    {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                        <span className="text-xs text-zinc-500 font-bold uppercase">Balance Due</span>
+                        <span className="text-sm font-black text-rose-400">{(parseFloat(f.totalAmount) - (parseFloat(f.depositPaid) || 0)).toLocaleString()} UGX</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {/* GENERIC PRICING (non large-format jobs) */}
+              {!showLargeFormat && (
+                <section>
+                  <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                    <Calculator className="w-3 h-3 text-gold-brand" /> Pricing
+                  </h4>
+                  <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 space-y-2.5">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Materials (UGX)</label>
+                        <input type="number" value={f.materialCost} onChange={e => setF(p => ({ ...p, materialCost: e.target.value }))}
+                          placeholder="Paper, ink..."
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Labor / Design (UGX)</label>
+                        <input type="number" value={f.laborCost} onChange={e => setF(p => ({ ...p, laborCost: e.target.value }))}
+                          placeholder="Design fee"
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target Margin %</label>
+                        <input type="number" min="0" max="95" value={f.targetMarginPct} onChange={e => setF(p => ({ ...p, targetMarginPct: e.target.value }))}
+                          className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Total cost</span>
+                        <span className="text-sm font-black text-zinc-300">{calc.totalCost.toLocaleString()}</span>
+                      </div>
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Per unit</span>
+                        <span className="text-sm font-black text-cyan-300">{calc.unit ? Math.round(calc.unit).toLocaleString() : '—'}</span>
+                      </div>
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Suggested price</span>
+                        <span className="text-sm font-black text-gold-brand">{calc.suggested ? Math.round(calc.suggested).toLocaleString() : '—'}</span>
+                      </div>
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Est. profit</span>
+                        <span className="text-sm font-black text-emerald-400">{calc.suggested ? Math.round(calc.suggested - calc.totalCost).toLocaleString() : '—'}</span>
+                      </div>
+                    </div>
+                    <button onClick={applySuggested} disabled={calc.suggested <= 0}
+                      className="w-full h-10 bg-gold-brand hover:bg-gold-medium disabled:opacity-40 disabled:cursor-not-allowed text-black font-black uppercase tracking-widest text-xs rounded-lg transition-colors cursor-pointer">
+                      Apply Suggested Price
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 mt-3">
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Total (UGX) *</label>
+                      <input type="number" value={f.totalAmount} onChange={e => setF(p => ({ ...p, totalAmount: e.target.value }))}
+                        placeholder="e.g. 150000"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Unit Price</label>
+                      <input type="number" value={f.unitPrice} onChange={e => setF(p => ({ ...p, unitPrice: e.target.value }))}
+                        placeholder="Auto"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-cyan-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Deposit</label>
+                      <input type="number" value={f.depositPaid} onChange={e => setF(p => ({ ...p, depositPaid: e.target.value }))}
+                        placeholder="e.g. 50000"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-emerald-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
+                    </div>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {f.totalAmount && calc.actualTotal > 0 && (
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                        <span className="text-xs text-zinc-500 font-bold uppercase">Profit</span>
+                        <span className="text-sm font-black text-amber-400">{calc.actualProfit.toLocaleString()} UGX</span>
+                      </div>
+                    )}
+                    {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
+                      <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                        <span className="text-xs text-zinc-500 font-bold uppercase">Balance Due</span>
+                        <span className="text-sm font-black text-rose-400">{(calc.actualTotal - (parseFloat(f.depositPaid) || 0)).toLocaleString()} UGX</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
 
               {/* DATE + NOTES */}
               <section className="grid grid-cols-2 gap-3">
@@ -653,6 +901,134 @@ export default function DesignOrders({ triggerToast }: DesignOrdersProps) {
               <button onClick={handleSave}
                 className="flex-1 h-12 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest hover:opacity-90 active:scale-95 transition-all cursor-pointer">
                 {editId ? 'Update' : 'Create Order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== INVOICE MODAL ===== */}
+      {invoiceOrder && (
+        <div className="fixed inset-0 z-[60] flex flex-col">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setInvoiceOrder(null)} />
+          <style>{`
+            @media print {
+              body * { visibility: hidden; }
+              #print-invoice, #print-invoice * { visibility: visible; }
+              #print-invoice { position: absolute; left: 0; top: 0; width: 100%; margin: 0; box-shadow: none; }
+            }
+          `}</style>
+          <div className="relative mt-auto sm:m-auto sm:my-6 w-full sm:max-w-md mx-auto bg-white text-zinc-900 rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col max-h-[92vh]" id="print-invoice">
+            {/* Header */}
+            <div className="px-6 py-5 border-b-2 border-gold-brand" style={{ background: 'linear-gradient(135deg,#0A0A0A 0%,#1A1A1A 100%)' }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-black text-gold-brand uppercase font-display tracking-wide">{shopName}</h3>
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mt-0.5">Design & Print Services</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Invoice</p>
+                  <p className="text-sm font-black text-white font-mono">{invoiceOrder.id.replace('dorder-', '#')}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mb-1">Bill To</p>
+                  <p className="text-sm font-black">{invoiceOrder.customerName}</p>
+                  {invoiceOrder.customerPhone && (
+                    <p className="text-xs text-zinc-500 font-bold">{invoiceOrder.customerPhone}</p>
+                  )}
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mb-1">Date</p>
+                  <p className="text-sm font-black">{invoiceOrder.orderDate}</p>
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mt-2 mb-1">Due</p>
+                  <p className="text-sm font-black">{invoiceOrder.expectedDate}</p>
+                </div>
+              </div>
+
+              <div className="bg-zinc-100 rounded-xl p-3">
+                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-1">Job</p>
+                <p className="text-sm font-black">{TYPE_CFG[invoiceOrder.orderType]?.icon} {TYPE_CFG[invoiceOrder.orderType]?.label}: {invoiceOrder.designBrief}</p>
+                <p className="text-xs text-zinc-500 font-bold mt-1">
+                  Qty: {invoiceOrder.qty}
+                  {invoiceOrder.size ? `  |  Size: ${invoiceOrder.size}` : ''}
+                </p>
+              </div>
+
+              <div className="border border-zinc-200 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-2 gap-2 px-4 py-2 bg-zinc-100 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+                  <span>Description</span><span className="text-right">Amount (UGX)</span>
+                </div>
+                <div className="divide-y divide-zinc-100 text-xs">
+                  {invoiceOrder.materialCost > 0 && (
+                    <div className="grid grid-cols-2 gap-2 px-4 py-2.5">
+                      <span className="font-bold">Printing (large format)</span>
+                      <span className="text-right font-black">{fmt(invoiceOrder.materialCost)}</span>
+                    </div>
+                  )}
+                  {invoiceOrder.laborCost > 0 && (
+                    <div className="grid grid-cols-2 gap-2 px-4 py-2.5">
+                      <span className="font-bold">Design</span>
+                      <span className="text-right font-black">{fmt(invoiceOrder.laborCost)}</span>
+                    </div>
+                  )}
+                  {invoiceOrder.transportCost > 0 && (
+                    <div className="grid grid-cols-2 gap-2 px-4 py-2.5">
+                      <span className="font-bold">Transport</span>
+                      <span className="text-right font-black">{fmt(invoiceOrder.transportCost)}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 px-4 py-3 bg-gold-brand/10 text-sm font-black">
+                    <span>TOTAL</span>
+                    <span className="text-right">{fmt(invoiceOrder.totalAmount)}</span>
+                  </div>
+                  {invoiceOrder.depositPaid > 0 && (
+                    <div className="grid grid-cols-2 gap-2 px-4 py-2 text-emerald-600 font-bold">
+                      <span>Deposit paid</span>
+                      <span className="text-right">-{fmt(invoiceOrder.depositPaid)}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 px-4 py-2.5 bg-zinc-100 font-black">
+                    <span>Balance Due</span>
+                    <span className="text-right">{fmt(invoiceOrder.totalAmount - invoiceOrder.depositPaid)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Status</span>
+                <span className={`text-[11px] px-2.5 py-1 rounded ${STATUS_CFG[invoiceOrder.status]?.bg} ${STATUS_CFG[invoiceOrder.status]?.color} font-bold uppercase`}>
+                  {STATUS_CFG[invoiceOrder.status]?.label}
+                </span>
+              </div>
+
+              {invoiceOrder.notes && (
+                <p className="text-xs text-zinc-500 italic">📝 {invoiceOrder.notes}</p>
+              )}
+
+              <div className="text-center pt-1">
+                <p className="text-xs font-black uppercase tracking-widest">Thank you for your business!</p>
+                <p className="text-[10px] text-zinc-400 font-bold mt-1">{shopName} • Design & Print</p>
+              </div>
+            </div>
+
+            {/* Actions (hidden on print) */}
+            <div className="print:hidden p-5 pt-3 border-t border-zinc-200 flex gap-2 bg-white rounded-b-3xl">
+              <button onClick={() => window.print()}
+                className="flex-1 h-12 border border-zinc-800 text-zinc-800 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-zinc-100 transition-all cursor-pointer flex items-center justify-center gap-2">
+                <Printer className="w-4 h-4" /> Print
+              </button>
+              <button onClick={() => sendWhatsApp(invoiceOrder)}
+                className="flex-1 h-12 bg-emerald-500 text-white font-black text-xs rounded-xl uppercase tracking-widest hover:bg-emerald-600 transition-all cursor-pointer flex items-center justify-center gap-2">
+                <MessageCircle className="w-4 h-4" /> WhatsApp
+              </button>
+              <button onClick={() => setInvoiceOrder(null)}
+                className="h-12 w-12 border border-zinc-300 text-zinc-400 hover:text-zinc-800 rounded-xl flex items-center justify-center transition-all cursor-pointer">
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>

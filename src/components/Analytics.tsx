@@ -138,7 +138,7 @@ export default function Analytics({
   }, [designOrdersInWindow]);
 
   const designProfit = useMemo(() => {
-    return designOrdersInWindow.reduce((acc, o) => acc + (o.totalAmount - o.materialCost - o.laborCost), 0);
+    return designOrdersInWindow.reduce((acc, o) => acc + (o.totalAmount - o.materialCost - o.laborCost - (o.transportCost || 0)), 0);
   }, [designOrdersInWindow]);
 
   const totalIncome = revenue + designRevenue;

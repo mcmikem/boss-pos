@@ -63,10 +63,12 @@ async function initDB() {
     ordertype TEXT NOT NULL, designbrief TEXT NOT NULL,
     qty DOUBLE PRECISION DEFAULT 1, size TEXT DEFAULT '',
     materialcost DOUBLE PRECISION DEFAULT 0, laborcost DOUBLE PRECISION DEFAULT 0,
+    transportcost DOUBLE PRECISION DEFAULT 0,
     unitprice DOUBLE PRECISION DEFAULT 0, totalamount DOUBLE PRECISION DEFAULT 0,
     depositpaid DOUBLE PRECISION DEFAULT 0, targetmarginpct DOUBLE PRECISION DEFAULT 50,
     status TEXT DEFAULT 'pending', notes TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
+  try { await sql`ALTER TABLE design_orders ADD COLUMN transportcost DOUBLE PRECISION DEFAULT 0`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS cash_transfers (
     id TEXT PRIMARY KEY, fromcategory TEXT NOT NULL, tocategory TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
@@ -724,8 +726,8 @@ app.get('/api/design-orders', asHandler(async (req, res) => {
 
 app.post('/api/design-orders', asHandler(async (req, res) => {
   const o = req.body;
-  const inserted = await sql`INSERT INTO design_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,ordertype,designbrief,qty,size,materialcost,laborcost,unitprice,totalamount,depositpaid,targetmarginpct,status,notes,createdat,client_write_id)
-    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.orderType},${o.designBrief},${o.qty||1},${o.size||''},${o.materialCost||0},${o.laborCost||0},${o.unitPrice||0},${o.totalAmount||0},${o.depositPaid||0},${o.targetMarginPct||50},${o.status||'pending'},${o.notes||''},${o.createdAt},${o.clientWriteId||null})
+  const inserted = await sql`INSERT INTO design_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,ordertype,designbrief,qty,size,materialcost,laborcost,transportcost,unitprice,totalamount,depositpaid,targetmarginpct,status,notes,createdat,client_write_id)
+    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.orderType},${o.designBrief},${o.qty||1},${o.size||''},${o.materialCost||0},${o.laborCost||0},${o.transportCost||0},${o.unitPrice||0},${o.totalAmount||0},${o.depositPaid||0},${o.targetMarginPct||50},${o.status||'pending'},${o.notes||''},${o.createdAt},${o.clientWriteId||null})
     ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM design_orders WHERE client_write_id=${o.clientWriteId}`;
@@ -736,7 +738,7 @@ app.post('/api/design-orders', asHandler(async (req, res) => {
 
 app.put('/api/design-orders/:id', asHandler(async (req, res) => {
   const o = req.body;
-  await sql`UPDATE design_orders SET customername=${o.customerName},customerphone=${o.customerPhone||''},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},ordertype=${o.orderType},designbrief=${o.designBrief},qty=${o.qty||1},size=${o.size||''},materialcost=${o.materialCost||0},laborcost=${o.laborCost||0},unitprice=${o.unitPrice||0},totalamount=${o.totalAmount||0},depositpaid=${o.depositPaid||0},targetmarginpct=${o.targetMarginPct||50},status=${o.status||'pending'},notes=${o.notes||''} WHERE id=${req.params.id}`;
+  await sql`UPDATE design_orders SET customername=${o.customerName},customerphone=${o.customerPhone||''},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},ordertype=${o.orderType},designbrief=${o.designBrief},qty=${o.qty||1},size=${o.size||''},materialcost=${o.materialCost||0},laborcost=${o.laborCost||0},transportcost=${o.transportCost||0},unitprice=${o.unitPrice||0},totalamount=${o.totalAmount||0},depositpaid=${o.depositPaid||0},targetmarginpct=${o.targetMarginPct||50},status=${o.status||'pending'},notes=${o.notes||''} WHERE id=${req.params.id}`;
   res.json(o);
 }));
 
@@ -795,7 +797,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
   if (from) { designParams.push(from); designWhere.push(`createdat >= $${designParams.length}`); }
   if (to) { designParams.push(to); designWhere.push(`createdat <= $${designParams.length}`); }
   const designRows = await sql.query(
-    `SELECT COALESCE(SUM(totalamount),0)::float AS revenue, COALESCE(SUM(totalamount - COALESCE(materialcost,0) - COALESCE(laborcost,0)),0)::float AS profit FROM design_orders WHERE ${designWhere.join(' AND ')}`, designParams);
+    `SELECT COALESCE(SUM(totalamount),0)::float AS revenue, COALESCE(SUM(totalamount - COALESCE(materialcost,0) - COALESCE(laborcost,0) - COALESCE(transportcost,0)),0)::float AS profit FROM design_orders WHERE ${designWhere.join(' AND ')}`, designParams);
 
   const creditRows = await sql`SELECT COALESCE(SUM(total),0)::float AS total FROM sales WHERE paymentmethod='Credit / Book' AND refunded=false`;
   const paidRows = await sql`SELECT COALESCE(SUM(amount),0)::float AS total FROM credit_payments`;
@@ -891,6 +893,7 @@ function mapDesignOrder(r) {
     orderType: r.ordertype, designBrief: r.designbrief,
     qty: r.qty || 1, size: r.size || '',
     materialCost: r.materialcost || 0, laborCost: r.laborcost || 0,
+    transportCost: r.transportcost || 0,
     unitPrice: r.unitprice || 0, totalAmount: r.totalamount || 0,
     depositPaid: r.depositpaid || 0, targetMarginPct: r.targetmarginpct || 50,
     status: r.status, notes: r.notes || '',

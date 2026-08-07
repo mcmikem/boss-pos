@@ -132,12 +132,13 @@ export interface DesignOrder {
   orderDate: string;
   expectedDate: string;
   completedDate?: string;
-  orderType: 'logo' | 'flyer' | 'banner' | 'cards' | 'print' | 'branding' | 'other';
+  orderType: 'logo' | 'flyer' | 'banner' | 'sticker' | 'cards' | 'print' | 'branding' | 'other';
   designBrief: string;
   qty: number;
   size: string;
   materialCost: number;
   laborCost: number;
+  transportCost: number;
   unitPrice: number;
   totalAmount: number;
   depositPaid: number;
