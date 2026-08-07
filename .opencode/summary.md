@@ -4,6 +4,7 @@
 - Add an Expenses tab to the bottom bar so expenses can be tracked and categorized by what's taking the most, and give the cookery/Eatery business a custom format (dish variants/pricing) — starting with cookery first as requested.
 - Level 2 recipe costing for Eatery dishes (itemized ingredients, batch yield, overhead, waste %, auto COGS/profit/margin, one-tap suggested-price apply) inside the Stock editor.
 - Graphics Design & Brand Printing module (log orders, pricing calculator, status pipeline) behind the Graphics category in Sell, with delivered orders counted in Reports revenue/profit.
+- Large-format (banner/sticker) automatic pricing calculator: `W(m) × H(m) × rate/m² × qty` + design fee + transport, with a branded invoice that prints and sends via WhatsApp.
 
 ## Constraints & Preferences
 - Bottom nav stays visible on scroll; now includes Expenses (user: "expenses shd b among the bottom bar... see wats taking more")
@@ -34,6 +35,8 @@
 - **Cache version v3** so stale products reload. Committed/pushed: `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `68f8452` (recipe costing)
 - **Offline readiness fixes**: `/api/auth/verify` returns the stored PIN `hash` and `authVerify()` caches it to `boss_pos_pin`, so a fresh device that unlocks once online can unlock offline later; `api()` gained a `store` TTL flag so `settingsApi.get` caches settings for 24h (offline boot keeps shop name/categories). Pushed: `bb0b57c`
 - **Offline unlock on flaky Android**: `handleUnlock` no longer gates the local-hash fallback on `navigator.onLine` (unreliable on old Android — it can report online with no network), so the "Failed to fetch" error on PIN unlock is replaced by local-hash verification whenever `authVerify` throws. Pushed: `d8850cd`
+- **Design & Print module**: `src/components/DesignOrders.tsx` (order log, generic markup calculator, status pipeline pending→in_progress→review→completed→delivered, overdue flags, customer autocomplete, stats), `design_orders` table + CRUD routes with `clientWriteId` idempotency, `designOrderApi`, `DesignOrder` type, Sales.tsx mount behind Graphics category, Analytics self-fetches delivered design revenue/profit, `/api/summary` includes designRevenue/designProfit. Pushed: `87566f1`
+- **Large-format calculator + invoice**: `LARGE_FORMAT_TYPES = ['banner','sticker']`; `lf` state (material sticker|flex, unit cm|m|inch, width, height, rate default `13000`, factor), `RATE_PRESETS [13000, 25000, 45000]`; `lfCalc` = `W(m)×H(m)×rate×factor×qty` with live cm/in/m² conversions; "Apply Print + Design + Transport" fills materialCost/unitPrice/size/total; branded invoice modal (black/gold) with line items, TOTAL, deposit, balance, Print via window.print, WhatsApp via wa.me; `DesignOrder.transportCost`, orderType `'sticker'`, `transportcost` DB column (guarded ALTER), POST/PUT/mapDesignOrder persist it; Analytics + `/api/summary` design profit now subtract `transportCost`. Pushed: `eed5ac1`
 
 ### In Progress
 - (none)
@@ -51,13 +54,14 @@
 
 ## Next Steps
 - Ask user to verify on device (hard refresh loads fresh products due to cache v3)
+- Verify large-format calculator on device: banner 120×57 cm @ 13,000/m² × 2 stickers → 17,784 UGX; confirm invoice print + WhatsApp share
 - If user wants: default Sales category to Eatery when `shopType === 'eatery'`; variant-aware sales history/Analytics export
 - Later: lightly tune other categories (printing jobs, library rentals, etc.) when user requests
 - If user wants deeper costing: track ingredient stock / auto-deduct on sale (Level 3)
-- Design & Print: commit+push when user confirms; optionally seed Graphics products; possibly add design-orders to full backup restore later
+- Design & Print: optionally seed Graphics products; possibly add design-orders to full backup restore later
 
 ## Critical Context
-- Commits pushed: `d8850cd` (HEAD, offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
+- Commits pushed: `eed5ac1` (HEAD, large-format calc + invoice), `87566f1` (design & print module), `d8850cd` (offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
 - Vercel prod: `https://imac-pos.vercel.app` (project `imac-pos`, CLI 51.7.0 at `/usr/local/bin/vercel`)
 - Old-Android stack already live: `@vitejs/plugin-legacy@^6.1.1` (NOT v8), `lightningcss@^1.33.0`, `deLayerCSS()` unwraps `@layer` + converts `oklch()`→`rgb()`, targets `Android >= 5 / Chrome >= 49 / iOS >= 12 / Safari >= 12`, all 107 `color-mix` guarded by `@supports`
 - `src/utils/crypto.ts`: SHA-256 via `crypto.subtle` with `cyrb53` fallback prefixed `fb_`
@@ -75,12 +79,16 @@
 - `src/components/Expenses.tsx` (NEW): expenses tab — breakdown, history, QuickExpenseModal, category manager
 - `src/App.tsx`: Expenses lazy route + "Spend" nav button
 - `src/types.ts`: `ProductVariant`, `Product.variants`, `SaleItem.variantId/variantLabel`
-- `api/index.js`: `variants` column, product INSERT/UPDATE/mapProduct, EATERY_MENU seeds, `syncEateryMenu()`
+- `api/index.js`: `variants` column, product INSERT/UPDATE/mapProduct, EATERY_MENU seeds, `syncEateryMenu()`, `design_orders` CRUD + `transportcost` column + design revenue/profit in `/api/summary`
 - `src/components/Sales.tsx`: `variantProduct` state, `addCartLine`/`handleVariantAdd`, composite keys, variant picker modal, variant labels in carts
 - `src/components/ProductCard.tsx`: variant-aware card — `hasVariants`/`minPrice`, "Options" badge
 - `src/components/Inventory.tsx`: Product Options editor in Edit + Add modals
 - `src/components/ProfitAnalyzerModal.tsx`: per-variant profit rows
 - `src/components/Dashboard.tsx`: receipt shows variantLabel
 - `src/utils/cache.ts`: versioned products cache key
+- `src/components/DesignOrders.tsx`: large-format banner/sticker calculator (`lf`/`lfCalc`), generic markup calc, status pipeline, invoice modal with print + WhatsApp
+- `src/components/Sales.tsx`: Graphics category mount → "Manage Design & Print Orders"
+- `src/components/Analytics.tsx`: self-fetches `designOrders`, design revenue/profit in totals (subtracts material + labor + transport)
+- `src/types.ts`: `DesignOrder` (incl. `transportCost`, orderType `'sticker'`)
 - `vite.config.ts`: legacy plugin + `deLayerCSS()` + lightningcss downlevel
 - `src/utils/crypto.ts`: SHA-256 hashPin with cyrb53 fallback
