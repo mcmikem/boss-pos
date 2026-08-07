@@ -1,4 +1,4 @@
-import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, CashTransfer } from './types';
+import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -322,6 +322,13 @@ export const tailoringOrderApi = {
   create: (o: TailoringOrder) => api<TailoringOrder>('/api/tailoring-orders', { method: 'POST', body: JSON.stringify(o) }),
   update: (o: TailoringOrder) => api<TailoringOrder>(`/api/tailoring-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/tailoring-orders/${id}`, { method: 'DELETE' }),
+};
+
+export const designOrderApi = {
+  list: () => api<DesignOrder[]>('/api/design-orders'),
+  create: (o: DesignOrder) => api<DesignOrder>('/api/design-orders', { method: 'POST', body: JSON.stringify(o) }),
+  update: (o: DesignOrder) => api<DesignOrder>(`/api/design-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/design-orders/${id}`, { method: 'DELETE' }),
 };
 
 export const settingsApi = {

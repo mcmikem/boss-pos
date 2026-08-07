@@ -3,6 +3,7 @@
 ## Goal
 - Add an Expenses tab to the bottom bar so expenses can be tracked and categorized by what's taking the most, and give the cookery/Eatery business a custom format (dish variants/pricing) — starting with cookery first as requested.
 - Level 2 recipe costing for Eatery dishes (itemized ingredients, batch yield, overhead, waste %, auto COGS/profit/margin, one-tap suggested-price apply) inside the Stock editor.
+- Graphics Design & Brand Printing module (log orders, pricing calculator, status pipeline) behind the Graphics category in Sell, with delivered orders counted in Reports revenue/profit.
 
 ## Constraints & Preferences
 - Bottom nav stays visible on scroll; now includes Expenses (user: "expenses shd b among the bottom bar... see wats taking more")
@@ -53,6 +54,7 @@
 - If user wants: default Sales category to Eatery when `shopType === 'eatery'`; variant-aware sales history/Analytics export
 - Later: lightly tune other categories (printing jobs, library rentals, etc.) when user requests
 - If user wants deeper costing: track ingredient stock / auto-deduct on sale (Level 3)
+- Design & Print: commit+push when user confirms; optionally seed Graphics products; possibly add design-orders to full backup restore later
 
 ## Critical Context
 - Commits pushed: `d8850cd` (HEAD, offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)

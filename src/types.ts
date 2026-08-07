@@ -125,6 +125,28 @@ export interface TailoringOrder {
   createdAt: string;
 }
 
+export interface DesignOrder {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  orderDate: string;
+  expectedDate: string;
+  completedDate?: string;
+  orderType: 'logo' | 'flyer' | 'banner' | 'cards' | 'print' | 'branding' | 'other';
+  designBrief: string;
+  qty: number;
+  size: string;
+  materialCost: number;
+  laborCost: number;
+  unitPrice: number;
+  totalAmount: number;
+  depositPaid: number;
+  targetMarginPct: number;
+  status: 'pending' | 'in_progress' | 'review' | 'completed' | 'delivered';
+  notes: string;
+  createdAt: string;
+}
+
 export interface AppTheme {
   id: string;
   name: string;

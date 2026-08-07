@@ -57,6 +57,16 @@ async function initDB() {
   )`;
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN measurements TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN materialcost DOUBLE PRECISION DEFAULT 0`; } catch {}
+  await sql`CREATE TABLE IF NOT EXISTS design_orders (
+    id TEXT PRIMARY KEY, customername TEXT NOT NULL, customerphone TEXT DEFAULT '',
+    orderdate TEXT NOT NULL, expecteddate TEXT NOT NULL, completeddate TEXT,
+    ordertype TEXT NOT NULL, designbrief TEXT NOT NULL,
+    qty DOUBLE PRECISION DEFAULT 1, size TEXT DEFAULT '',
+    materialcost DOUBLE PRECISION DEFAULT 0, laborcost DOUBLE PRECISION DEFAULT 0,
+    unitprice DOUBLE PRECISION DEFAULT 0, totalamount DOUBLE PRECISION DEFAULT 0,
+    depositpaid DOUBLE PRECISION DEFAULT 0, targetmarginpct DOUBLE PRECISION DEFAULT 50,
+    status TEXT DEFAULT 'pending', notes TEXT DEFAULT '', createdat TEXT NOT NULL
+  )`;
   await sql`CREATE TABLE IF NOT EXISTS cash_transfers (
     id TEXT PRIMARY KEY, fromcategory TEXT NOT NULL, tocategory TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
@@ -71,7 +81,7 @@ async function initDB() {
     delta INTEGER NOT NULL, type TEXT NOT NULL, qty_after INTEGER NOT NULL,
     sale_id TEXT, note TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
-  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders']) {
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -79,6 +89,7 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_creditpay_cwid ON credit_payments(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_cashtrans_cwid ON cash_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tailoring_cwid ON tailoring_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_design_cwid ON design_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
   // Random HMAC secret, stored in the DB so all serverless instances agree.
@@ -705,6 +716,35 @@ app.delete('/api/tailoring-orders/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === DESIGN & PRINT ORDERS API ===
+app.get('/api/design-orders', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM design_orders ORDER BY createdat DESC`;
+  res.json(rows.map(mapDesignOrder));
+}));
+
+app.post('/api/design-orders', asHandler(async (req, res) => {
+  const o = req.body;
+  const inserted = await sql`INSERT INTO design_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,ordertype,designbrief,qty,size,materialcost,laborcost,unitprice,totalamount,depositpaid,targetmarginpct,status,notes,createdat,client_write_id)
+    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.orderType},${o.designBrief},${o.qty||1},${o.size||''},${o.materialCost||0},${o.laborCost||0},${o.unitPrice||0},${o.totalAmount||0},${o.depositPaid||0},${o.targetMarginPct||50},${o.status||'pending'},${o.notes||''},${o.createdAt},${o.clientWriteId||null})
+    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM design_orders WHERE client_write_id=${o.clientWriteId}`;
+    return res.json(existing.length ? existing[0] : o);
+  }
+  res.json(o);
+}));
+
+app.put('/api/design-orders/:id', asHandler(async (req, res) => {
+  const o = req.body;
+  await sql`UPDATE design_orders SET customername=${o.customerName},customerphone=${o.customerPhone||''},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},ordertype=${o.orderType},designbrief=${o.designBrief},qty=${o.qty||1},size=${o.size||''},materialcost=${o.materialCost||0},laborcost=${o.laborCost||0},unitprice=${o.unitPrice||0},totalamount=${o.totalAmount||0},depositpaid=${o.depositPaid||0},targetmarginpct=${o.targetMarginPct||50},status=${o.status||'pending'},notes=${o.notes||''} WHERE id=${req.params.id}`;
+  res.json(o);
+}));
+
+app.delete('/api/design-orders/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM design_orders WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 // === SYNC PRODUCT CATALOG ===
 app.post('/api/sync-products', asHandler(async (req, res) => {
   const libCount = await syncLibraryProducts();
@@ -749,17 +789,29 @@ app.get('/api/summary', asHandler(async (req, res) => {
   const expRows = await sql.query(
     `SELECT COALESCE(SUM(amount),0)::float AS total FROM expenses WHERE ${expWhere.join(' AND ')}`, expParams);
 
+  // Delivered design & print orders count as realized revenue.
+  const designWhere = ["status='delivered'"];
+  const designParams = [];
+  if (from) { designParams.push(from); designWhere.push(`createdat >= $${designParams.length}`); }
+  if (to) { designParams.push(to); designWhere.push(`createdat <= $${designParams.length}`); }
+  const designRows = await sql.query(
+    `SELECT COALESCE(SUM(totalamount),0)::float AS revenue, COALESCE(SUM(totalamount - COALESCE(materialcost,0) - COALESCE(laborcost,0)),0)::float AS profit FROM design_orders WHERE ${designWhere.join(' AND ')}`, designParams);
+
   const creditRows = await sql`SELECT COALESCE(SUM(total),0)::float AS total FROM sales WHERE paymentmethod='Credit / Book' AND refunded=false`;
   const paidRows = await sql`SELECT COALESCE(SUM(amount),0)::float AS total FROM credit_payments`;
   const lowRows = await sql`SELECT COUNT(*)::int AS n FROM products WHERE isservice=false AND stockqty <= lowstockthreshold`;
 
-  const grossProfit = revenue - cogs;
+  const designRevenue = designRows.length ? designRows[0].revenue : 0;
+  const designProfit = designRows.length ? designRows[0].profit : 0;
+  const grossProfit = (revenue - cogs) + designProfit;
   const expenseTotal = expRows.length ? expRows[0].total : 0;
   res.json({
     from: from || null,
     to: to || null,
     salesCount: salesRows.length,
-    revenue,
+    revenue: revenue + designRevenue,
+    designRevenue,
+    designProfit,
     cogs,
     grossProfit,
     expenseTotal,
@@ -771,7 +823,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, stockMoves] = await Promise.all([
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM sales`,
@@ -780,6 +832,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM credit_payments`,
     sql`SELECT * FROM cash_transfers`,
     sql`SELECT * FROM tailoring_orders`,
+    sql`SELECT * FROM design_orders`,
     sql`SELECT * FROM stock_movements`,
   ]);
   res.json({
@@ -792,6 +845,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     creditPayments: credit.map(r => ({ id: r.id, saleId: r.saleid, amount: r.amount, createdAt: r.createdat })),
     cashTransfers: transfers.map(mapTransfer),
     tailoringOrders: tailoring.map(mapTailoringOrder),
+    designOrders: design.map(mapDesignOrder),
     stockMovements: stockMoves.map(mapStockMovement),
   });
 }));
@@ -825,6 +879,21 @@ function mapTailoringOrder(r) {
     materialCost: r.materialcost || 0,
     status: r.status, notes: r.notes || '',
     measurements: r.measurements || '',
+    createdAt: r.createdat,
+  };
+}
+
+function mapDesignOrder(r) {
+  return {
+    id: r.id, customerName: r.customername, customerPhone: r.customerphone || '',
+    orderDate: r.orderdate, expectedDate: r.expecteddate,
+    completedDate: r.completeddate || undefined,
+    orderType: r.ordertype, designBrief: r.designbrief,
+    qty: r.qty || 1, size: r.size || '',
+    materialCost: r.materialcost || 0, laborCost: r.laborcost || 0,
+    unitPrice: r.unitprice || 0, totalAmount: r.totalamount || 0,
+    depositPaid: r.depositpaid || 0, targetMarginPct: r.targetmarginpct || 50,
+    status: r.status, notes: r.notes || '',
     createdAt: r.createdat,
   };
 }

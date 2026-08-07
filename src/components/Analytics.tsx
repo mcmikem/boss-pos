@@ -1,12 +1,13 @@
-import { useState, useMemo, type FormEvent } from 'react';
+import { useState, useMemo, useEffect, type FormEvent } from 'react';
 import { 
   TrendingUp, Plus, Coins, User, Phone, Mail,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings } from '../types';
+import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder } from '../types';
 import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
+import { designOrderApi } from '../api';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -60,6 +61,17 @@ export default function Analytics({
   settings
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
+
+  // Design & print orders contribute realized revenue when delivered. Fetched
+  // here (not via props) so Reports always shows fresh numbers.
+  const [designOrders, setDesignOrders] = useState<DesignOrder[]>([]);
+  useEffect(() => {
+    let active = true;
+    designOrderApi.list()
+      .then(list => { if (active) setDesignOrders(list); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseAmt, setExpenseAmt] = useState('');
@@ -116,7 +128,21 @@ export default function Analytics({
     return filteredExpenses.reduce((acc, e) => acc + e.amount, 0);
   }, [filteredExpenses]);
 
-  const grossProfit = revenue - cogs;
+  // Delivered design & print orders count as realized revenue + profit.
+  const designOrdersInWindow = useMemo(() => {
+    return designOrders.filter(o => o.status === 'delivered' && timeRange.filter(o.createdAt));
+  }, [designOrders, timeRange]);
+
+  const designRevenue = useMemo(() => {
+    return designOrdersInWindow.reduce((acc, o) => acc + o.totalAmount, 0);
+  }, [designOrdersInWindow]);
+
+  const designProfit = useMemo(() => {
+    return designOrdersInWindow.reduce((acc, o) => acc + (o.totalAmount - o.materialCost - o.laborCost), 0);
+  }, [designOrdersInWindow]);
+
+  const totalIncome = revenue + designRevenue;
+  const grossProfit = (revenue - cogs) + designProfit;
   const netProfit = grossProfit - totalExpenses;
 
   const categoryBreakdown = useMemo(() => {
@@ -463,8 +489,10 @@ const colorsMap: { [key: string]: string } = {
             </div>
             <div className="boss-card p-5 flex flex-col justify-between h-32">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Total Sales</span>
-              <h3 className="text-2xl font-black text-white font-display mt-2">{formatCurrency(revenue)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase">Money in</p>
+              <h3 className="text-2xl font-black text-white font-display mt-2">{formatCurrency(totalIncome)}</h3>
+              <p className="text-xs text-zinc-500 font-bold uppercase">
+                Money in{designRevenue > 0 ? ` • Design ${formatCurrency(designRevenue)}` : ''}
+              </p>
             </div>
             <div className="boss-card p-5 flex flex-col justify-between h-32">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Profit</span>
