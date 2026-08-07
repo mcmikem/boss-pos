@@ -8,6 +8,7 @@ import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { hashPin } from './utils/crypto';
+import { downloadBlob } from './utils/download';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import Sales from './components/Sales';
@@ -288,13 +289,8 @@ export default function App() {
     try {
       const data = await exportApi.download();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `imac-pos-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      triggerToast('Backup downloaded', 'success');
+      const ok = downloadBlob(blob, `imac-pos-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      triggerToast(ok ? 'Backup downloaded' : 'Download failed on this device', ok ? 'success' : 'error');
     } catch {
       triggerToast('Failed to export data', 'error');
     }
@@ -463,6 +459,7 @@ export default function App() {
           <ErrorBoundary key="sales">
           <Sales 
             products={products} onAddSale={handleAddSale}
+            onUpdateProduct={handleUpdateProduct}
             formatCurrency={formatCurrency} cart={cart} setCart={setCart}
             triggerToast={triggerToast} settings={settings}
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}

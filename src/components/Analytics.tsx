@@ -8,6 +8,7 @@ import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, De
 import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
 import { designOrderApi } from '../api';
+import { downloadBlob } from '../utils/download';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -356,10 +357,8 @@ const colorsMap: { [key: string]: string } = {
                 ...filteredExpenses.map(e => `"${new Date(e.timestamp).toLocaleDateString()}","${e.description}","${e.category}",${e.amount}`),
               ].join('\n');
               const blob = new Blob([salesCsv + '\n\nEXPENSES\n' + expensesCsv], { type: 'text/csv' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `reports-${new Date().toISOString().split('T')[0]}.csv`;
-              a.click(); URL.revokeObjectURL(url);
-              triggerToast('Report exported as CSV', 'success');
+              const ok = downloadBlob(blob, `reports-${new Date().toISOString().split('T')[0]}.csv`);
+              triggerToast(ok ? 'Report exported as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
             }}
               className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-emerald-500 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
               Export CSV

@@ -17,10 +17,12 @@ import ProfitAnalyzerModal from './ProfitAnalyzerModal';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 import TailoringOrders from './TailoringOrders';
 import DesignOrders from './DesignOrders';
+import EateryPricing from './EateryPricing';
 
 interface SalesProps {
   products: Product[];
   onAddSale: (sale: Sale) => void;
+  onUpdateProduct: (p: Product) => void;
   formatCurrency: (val: number) => string;
   cart: SaleItem[];
   setCart: Dispatch<SetStateAction<SaleItem[]>>;
@@ -42,11 +44,12 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
   const [showDesignOrders, setShowDesignOrders] = useState<boolean>(false);
+  const [showEateryPricing, setShowEateryPricing] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
@@ -328,7 +331,7 @@ export default function Sales({
         <div className="relative -mx-4 px-4 sm:mx-0 sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
-            <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); }}
+            <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); }}
               className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                 selectedCategory === 'All'
                   ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
@@ -341,7 +344,7 @@ export default function Sales({
                 const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
                 return (
-                  <button key={cat} onClick={() => { setSelectedCategory(cat); setShowTailoringOrders(false); setShowDesignOrders(false); }}
+                  <button key={cat} onClick={() => { setSelectedCategory(cat); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); }}
                     className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                       isActive
                         ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
@@ -354,6 +357,14 @@ export default function Sales({
               })}
           </section>
         </div>
+
+        {selectedCategory === 'Eatery' && !showEateryPricing && (
+          <button onClick={() => setShowEateryPricing(true)}
+            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
+            <ChefHat className="w-4 h-4" />
+            Eatery Pricing & Recipes
+          </button>
+        )}
 
         {selectedCategory === 'Tailoring' && !showTailoringOrders && (
           <button onClick={() => setShowTailoringOrders(true)}
@@ -387,6 +398,15 @@ export default function Sales({
               <ArrowRightLeft className="w-4 h-4" /> Back to products
             </button>
             <DesignOrders triggerToast={triggerToast} />
+          </div>
+        ) : showEateryPricing ? (
+          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-pricing-scroll-container">
+            <button onClick={() => setShowEateryPricing(false)}
+              className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
+              <ArrowRightLeft className="w-4 h-4" /> Back to products
+            </button>
+            <EateryPricing products={products} onUpdateProduct={onUpdateProduct}
+              formatCurrency={formatCurrency} triggerToast={triggerToast} />
           </div>
         ) : (
         /* Products */

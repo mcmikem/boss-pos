@@ -77,31 +77,69 @@ export default function Inventory({
       triggerToast('Please select an image file', 'error');
       return;
     }
+    // Old Android browsers can run out of memory decoding huge camera photos,
+    // which kills the whole page. Reject oversized files before touching them.
+    const MAX_FILE_BYTES = 6 * 1024 * 1024;
+    if (file.size > MAX_FILE_BYTES) {
+      triggerToast('Photo too large (max 6MB). Pick a smaller one.', 'error');
+      return;
+    }
     const MAX_W = 200;
-    const img = document.createElement('img');
+    let img: HTMLImageElement | null = null;
+    try {
+      img = document.createElement('img');
+    } catch {
+      triggerToast('Image upload not supported on this device', 'error');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      triggerToast('Image processing timed out — try a smaller photo', 'error');
+    }, 12000);
     img.onload = () => {
-      URL.revokeObjectURL(img.src);
-      let w = img.naturalWidth;
-      let h = img.naturalHeight;
-      if (w > MAX_W) {
-        h = Math.round(h * (MAX_W / w));
-        w = MAX_W;
+      window.clearTimeout(timer);
+      try {
+        URL.revokeObjectURL(img!.src);
+        let w = img!.naturalWidth;
+        let h = img!.naturalHeight;
+        if (!w || !h) {
+          triggerToast('Could not read image dimensions', 'error');
+          return;
+        }
+        // Extra safety: don't even try to downscale absurdly large captures.
+        if (w > 8192 || h > 8192) {
+          triggerToast('Photo resolution too high for this device', 'error');
+          return;
+        }
+        if (w > MAX_W) {
+          h = Math.round(h * (MAX_W / w));
+          w = MAX_W;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { triggerToast('Failed to process image', 'error'); return; }
+        ctx.drawImage(img!, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        if (dataUrl.length > 100_000) {
+          triggerToast('Image too large after compression', 'error');
+          return;
+        }
+        setImageUrl(dataUrl);
+      } catch {
+        triggerToast('Could not process image on this device', 'error');
       }
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { triggerToast('Failed to process image', 'error'); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-      if (dataUrl.length > 100_000) {
-        triggerToast('Image too large after compression', 'error');
-        return;
-      }
-      setImageUrl(dataUrl);
     };
-    img.onerror = () => triggerToast('Failed to load image', 'error');
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      window.clearTimeout(timer);
+      triggerToast('Failed to load image', 'error');
+    };
+    try {
+      img.src = URL.createObjectURL(file);
+    } catch {
+      window.clearTimeout(timer);
+      triggerToast('Could not open image on this device', 'error');
+    }
   };
 
   const lowStockProducts = useMemo(() => {
