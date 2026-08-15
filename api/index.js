@@ -1,6 +1,6 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
-import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -126,6 +126,26 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_momotrans_cwid ON momo_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
+  // Query indexes so the most common reads (date ranges, category browsing,
+  // low-stock, order number lookup) don't seq-scan as the shop grows.
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_sales_timestamp ON sales(timestamp)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_sales_payment ON sales(paymentmethod)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_sales_refunded ON sales(refunded)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_expenses_timestamp ON expenses(timestamp)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_products_stock ON products(stockqty)`; } catch {}
+  // Order numbers must be unique so offline/replayed sales never collide. Older
+  // DBs may already hold duplicates (pre-unique-index offline fallback), so
+  // suffix the later duplicates before enforcing the constraint.
+  try {
+    await sql`WITH dups AS (
+      SELECT id, row_number() OVER (PARTITION BY ordernumber ORDER BY timestamp, id) AS rn
+      FROM sales
+    )
+    UPDATE sales s SET ordernumber = s.ordernumber || ' (dup ' || d.rn::text || ')'
+    FROM dups d WHERE s.id = d.id AND d.rn > 1`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_ordernumber ON sales(ordernumber)`;
+  } catch (e) { console.error('Failed to enforce unique order numbers:', e.message); }
   // Random HMAC secret, stored in the DB so all serverless instances agree.
   // No longer derived from DATABASE_URL (which would let anyone with the DB
   // URL forge tokens). An explicit AUTH_SECRET env var takes precedence.
@@ -146,6 +166,18 @@ function escapeId(id) {
   return '"' + id.replace(/"/g, '""') + '"';
 }
 
+// Cap free-text fields so a bad/abusive client can't bloat the DB.
+function text(v, max) {
+  if (typeof v !== 'string') return v == null ? v : String(v).slice(0, max);
+  return v.slice(0, max);
+}
+
+// Clamp a number-ish value to a finite, non-negative float (0 when unusable).
+function num(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 async function batchInsert(table, columns, rows) {
   if (rows.length === 0) return;
   const cols = columns.map(c => escapeId(c)).join(',');
@@ -154,6 +186,35 @@ async function batchInsert(table, columns, rows) {
   ).join(',');
   const flat = rows.flatMap(r => columns.map(c => r[c] != null ? r[c] : null));
   await sql.query(`INSERT INTO ${escapeId(table)} (${cols}) VALUES ${vals}`, flat);
+}
+
+// Upsert (merge) rows by their primary key. Used by backup restore so a restore
+// into an existing DB refreshes rows instead of duplicating them.
+async function batchUpsert(table, idColumn, columns, rows) {
+  if (!rows || rows.length === 0) return 0;
+  const cols = columns.map(c => escapeId(c)).join(',');
+  const updates = columns.map(c => `${escapeId(c)}=EXCLUDED.${escapeId(c)}`).join(',');
+  const vals = rows.map((_, i) =>
+    '(' + columns.map((_, j) => '$' + (i * columns.length + j + 1)).join(',') + ')'
+  ).join(',');
+  const flat = rows.flatMap(r => columns.map(c => r[c] != null ? r[c] : null));
+  await sql.query(`INSERT INTO ${escapeId(table)} (${cols}) VALUES ${vals} ON CONFLICT (${escapeId(idColumn)}) DO UPDATE SET ${updates}`, flat);
+  return rows.length;
+}
+
+// Atomic, server-side order numbers. Seeded from the highest existing order
+// number, so fresh DBs continue from wherever the shop left off. Regex is used
+// instead of split_part+cast because deduped order numbers carry a " (dup N)"
+// suffix that would break a bare integer cast.
+async function nextOrderNumberValue() {
+  const existing = await sql`SELECT value FROM settings WHERE key='orderCounter'`;
+  if (existing.length === 0) {
+    const m = await sql`SELECT COALESCE(MAX((regexp_match(ordernumber, '#\\s*(\\d+)'))[1]::int), 8492) AS m FROM sales`;
+    const base = m.length && m[0].m ? m[0].m : 8492;
+    await sql`INSERT INTO settings (key, value) VALUES ('orderCounter', ${String(base)}) ON CONFLICT (key) DO NOTHING`;
+  }
+  const n = await sql`UPDATE settings SET value = (value::int) + 1 WHERE key='orderCounter' RETURNING (value::int) AS n`;
+  return n.length ? n[0].n : 8493;
 }
 
 const LIBRARY_MENU = [
@@ -371,6 +432,36 @@ function requireAuth(req, res, next) {
 const LOCKOUT_FAILURES = 5;
 const LOCKOUT_MS = 30 * 1000;
 
+// PINs are stored as salted PBKDF2 (per-hash random salt, embedded in the
+// value) so a DB leak doesn't expose PINs to rainbow-table or fast-hash
+// attacks. Legacy stores (bare sha256) still verify and auto-migrate on login.
+const PIN_ITERATIONS = 120000;
+
+function hashPinStrong(pin, salt) {
+  return pbkdf2Sync(String(pin || ''), salt, PIN_ITERATIONS, 32, 'sha256').toString('hex');
+}
+
+function pinHashFormat(salt, hex) {
+  return `pbkdf2$${PIN_ITERATIONS}$${salt}$${hex}`;
+}
+
+function verifyStoredPin(stored, pin) {
+  if (!stored) return false;
+  if (stored.startsWith('pbkdf2$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 4) return false;
+    const [, iterStr, salt, hex] = parts;
+    const iter = parseInt(iterStr, 10);
+    if (!iter || iter < 1 || iter > 1_000_000) return false;
+    const computed = pbkdf2Sync(String(pin || ''), salt, iter, 32, 'sha256').toString('hex');
+    const a = Buffer.from(hex, 'hex');
+    const b = Buffer.from(computed, 'hex');
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+  // Legacy unsalted sha256 — verified for backward compat, migrated on login.
+  return sha256Hex(pin) === stored;
+}
+
 function clientIp(req) {
   const fwd = req.headers['x-forwarded-for'];
   if (fwd) return String(fwd).split(',')[0].trim();
@@ -398,7 +489,7 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   const { pin } = req.body || {};
   const rows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
   const stored = rows.length ? rows[0].value : '';
-  if (stored && sha256Hex(pin) !== stored) {
+  if (stored && !verifyStoredPin(stored, String(pin || ''))) {
     if (attempts.length === 0) {
       await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
     } else {
@@ -414,7 +505,14 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   if (attempts.length > 0) {
     await sql`DELETE FROM auth_attempts WHERE id=${key}`;
   }
-  res.json({ ok: true, token: signToken(), hasPin: !!stored, hash: stored || undefined });
+  // Migrate a legacy unsalted sha256 PIN to the strong format on successful login.
+  let returnedHash = stored || '';
+  if (stored && !stored.startsWith('pbkdf2$')) {
+    const salt = randomBytes(16).toString('hex');
+    returnedHash = pinHashFormat(salt, hashPinStrong(String(pin || ''), salt));
+    await sql`UPDATE settings SET value=${returnedHash} WHERE key='pinHash'`;
+  }
+  res.json({ ok: true, token: signToken(), hasPin: !!stored, hash: returnedHash || undefined, salt: returnedHash.split('$')[2], iterations: returnedHash.startsWith('pbkdf2$') ? PIN_ITERATIONS : undefined });
 }));
 
 // Public pre-auth status: only the fields the lock screen needs (no financial data).
@@ -435,21 +533,27 @@ app.use((req, res, next) => {
 // or { hash } (stored as-is, used to migrate an existing client-side hash).
 app.post('/api/auth/set', asHandler(async (req, res) => {
   const { pin, hash } = req.body || {};
-  const value = typeof hash === 'string' ? hash : (pin ? sha256Hex(pin) : '');
+  let value = '';
+  if (typeof hash === 'string' && hash) {
+    // Legacy client-side hash — stored as-is; verified then migrated on login.
+    value = hash.slice(0, 200);
+  } else if (pin) {
+    const salt = randomBytes(16).toString('hex');
+    value = pinHashFormat(salt, hashPinStrong(String(pin).slice(0, 64), salt));
+  }
   await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value=${value}`;
-  res.json({ ok: true, hasPin: !!value, hash: value });
+  res.json({
+    ok: true,
+    hasPin: !!value,
+    hash: value,
+    salt: value.startsWith('pbkdf2$') ? value.split('$')[2] : undefined,
+    iterations: value.startsWith('pbkdf2$') ? PIN_ITERATIONS : undefined,
+  });
 }));
 
 // Atomic, server-side order numbers (no more per-device counter collisions).
 app.post('/api/orders/next', asHandler(async (req, res) => {
-  const existing = await sql`SELECT value FROM settings WHERE key='orderCounter'`;
-  if (existing.length === 0) {
-    const m = await sql`SELECT COALESCE(MAX((split_part(ordernumber, '#', 2))::int), 8492) AS m FROM sales`;
-    const base = m.length ? m[0].m : 8492;
-    await sql`INSERT INTO settings (key, value) VALUES ('orderCounter', ${String(base)}) ON CONFLICT (key) DO NOTHING`;
-  }
-  const n = await sql`UPDATE settings SET value = (value::int) + 1 WHERE key='orderCounter' RETURNING (value::int) AS n`;
-  const next = n.length ? n[0].n : 8493;
+  const next = await nextOrderNumberValue();
   res.json({ orderNumber: `Order #${next}`, number: next });
 }));
 
@@ -474,22 +578,37 @@ async function logStockMovement(db, m) {
 
 app.post('/api/products', asHandler(async (req, res) => {
   const p = req.body;
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe) VALUES (${p.id},${p.name},${p.category},${p.cost||0},${p.price||0},${p.stockQty||0},${p.lowStockThreshold||5},${p.supplierId||null},${p.isService||false},${p.imei||null},${p.barcode||null},${p.imageUrl||null},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null})`;
-  if (!p.isService && (p.stockQty || 0) > 0) {
-    await logStockMovement(sql, { productId: p.id, productName: p.name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
+  if (p.imageUrl && String(p.imageUrl).length > 60000) {
+    return res.status(400).json({ error: 'Image too large (max ~60KB after compression)' });
   }
-  res.json(p);
+  const name = text(p.name, 150);
+  const category = text(p.category, 100);
+  const imei = text(p.imei, 100) || null;
+  const barcode = text(p.barcode, 100) || null;
+  const id = p.id || 'p-' + randomUUID();
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${p.imageUrl?String(p.imageUrl).slice(0,60000):null},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null})`;
+  if (!p.isService && (p.stockQty || 0) > 0) {
+    await logStockMovement(sql, { productId: id, productName: name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
+  }
+  res.json({ ...p, id });
 }));
 
 app.put('/api/products/:id', asHandler(async (req, res) => {
   const p = req.body;
+  if (p.imageUrl && String(p.imageUrl).length > 60000) {
+    return res.status(400).json({ error: 'Image too large (max ~60KB after compression)' });
+  }
+  const name = text(p.name, 150);
+  const category = text(p.category, 100);
+  const imei = text(p.imei, 100) || null;
+  const barcode = text(p.barcode, 100) || null;
   const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
-  await sql`UPDATE products SET name=${p.name},category=${p.category},cost=${p.cost||0},price=${p.price||0},stockQty=${p.stockQty||0},lowStockThreshold=${p.lowStockThreshold||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${p.imei||null},barcode=${p.barcode||null},imageUrl=${p.imageUrl||null},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null} WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${imei},barcode=${barcode},imageUrl=${p.imageUrl?String(p.imageUrl).slice(0,60000):null},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null} WHERE id=${req.params.id}`;
   if (!p.isService) {
     const prev = old.length ? (old[0].stockqty || 0) : 0;
     const next = p.stockQty || 0;
     if (next !== prev) {
-      await logStockMovement(sql, { productId: p.id, productName: p.name, delta: next - prev, type: 'adjust', qtyAfter: next, note: `Stock edited ${prev} -> ${next}` });
+      await logStockMovement(sql, { productId: p.id, productName: name, delta: next - prev, type: 'adjust', qtyAfter: next, note: `Stock edited ${prev} -> ${next}` });
     }
   }
   res.json(p);
@@ -512,8 +631,9 @@ app.get('/api/suppliers', asHandler(async (req, res) => {
 
 app.post('/api/suppliers', asHandler(async (req, res) => {
   const s = req.body;
-  await sql`INSERT INTO suppliers (id,name,contactPerson,phone,email) VALUES (${s.id},${s.name},${s.contactPerson||''},${s.phone||''},${s.email||''})`;
-  res.json(s);
+  const id = s.id || 'sup-' + randomUUID();
+  await sql`INSERT INTO suppliers (id,name,contactPerson,phone,email) VALUES (${id},${s.name},${s.contactPerson||''},${s.phone||''},${s.email||''})`;
+  res.json({ ...s, id });
 }));
 
 app.put('/api/suppliers/:id', asHandler(async (req, res) => {
@@ -543,49 +663,92 @@ app.get('/api/sales', asHandler(async (req, res) => {
 
 app.post('/api/sales', asHandler(async (req, res) => {
   const s = req.body;
+  const saleId = s.id || 's-' + randomUUID();
   const cwid = s.clientWriteId || null;
   const itemsJson = JSON.stringify(s.items);
-  // Atomic: insert the sale and decrement stock in one statement. On a
-  // duplicate client_write_id (outbox replay) the insert no-ops and no stock
-  // is moved.
-  const r = await sql`
-    WITH ins AS (
-      INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,client_write_id)
-      VALUES (${s.id},${s.orderNumber},${s.timestamp},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${s.customerName||null},${s.discount||null},${s.notes||null},${cwid})
-      ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING
-      RETURNING id, items
-    ),
-    stock AS (
-      UPDATE products p SET stockQty = GREATEST(0, p.stockQty - sub.qty)
-      FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub("productId" text, qty int)
-      WHERE p.id = sub."productId" AND p.isService = false
-      RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
-    )
-    SELECT (SELECT count(*)::int FROM ins) AS inserted,
-           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock
-  `;
-  if (r.length === 0) return res.status(500).json({ error: 'Failed to create sale' });
-  const { inserted, stock } = r[0];
+  const customerName = text(s.customerName, 120) || null;
+  const notes = text(s.notes, 500) || null;
+  // The client picks an order number (server counter when online, per-device
+  // fallback when offline). The unique ordernumber index guarantees the number
+  // used at the till is respected; if a queued/replayed sale collides with a
+  // number another device already used, we transparently renumber to the next
+  // free one and return it so the UI converges after the next refetch.
+  let orderNumber = s.orderNumber || `Order #${await nextOrderNumberValue()}`;
 
-  if (inserted === 0) {
-    const existing = await sql`SELECT * FROM sales WHERE client_write_id=${cwid}`;
-    return res.json(existing.length ? mapSale(existing[0]) : s);
-  }
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      // Atomic single statement: only insert the sale if no line would push a
+      // stocked product below zero; if any line oversells, nothing is inserted
+      // and no stock moves (client rolls its optimistic state back and refetches).
+      const r = await sql`
+        WITH checkstock AS (
+          SELECT sub."productId"::text AS pid,
+                 p.stockqty < COALESCE(sub.qty::int, 0) AS oversold
+          FROM jsonb_to_recordset(${itemsJson}::jsonb) AS sub("productId" text, qty int)
+          JOIN products p ON p.id = sub."productId" AND p.isService = false
+        ),
+        ins AS (
+          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,client_write_id)
+          SELECT ${saleId},${orderNumber},${s.timestamp || new Date().toISOString()},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${notes},${cwid}
+          WHERE NOT EXISTS (SELECT 1 FROM checkstock WHERE oversold)
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id, items
+        ),
+        stock AS (
+          UPDATE products p SET stockQty = p.stockQty - COALESCE(sub.qty::int, 0)
+          FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub("productId" text, qty int)
+          WHERE p.id = sub."productId" AND p.isService = false
+          RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
+        )
+        SELECT (SELECT count(*)::int FROM ins) AS inserted,
+               COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock,
+               (SELECT count(*)::int FROM checkstock WHERE oversold) AS oversold
+      `;
+      if (r.length === 0) return res.status(500).json({ error: 'Failed to create sale' });
+      const { inserted, stock, oversold } = r[0];
 
-  for (const row of stock || []) {
-    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: -(row.qty || 0), type: 'sale', qtyAfter: row.stockqty, saleId: s.id, note: `Order ${s.orderNumber}` });
+      // Dedupe first: a replayed queued sale whose client_write_id already
+      // exists must return the original row — never a 409 (that would wedge
+      // the outbox forever even though the sale succeeded).
+      if (inserted === 0) {
+        const existing = cwid
+          ? await sql`SELECT * FROM sales WHERE id=${saleId} OR client_write_id=${cwid}`
+          : await sql`SELECT * FROM sales WHERE id=${saleId}`;
+        if (existing.length) return res.json(mapSale(existing[0]));
+        if (oversold > 0) {
+          return res.status(409).json({ error: 'Not enough stock for one or more items', code: 'INSUFFICIENT_STOCK' });
+        }
+        return res.status(500).json({ error: 'Failed to create sale' });
+      }
+
+      for (const row of stock || []) {
+        await logStockMovement(sql, { productId: row.id, productName: row.name, delta: -(row.qty || 0), type: 'sale', qtyAfter: row.stockqty, saleId, note: `Order ${orderNumber}` });
+      }
+      return res.json({ ...s, id: saleId, orderNumber });
+    } catch (err) {
+      // Order-number collision from a queued/replayed offline sale: renumber
+      // and retry. Any other unique-violation (e.g. duplicate id) is fatal.
+      const isOrderNumberCollision = /ordernumber|idx_sales_ordernumber/i.test(String(err?.message));
+      if (isOrderNumberCollision && attempt < 7) {
+        orderNumber = `Order #${await nextOrderNumberValue()}`;
+        continue;
+      }
+      throw err;
+    }
   }
-  res.json(s);
+  return res.status(500).json({ error: 'Could not allocate a unique order number' });
 }));
 
 app.delete('/api/sales/:id', asHandler(async (req, res) => {
-  // Atomic: delete the sale and restore stock in one statement.
+  // Atomic: delete the sale and restore stock in one statement. Idempotent:
+  // deleting a sale that is already gone (offline outbox replay) is a no-op,
+  // so a replayed DELETE can't double-restore stock.
   const r = await sql`
     WITH del AS (
       DELETE FROM sales WHERE id=${req.params.id} RETURNING id, items
     ),
     stock AS (
-      UPDATE products p SET stockQty = p.stockQty + sub.qty
+      UPDATE products p SET stockQty = p.stockQty + COALESCE(sub.qty, 0)
       FROM del, jsonb_to_recordset(del.items::jsonb) AS sub("productId" text, qty int)
       WHERE p.id = sub."productId" AND p.isService = false
       RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
@@ -594,11 +757,11 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
            (SELECT items FROM del LIMIT 1) AS items,
            COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock
   `;
-  if (r.length === 0 || r[0].deleted === 0) return res.status(404).json({ error: 'Sale not found' });
+  if (r.length === 0 || r[0].deleted === 0) return res.json({ success: true, deleted: 0 });
   for (const row of r[0].stock || []) {
     await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.qty || 0, type: 'sale_deleted', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Sale deleted' });
   }
-  res.json({ success: true });
+  res.json({ success: true, deleted: 1 });
 }));
 
 // Soft refund: keep the sale row for the audit trail, restore stock, flag it.
@@ -642,8 +805,10 @@ app.get('/api/expenses', asHandler(async (req, res) => {
 
 app.post('/api/expenses', asHandler(async (req, res) => {
   const e = req.body;
+  const description = text(e.description, 300);
+  const category = text(e.category, 100);
   const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,client_write_id)
-    VALUES (${e.id},${e.timestamp},${e.description},${e.amount},${e.category||''},${e.clientWriteId||null})
+    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${e.clientWriteId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
@@ -729,8 +894,14 @@ app.get('/api/tailoring-orders', asHandler(async (req, res) => {
 
 app.post('/api/tailoring-orders', asHandler(async (req, res) => {
   const o = req.body;
+  const customerName = text(o.customerName, 150);
+  const customerPhone = text(o.customerPhone, 50);
+  const workType = text(o.workType, 100);
+  const workDescription = text(o.workDescription, 500);
+  const notes = text(o.notes, 500);
+  const measurements = text(o.measurements, 500);
   const inserted = await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat,client_write_id)
-    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.workType},${o.workDescription},${o.totalAmount||0},${o.depositPaid||0},${o.materialCost||0},${o.status||'pending'},${o.notes||''},${o.measurements||''},${o.createdAt},${o.clientWriteId||null})
+    VALUES (${o.id},${customerName},${customerPhone},${o.orderDate},${o.expectedDate},${o.completedDate||null},${workType},${workDescription},${num(o.totalAmount)},${num(o.depositPaid)},${num(o.materialCost)},${o.status||'pending'},${notes},${measurements},${o.createdAt},${o.clientWriteId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM tailoring_orders WHERE client_write_id=${o.clientWriteId}`;
@@ -741,7 +912,13 @@ app.post('/api/tailoring-orders', asHandler(async (req, res) => {
 
 app.put('/api/tailoring-orders/:id', asHandler(async (req, res) => {
   const o = req.body;
-  await sql`UPDATE tailoring_orders SET customername=${o.customerName},customerphone=${o.customerPhone||''},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},worktype=${o.workType},workdescription=${o.workDescription},totalamount=${o.totalAmount||0},depositpaid=${o.depositPaid||0},materialcost=${o.materialCost||0},status=${o.status||'pending'},notes=${o.notes||''},measurements=${o.measurements||''} WHERE id=${req.params.id}`;
+  const customerName = text(o.customerName, 150);
+  const customerPhone = text(o.customerPhone, 50);
+  const workType = text(o.workType, 100);
+  const workDescription = text(o.workDescription, 500);
+  const notes = text(o.notes, 500);
+  const measurements = text(o.measurements, 500);
+  await sql`UPDATE tailoring_orders SET customername=${customerName},customerphone=${customerPhone},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},worktype=${workType},workdescription=${workDescription},totalamount=${num(o.totalAmount)},depositpaid=${num(o.depositPaid)},materialcost=${num(o.materialCost)},status=${o.status||'pending'},notes=${notes},measurements=${measurements} WHERE id=${req.params.id}`;
   res.json(o);
 }));
 
@@ -758,8 +935,14 @@ app.get('/api/design-orders', asHandler(async (req, res) => {
 
 app.post('/api/design-orders', asHandler(async (req, res) => {
   const o = req.body;
+  const customerName = text(o.customerName, 150);
+  const customerPhone = text(o.customerPhone, 50);
+  const orderType = text(o.orderType, 100);
+  const designBrief = text(o.designBrief, 1000);
+  const size = text(o.size, 100);
+  const notes = text(o.notes, 500);
   const inserted = await sql`INSERT INTO design_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,ordertype,designbrief,qty,size,materialcost,laborcost,transportcost,unitprice,totalamount,depositpaid,targetmarginpct,status,notes,createdat,client_write_id)
-    VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.orderType},${o.designBrief},${o.qty||1},${o.size||''},${o.materialCost||0},${o.laborCost||0},${o.transportCost||0},${o.unitPrice||0},${o.totalAmount||0},${o.depositPaid||0},${o.targetMarginPct||50},${o.status||'pending'},${o.notes||''},${o.createdAt},${o.clientWriteId||null})
+    VALUES (${o.id},${customerName},${customerPhone},${o.orderDate},${o.expectedDate},${o.completedDate||null},${orderType},${designBrief},${Math.max(1, Math.round(num(o.qty))||1)},${size},${num(o.materialCost)},${num(o.laborCost)},${num(o.transportCost)},${num(o.unitPrice)},${num(o.totalAmount)},${num(o.depositPaid)},${Math.max(0, num(o.targetMarginPct))||50},${o.status||'pending'},${notes},${o.createdAt},${o.clientWriteId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM design_orders WHERE client_write_id=${o.clientWriteId}`;
@@ -996,6 +1179,136 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     wastageLogs: wastageLogs.map(mapWastageLog),
     momoTransfers: momoTransfers.map(mapMomoTransfer),
   });
+}));
+
+// === FULL DATA RESTORE / IMPORT (inverse of /api/export) ===
+app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
+  const d = req.body || {};
+  if (!d.exportedAt && !d.products && !d.sales) {
+    return res.status(400).json({ error: 'Not a valid backup file' });
+  }
+
+  // Restore everything from the backup, merging over existing rows by id.
+  // authSecret is deliberately preserved: swapping it would instantly
+  // invalidate every device's token (and is not part of business data).
+  const settingsRows = (Array.isArray(d.settings) ? d.settings : [])
+    .filter(r => r && r.key && r.key !== 'authSecret')
+    .map(r => ({ key: String(r.key).slice(0, 100), value: String(r.value).slice(0, 10000) }));
+
+  const productRows = (d.products || []).map(p => ({
+    id: p.id, name: text(p.name, 150), category: text(p.category, 100),
+    cost: num(p.cost), price: num(p.price),
+    stockqty: Math.max(0, Math.round(num(p.stockQty))),
+    lowstockthreshold: Math.max(0, Math.round(num(p.lowStockThreshold))) || 5,
+    supplierid: p.supplierId || null, isservice: !!p.isService,
+    imei: text(p.imei, 100) || null, barcode: text(p.barcode, 100) || null,
+    imageurl: p.imageUrl ? String(p.imageUrl).slice(0, 60000) : null,
+    variants: p.variants ? JSON.stringify(p.variants) : null,
+    recipe: p.recipe ? JSON.stringify(p.recipe) : null,
+  }));
+
+  const saleRows = (d.sales || []).map(s => ({
+    id: s.id, ordernumber: s.orderNumber, timestamp: s.timestamp,
+    items: JSON.stringify(s.items), subtotal: num(s.subtotal), tax: num(s.tax),
+    total: num(s.total), paymentmethod: text(s.paymentMethod, 30) || 'Cash',
+    customername: text(s.customerName, 120) || null,
+    discount: s.discount != null ? s.discount : null,
+    notes: text(s.notes, 500) || null, refunded: !!s.refunded,
+    refundedat: s.refundedAt || null,
+    client_write_id: s.clientWriteId || null,
+  }));
+
+  const supplierRows = (d.suppliers || []).map(s => ({
+    id: s.id, name: text(s.name, 150),
+    contactperson: text(s.contactPerson, 150) || '',
+    phone: text(s.phone, 50) || '', email: text(s.email, 150) || '',
+  }));
+
+  const creditPaymentRows = (d.creditPayments || []).map(cp => ({
+    id: cp.id, saleid: cp.saleId, amount: num(cp.amount), createdat: cp.createdAt,
+  }));
+
+  const transferRows = (d.cashTransfers || []).map(t => ({
+    id: t.id, fromcategory: t.fromCategory || '', tocategory: t.toCategory || '',
+    amount: num(t.amount), reason: text(t.reason, 300) || '',
+    createdat: t.createdAt, settledat: t.settledAt || null,
+  }));
+
+  const tailoringRows = (d.tailoringOrders || []).map(o => ({
+    id: o.id, customername: text(o.customerName, 150), customerphone: text(o.customerPhone, 50) || '',
+    orderdate: o.orderDate, expecteddate: o.expectedDate, completeddate: o.completedDate || null,
+    worktype: text(o.workType, 100), workdescription: text(o.workDescription, 500),
+    totalamount: num(o.totalAmount), depositpaid: num(o.depositPaid),
+    materialcost: num(o.materialCost), status: o.status || 'pending',
+    notes: text(o.notes, 500) || '', measurements: text(o.measurements, 500) || '',
+    createdat: o.createdAt,
+  }));
+
+  const designRows = (d.designOrders || []).map(o => ({
+    id: o.id, customername: text(o.customerName, 150), customerphone: text(o.customerPhone, 50) || '',
+    orderdate: o.orderDate, expecteddate: o.expectedDate, completeddate: o.completedDate || null,
+    ordertype: text(o.orderType, 100), designbrief: text(o.designBrief, 1000),
+    qty: Math.max(1, Math.round(num(o.qty)) || 1), size: text(o.size, 100) || '',
+    materialcost: num(o.materialCost), laborcost: num(o.laborCost),
+    transportcost: num(o.transportCost), unitprice: num(o.unitPrice),
+    totalamount: num(o.totalAmount), depositpaid: num(o.depositPaid),
+    targetmarginpct: Math.max(0, num(o.targetMarginPct)) || 50,
+    status: o.status || 'pending', notes: text(o.notes, 500) || '',
+    createdat: o.createdAt,
+  }));
+
+  const stockMoveRows = (d.stockMovements || []).map(m => ({
+    id: m.id, product_id: m.productId || null, product_name: text(m.productName, 150),
+    delta: (Math.round(m.delta) || 0), type: text(m.type, 30),
+    qty_after: Math.max(0, Math.round(num(m.qtyAfter))), sale_id: m.saleId || null,
+    note: text(m.note, 300) || '', createdat: m.createdAt,
+  }));
+
+  const creditEatRows = (d.creditEats || []).map(e => ({
+    id: e.id, customername: text(e.customerName, 150), date: e.date,
+    item: text(e.item, 200), category: e.category || 'Eatery',
+    qty: Math.max(0, Math.round(num(e.qty))) || 1, unitprice: num(e.unitPrice),
+    total: num(e.total), paidamount: num(e.paidAmount), paid: !!e.paid,
+    createdat: e.createdAt || e.date || null,
+  }));
+
+  const productionRows = (d.productionRegisters || []).map(p => ({
+    id: p.id, date: p.date, item: text(p.item, 200),
+    category: p.category || 'Eatery', qty: Math.max(0, Math.round(num(p.qty))),
+    costeach: num(p.costEach), total: num(p.total), createdat: p.createdAt || p.date || null,
+  }));
+
+  const wastageRows = (d.wastageLogs || []).map(w => ({
+    id: w.id, date: w.date, item: text(w.item, 200),
+    category: w.category || 'Eatery', qty: Math.max(0, Math.round(num(w.qty))),
+    costeach: num(w.costEach), lossamount: num(w.lossAmount),
+    reason: w.reason || 'remaining', createdat: w.createdAt || w.date || null,
+  }));
+
+  const momoRows = (d.momoTransfers || []).map(t => ({
+    id: t.id, category: t.category || 'Eatery', amount: num(t.amount),
+    comment: text(t.comment, 300) || '', createdat: t.createdAt,
+  }));
+
+  const counts = {};
+  await Promise.all([
+    batchUpsert('settings', 'key', ['key', 'value'], settingsRows).then(n => counts.settings = n),
+    batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'imei', 'barcode', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
+    batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
+    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'client_write_id'], saleRows).then(n => counts.sales = n),
+    batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100) }))).then(n => counts.expenses = n),
+    batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
+    batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
+    batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
+    batchUpsert('design_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'ordertype', 'designbrief', 'qty', 'size', 'materialcost', 'laborcost', 'transportcost', 'unitprice', 'totalamount', 'depositpaid', 'targetmarginpct', 'status', 'notes', 'createdat'], designRows).then(n => counts.designOrders = n),
+    batchUpsert('stock_movements', 'id', ['id', 'product_id', 'product_name', 'delta', 'type', 'qty_after', 'sale_id', 'note', 'createdat'], stockMoveRows).then(n => counts.stockMovements = n),
+    batchUpsert('credit_eats', 'id', ['id', 'customername', 'date', 'item', 'category', 'qty', 'unitprice', 'total', 'paidamount', 'paid', 'createdat'], creditEatRows).then(n => counts.creditEats = n),
+    batchUpsert('production_register', 'id', ['id', 'date', 'item', 'category', 'qty', 'costeach', 'total', 'createdat'], productionRows).then(n => counts.productionRegisters = n),
+    batchUpsert('wastage_log', 'id', ['id', 'date', 'item', 'category', 'qty', 'costeach', 'lossamount', 'reason', 'createdat'], wastageRows).then(n => counts.wastageLogs = n),
+    batchUpsert('momo_transfers', 'id', ['id', 'category', 'amount', 'comment', 'createdat'], momoRows).then(n => counts.momoTransfers = n),
+  ]);
+
+  res.json({ success: true, restored: counts });
 }));
 
 function mapProduct(r) {

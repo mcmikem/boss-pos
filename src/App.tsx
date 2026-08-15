@@ -3,11 +3,11 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
-import { hashPin } from './utils/crypto';
+import { verifyPinAgainstHash } from './utils/crypto';
 import { downloadBlob } from './utils/download';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -183,10 +183,16 @@ export default function App() {
   useEffect(() => {
     const handleOnline = async () => {
       setIsOnline(true);
-      const n = await flushOutbox();
-      if (n > 0) {
-        triggerToast(`Synced ${n} offline change(s)`, 'success');
-        fetchAllData();
+      try {
+        const n = await flushOutbox();
+        if (n > 0) {
+          triggerToast(`Synced ${n} offline change(s)`, 'success');
+          fetchAllData();
+        } else if (outboxCount() > 0) {
+          triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
+        }
+      } catch {
+        triggerToast('Failed to sync offline changes', 'error');
       }
     };
     const handleOffline = () => setIsOnline(false);
@@ -209,17 +215,24 @@ export default function App() {
         if (n > 0) {
           triggerToast(`Synced ${n} offline change(s)`, 'success');
           fetchAllData();
+        } else if (outboxCount() > 0) {
+          triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
         }
       } catch {}
     })();
   }, [authState]);
 
   // Persist settings (skip the very first render so we never clobber server
-  // values with defaults before the real settings finish loading).
+  // values with defaults before the real settings finish loading). Debounced so
+  // typing in the shop-name field doesn't fire a PUT (DB write + cache clear)
+  // on every keystroke.
   useEffect(() => {
     if (!readyRef.current) return;
     const { hasPin: _hp, ...toSend } = settings;
-    settingsApi.update(toSend).catch(() => triggerToast('Failed to save settings', 'error'));
+    const t = setTimeout(() => {
+      settingsApi.update(toSend).catch(() => triggerToast('Failed to save settings', 'error'));
+    }, 600);
+    return () => clearTimeout(t);
   }, [settings]);
 
   useEffect(() => {
@@ -294,8 +307,7 @@ export default function App() {
       // (authVerify caches the hash to boss_pos_pin).
       const local = localStorage.getItem('boss_pos_pin');
       if (local && !local.startsWith('fb_')) {
-        const entered = await hashPin(pin);
-        if (entered === local) {
+        if (await verifyPinAgainstHash(pin, local)) {
           setAuthState('ready');
           return;
         }
@@ -323,6 +335,23 @@ export default function App() {
     }
   };
 
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRestoreData = async (file: File | undefined) => {
+    if (!file) return;
+    if (!confirm(`Restore from ${file.name}? This replaces matching records with the backup. Continue?`)) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const res = await restoreApi.restore(parsed);
+      const n = res.restored || {};
+      const total = Object.values(n).reduce((a, b) => a + (b || 0), 0);
+      triggerToast(`Restored ${total} record(s). Reloading data…`, 'success');
+      await fetchAllData();
+    } catch {
+      triggerToast('Restore failed — is this a valid backup file?', 'error');
+    }
+  };
+
   const formatCurrency = (ugxVal: number) => {
     if (currency === 'USD') {
       const usdVal = ugxVal / (settings.usdRate || UGX_TO_USD_RATE);
@@ -341,17 +370,28 @@ export default function App() {
   const handleAddProduct = async (newProd: Product) => {
     const prodWithIcon = enrichProductsWithIcons([newProd])[0];
     setProducts(prev => [prodWithIcon, ...prev]);
-    try { await productApi.create(newProd); } catch { triggerToast('Failed to save product', 'error'); }
+    try { await productApi.create(newProd); } catch {
+      setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
+      triggerToast('Failed to save product — not added', 'error');
+    }
   };
 
   const handleUpdateProduct = async (updatedProd: Product) => {
+    const prev = products.find(p => p.id === updatedProd.id);
     setProducts(prev => prev.map(p => p.id === updatedProd.id ? updatedProd : p));
-    try { await productApi.update(updatedProd); } catch { triggerToast('Failed to update product', 'error'); }
+    try { await productApi.update(updatedProd); } catch {
+      if (prev) setProducts(list => list.map(p => p.id === updatedProd.id ? prev : p));
+      triggerToast('Failed to update product — changes reverted', 'error');
+    }
   };
 
   const handleDeleteProduct = async (productId: string) => {
+    const prev = products.find(p => p.id === productId);
     setProducts(prev => prev.filter(p => p.id !== productId));
-    try { await productApi.remove(productId); } catch { triggerToast('Failed to delete product', 'error'); }
+    try { await productApi.remove(productId); } catch {
+      if (prev) setProducts(list => [prev, ...list]);
+      triggerToast('Failed to delete product', 'error');
+    }
   };
 
   const handleAddSale = async (newSale: Sale) => {
@@ -365,7 +405,21 @@ export default function App() {
         return prod;
       });
     });
-    try { await saleApi.create(newSale); } catch { triggerToast('Failed to save sale', 'error'); }
+    try { await saleApi.create(newSale); } catch {
+      // Real server failure (not offline — offline writes are queued). Roll the
+      // sale and its stock effect back so the UI never shows an unsaved sale.
+      setSales(prev => prev.filter(s => s.id !== newSale.id));
+      setProducts(prevProducts => {
+        return prevProducts.map(prod => {
+          const soldItem = newSale.items.find(item => item.productId === prod.id);
+          if (soldItem && !prod.isService) {
+            return { ...prod, stockQty: prod.stockQty + soldItem.qty };
+          }
+          return prod;
+        });
+      });
+      triggerToast('Failed to save sale — not recorded. Refresh stock and retry.', 'error');
+    }
   };
 
   const handleRefundSale = async (saleId: string) => {
@@ -381,18 +435,38 @@ export default function App() {
         return prod;
       });
     });
-    try { await saleApi.refund(saleId); } catch { triggerToast('Failed to refund sale', 'error'); }
+    try { await saleApi.refund(saleId); } catch {
+      setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: false, refundedAt: undefined } : s));
+      setProducts(prevProducts => {
+        return prevProducts.map(prod => {
+          const soldItem = saleToRefund.items.find(item => item.productId === prod.id);
+          if (soldItem && !prod.isService) {
+            return { ...prod, stockQty: prod.stockQty - soldItem.qty };
+          }
+          return prod;
+        });
+      });
+      triggerToast('Failed to refund sale — stock unchanged', 'error');
+      return;
+    }
     triggerToast(`${saleToRefund.orderNumber} refunded. Stock restored.`, 'info');
   };
 
   const handleAddExpense = async (newExpense: Expense) => {
     setExpenses(prev => [newExpense, ...prev]);
-    try { await expenseApi.create(newExpense); } catch { triggerToast('Failed to save expense', 'error'); }
+    try { await expenseApi.create(newExpense); } catch {
+      setExpenses(prev => prev.filter(e => e.id !== newExpense.id));
+      triggerToast('Failed to save expense — not added', 'error');
+    }
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
+    const prev = expenses.find(e => e.id === expenseId);
     setExpenses(prev => prev.filter(e => e.id !== expenseId));
-    try { await expenseApi.remove(expenseId); } catch { triggerToast('Failed to delete expense', 'error'); }
+    try { await expenseApi.remove(expenseId); } catch {
+      if (prev) setExpenses(list => [prev, ...list]);
+      triggerToast('Failed to delete expense', 'error');
+    }
   };
 
   const handleAddExpenseCategory = (name: string) => {
@@ -414,18 +488,31 @@ export default function App() {
 
   const handleAddSupplier = async (newSup: Supplier) => {
     setSuppliers(prev => [...prev, newSup]);
-    try { await supplierApi.create(newSup); } catch { triggerToast('Failed to save supplier', 'error'); }
+    try { await supplierApi.create(newSup); } catch {
+      setSuppliers(prev => prev.filter(s => s.id !== newSup.id));
+      triggerToast('Failed to save supplier — not added', 'error');
+    }
   };
 
   const handleUpdateSupplier = async (updatedSup: Supplier) => {
+    const prev = suppliers.find(s => s.id === updatedSup.id);
     setSuppliers(prev => prev.map(s => s.id === updatedSup.id ? updatedSup : s));
-    try { await supplierApi.update(updatedSup); } catch { triggerToast('Failed to update supplier', 'error'); }
+    try { await supplierApi.update(updatedSup); } catch {
+      if (prev) setSuppliers(list => list.map(s => s.id === updatedSup.id ? prev : s));
+      triggerToast('Failed to update supplier — changes reverted', 'error');
+    }
   };
 
   const handleDeleteSupplier = async (supplierId: string) => {
+    const prev = suppliers.find(s => s.id === supplierId);
+    const prevProducts = products;
     setSuppliers(prev => prev.filter(s => s.id !== supplierId));
     setProducts(prev => prev.map(p => p.supplierId === supplierId ? { ...p, supplierId: undefined } : p));
-    try { await supplierApi.remove(supplierId); } catch { triggerToast('Failed to delete supplier', 'error'); }
+    try { await supplierApi.remove(supplierId); } catch {
+      if (prev) setSuppliers(list => [...list, prev]);
+      setProducts(prevProducts);
+      triggerToast('Failed to delete supplier', 'error');
+    }
   };
 
   const handleAddCategory = (name: string) => {
@@ -463,44 +550,71 @@ export default function App() {
 
   const handleAddCreditEat = async (newEat: CreditEat) => {
     setCreditEats(prev => [newEat, ...prev]);
-    try { await creditEatApi.create(newEat); } catch { triggerToast('Failed to save credit entry', 'error'); }
+    try { await creditEatApi.create(newEat); } catch {
+      setCreditEats(prev => prev.filter(c => c.id !== newEat.id));
+      triggerToast('Failed to save credit entry — not added', 'error');
+    }
   };
 
   const handlePayCreditEat = async (id: string, amount: number) => {
     const prev = creditEats.find(c => c.id === id);
     const next = { ...(prev as CreditEat), paidAmount: (prev?.paidAmount || 0) + amount, paid: (prev?.paidAmount || 0) + amount >= (prev?.total || 0) };
     setCreditEats(cs => cs.map(c => c.id === id ? next : c));
-    try { await creditEatApi.pay(id, amount); } catch { triggerToast('Failed to sync payment to server', 'error'); }
+    try { await creditEatApi.pay(id, amount); } catch {
+      if (prev) setCreditEats(cs => cs.map(c => c.id === id ? prev : c));
+      triggerToast('Failed to sync payment to server', 'error');
+    }
   };
 
   const handleAddProduction = async (p: ProductionRegister) => {
     setProductionRegisters(prev => [p, ...prev]);
-    try { await productionRegisterApi.create(p); } catch { triggerToast('Failed to save production', 'error'); }
+    try { await productionRegisterApi.create(p); } catch {
+      setProductionRegisters(prev => prev.filter(x => x.id !== p.id));
+      triggerToast('Failed to save production — not added', 'error');
+    }
   };
 
   const handleDeleteProduction = async (id: string) => {
+    const prev = productionRegisters.find(p => p.id === id);
     setProductionRegisters(prev => prev.filter(p => p.id !== id));
-    try { await productionRegisterApi.remove(id); } catch { triggerToast('Failed to delete production', 'error'); }
+    try { await productionRegisterApi.remove(id); } catch {
+      if (prev) setProductionRegisters(list => [prev, ...list]);
+      triggerToast('Failed to delete production', 'error');
+    }
   };
 
   const handleAddWastage = async (w: WastageLog) => {
     setWastageLogs(prev => [w, ...prev]);
-    try { await wastageLogApi.create(w); } catch { triggerToast('Failed to save loss', 'error'); }
+    try { await wastageLogApi.create(w); } catch {
+      setWastageLogs(prev => prev.filter(x => x.id !== w.id));
+      triggerToast('Failed to save loss — not added', 'error');
+    }
   };
 
   const handleDeleteWastage = async (id: string) => {
+    const prev = wastageLogs.find(w => w.id === id);
     setWastageLogs(prev => prev.filter(w => w.id !== id));
-    try { await wastageLogApi.remove(id); } catch { triggerToast('Failed to delete loss', 'error'); }
+    try { await wastageLogApi.remove(id); } catch {
+      if (prev) setWastageLogs(list => [prev, ...list]);
+      triggerToast('Failed to delete loss', 'error');
+    }
   };
 
   const handleAddMomoTransfer = async (t: MomoTransfer) => {
     setMomoTransfers(prev => [t, ...prev]);
-    try { await momoTransferApi.create(t); } catch { triggerToast('Failed to save transfer', 'error'); }
+    try { await momoTransferApi.create(t); } catch {
+      setMomoTransfers(prev => prev.filter(x => x.id !== t.id));
+      triggerToast('Failed to save transfer — not added', 'error');
+    }
   };
 
   const handleDeleteMomoTransfer = async (id: string) => {
+    const prev = momoTransfers.find(t => t.id === id);
     setMomoTransfers(prev => prev.filter(t => t.id !== id));
-    try { await momoTransferApi.remove(id); } catch { triggerToast('Failed to delete transfer', 'error'); }
+    try { await momoTransferApi.remove(id); } catch {
+      if (prev) setMomoTransfers(list => [prev, ...list]);
+      triggerToast('Failed to delete transfer', 'error');
+    }
   };
 
   const handleRepeatLastSale = () => {
@@ -822,6 +936,21 @@ export default function App() {
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup
                 </button>
+                <button onClick={() => restoreInputRef.current?.click()}
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
+                  <Download className="w-4 h-4 rotate-180" /> Restore from Backup
+                </button>
+                <input
+                  ref={restoreInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleRestoreData(e.target.files?.[0]);
+                    e.target.value = '';
+                  }}
+                />
+                <p className="text-[10px] text-zinc-600">Restoring merges over existing records. Create a fresh backup first.</p>
               </div>
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();

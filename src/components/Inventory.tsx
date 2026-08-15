@@ -121,7 +121,7 @@ export default function Inventory({
         if (!ctx) { triggerToast('Failed to process image', 'error'); return; }
         ctx.drawImage(img!, 0, 0, w, h);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        if (dataUrl.length > 100_000) {
+        if (dataUrl.length > 60_000) {
           triggerToast('Image too large after compression', 'error');
           return;
         }

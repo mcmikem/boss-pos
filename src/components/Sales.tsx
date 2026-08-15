@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useState, useMemo, useEffect, useRef, lazy, Suspense, type Dispatch, type SetStateAction } from 'react';
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
@@ -15,9 +15,16 @@ import CashTransferModal from './CashTransferModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
-import TailoringOrders from './TailoringOrders';
-import DesignOrders from './DesignOrders';
-import EateryPricing from './EateryPricing';
+// Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
+// bundle) stays small — important on the slow connections this app targets.
+const TailoringOrders = lazy(() => import('./TailoringOrders'));
+const DesignOrders = lazy(() => import('./DesignOrders'));
+const EateryPricing = lazy(() => import('./EateryPricing'));
+const subManagerFallback = (
+  <div className="flex items-center justify-center py-16">
+    <div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" />
+  </div>
+);
 
 interface SalesProps {
   products: Product[];
@@ -422,7 +429,9 @@ export default function Sales({
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> Back to products
             </button>
-            <TailoringOrders triggerToast={triggerToast} />
+            <Suspense fallback={subManagerFallback}>
+              <TailoringOrders triggerToast={triggerToast} />
+            </Suspense>
           </div>
         ) : showDesignOrders ? (
           <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="design-scroll-container">
@@ -430,7 +439,9 @@ export default function Sales({
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> Back to products
             </button>
-            <DesignOrders triggerToast={triggerToast} />
+            <Suspense fallback={subManagerFallback}>
+              <DesignOrders triggerToast={triggerToast} />
+            </Suspense>
           </div>
         ) : showEateryPricing ? (
           <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-pricing-scroll-container">
@@ -438,8 +449,10 @@ export default function Sales({
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> Back to products
             </button>
-            <EateryPricing products={products} onUpdateProduct={onUpdateProduct}
-              formatCurrency={formatCurrency} triggerToast={triggerToast} />
+            <Suspense fallback={subManagerFallback}>
+              <EateryPricing products={products} onUpdateProduct={onUpdateProduct}
+                formatCurrency={formatCurrency} triggerToast={triggerToast} />
+            </Suspense>
           </div>
         ) : (
         /* Products */

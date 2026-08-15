@@ -68,6 +68,8 @@ export function outboxCount(): number {
 // Replay queued offline writes. Returns how many were flushed. On auth errors
 // the entry is kept so offline work is never silently lost — an expired token
 // is re-issued on the next online unlock, and the flush will then succeed.
+// 404 responses count as flushed: the server DELETEs are idempotent now, and a
+// 404 from an already-drained replay must not wedge the outbox forever.
 export async function flushOutbox(): Promise<number> {
   const list = getOutbox();
   if (list.length === 0) return 0;
@@ -80,7 +82,7 @@ export async function flushOutbox(): Promise<number> {
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
         body: entry.body,
       });
-      if (res.ok) {
+      if (res.ok || res.status === 404) {
         flushed++;
         continue;
       }
@@ -149,6 +151,11 @@ export async function nextOrderNumber(): Promise<string | null> {
     });
     if (res.ok) {
       const data = await res.json();
+      // Keep the local offline fallback counter in sync so a later offline
+      // sale can't hand out a number the server will already have used.
+      if (data.number) {
+        try { localStorage.setItem('boss_pos_order_counter', String(data.number)); } catch {}
+      }
       return data.orderNumber || null;
     }
   } catch {}
@@ -383,4 +390,8 @@ export const summaryApi = {
 
 export const exportApi = {
   download: () => api<Record<string, unknown>>('/api/export', { fresh: true }),
+};
+
+export const restoreApi = {
+  restore: (data: Record<string, unknown>) => api<{ success: boolean; restored: Record<string, number> }>('/api/restore', { method: 'POST', body: JSON.stringify(data) }),
 };
