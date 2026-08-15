@@ -1,17 +1,27 @@
 import { useState, useMemo } from 'react';
-import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, TrendingDown } from 'lucide-react';
-import type { Expense, Product } from '../types';
+import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, TrendingDown, LayoutGrid } from 'lucide-react';
+import type { Expense, Product, CreditEat, ProductionRegister, WastageLog } from '../types';
 import QuickExpenseModal from './QuickExpenseModal';
+import CategoryRegister from './CategoryRegister';
 
 interface ExpensesProps {
   expenses: Expense[];
   expenseCategories: string[];
   products: Product[];
+  creditEats: CreditEat[];
+  productionRegisters: ProductionRegister[];
+  wastageLogs: WastageLog[];
   onAddExpense: (expense: Expense) => void;
   onDeleteExpense: (expenseId: string) => void;
   onAddExpenseCategory: (name: string) => void;
   onUpdateExpenseCategory: (oldName: string, newName: string) => void;
   onDeleteExpenseCategory: (name: string) => void;
+  onAddCreditEat: (e: CreditEat) => void;
+  onPayCreditEat: (id: string, amount: number) => void;
+  onAddProduction: (p: ProductionRegister) => void;
+  onDeleteProduction: (id: string) => void;
+  onAddWastage: (w: WastageLog) => void;
+  onDeleteWastage: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -37,10 +47,15 @@ const BREAKDOWN_COLORS = [
 ];
 
 export default function Expenses({
-  expenses, expenseCategories, products, onAddExpense, onDeleteExpense,
+  expenses, expenseCategories, products,
+  creditEats, productionRegisters, wastageLogs,
+  onAddExpense, onDeleteExpense,
   onAddExpenseCategory, onUpdateExpenseCategory, onDeleteExpenseCategory,
+  onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
+  onAddWastage, onDeleteWastage,
   formatCurrency, triggerToast,
 }: ExpensesProps) {
+  const [segment, setSegment] = useState<'general' | 'registers'>('general');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
@@ -76,6 +91,13 @@ export default function Expenses({
   const totalSpent = useMemo(() => {
     return filteredExpenses.reduce((acc, e) => acc + e.amount, 0);
   }, [filteredExpenses]);
+
+  const registerSegments = useMemo(() => {
+    const cats = new Set<string>();
+    products.forEach(p => { if (p.category) cats.add(p.category); });
+    cats.add('Eatery');
+    return Array.from(cats).sort();
+  }, [products]);
 
   const categoryBreakdown = useMemo(() => {
     const map: { [key: string]: { total: number; count: number } } = {};
@@ -118,6 +140,36 @@ export default function Expenses({
 
   return (
     <div className="space-y-5" id="expenses-tab-content">
+      {/* Segment switch */}
+      <div className="flex gap-2">
+        <button onClick={() => setSegment('general')}
+          className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 ${segment === 'general' ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#141414]/60 border-white/5 text-zinc-400 hover:text-zinc-200'}`}>
+          Expenses
+        </button>
+        <button onClick={() => setSegment('registers')}
+          className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${segment === 'registers' ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#141414]/60 border-white/5 text-zinc-400 hover:text-zinc-200'}`}>
+          <LayoutGrid className="w-4 h-4" /> Registers
+        </button>
+      </div>
+
+      {segment === 'registers' ? (
+        <CategoryRegister
+          segments={registerSegments}
+          products={products}
+          creditEats={creditEats}
+          productionRegisters={productionRegisters}
+          wastageLogs={wastageLogs}
+          onAddCreditEat={onAddCreditEat}
+          onPayCreditEat={onPayCreditEat}
+          onAddProduction={onAddProduction}
+          onDeleteProduction={onDeleteProduction}
+          onAddWastage={onAddWastage}
+          onDeleteWastage={onDeleteWastage}
+          formatCurrency={formatCurrency}
+          triggerToast={triggerToast}
+        />
+      ) : (
+      <>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -324,6 +376,8 @@ export default function Expenses({
         formatCurrency={formatCurrency}
         triggerToast={triggerToast}
       />
+      </>
+      )}
     </div>
   );
 }

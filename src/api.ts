@@ -1,4 +1,4 @@
-import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer } from './types';
+import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -329,6 +329,24 @@ export const designOrderApi = {
   create: (o: DesignOrder) => api<DesignOrder>('/api/design-orders', { method: 'POST', body: JSON.stringify(o) }),
   update: (o: DesignOrder) => api<DesignOrder>(`/api/design-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/design-orders/${id}`, { method: 'DELETE' }),
+};
+
+export const creditEatApi = {
+  list: () => api<CreditEat[]>('/api/credit-eats'),
+  create: (e: CreditEat) => api<CreditEat>('/api/credit-eats', { method: 'POST', body: JSON.stringify(e) }),
+  pay: (id: string, amount: number) => api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify({ amount }) }),
+};
+
+export const productionRegisterApi = {
+  list: () => api<ProductionRegister[]>('/api/production-register'),
+  create: (p: ProductionRegister) => api<ProductionRegister>('/api/production-register', { method: 'POST', body: JSON.stringify(p) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/production-register/${id}`, { method: 'DELETE' }),
+};
+
+export const wastageLogApi = {
+  list: () => api<WastageLog[]>('/api/wastage-log'),
+  create: (w: WastageLog) => api<WastageLog>('/api/wastage-log', { method: 'POST', body: JSON.stringify(w) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/wastage-log/${id}`, { method: 'DELETE' }),
 };
 
 export const settingsApi = {

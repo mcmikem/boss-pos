@@ -99,6 +99,40 @@ export interface Expense {
   category: string;
 }
 
+export interface CreditEat {
+  id: string;
+  customerName: string;
+  date: string;
+  item: string;
+  category: string;
+  qty: number;
+  unitPrice: number;
+  total: number;
+  paidAmount: number;
+  paid: boolean;
+}
+
+export interface ProductionRegister {
+  id: string;
+  date: string;
+  item: string;
+  category: string;
+  qty: number;
+  costEach: number;
+  total: number;
+}
+
+export interface WastageLog {
+  id: string;
+  date: string;
+  item: string;
+  category: string;
+  qty: number;
+  costEach: number;
+  lossAmount: number;
+  reason: 'remaining' | 'expired';
+}
+
 export interface Supplier {
   id: string;
   name: string;

@@ -83,7 +83,30 @@ async function initDB() {
     delta INTEGER NOT NULL, type TEXT NOT NULL, qty_after INTEGER NOT NULL,
     sale_id TEXT, note TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
-  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders']) {
+  await sql`CREATE TABLE IF NOT EXISTS credit_eats (
+    id TEXT PRIMARY KEY, customername TEXT NOT NULL, date TEXT NOT NULL,
+    item TEXT NOT NULL, category TEXT DEFAULT 'Eatery',
+    qty INTEGER DEFAULT 1, unitprice DOUBLE PRECISION DEFAULT 0,
+    total DOUBLE PRECISION DEFAULT 0, paidamount DOUBLE PRECISION DEFAULT 0,
+    paid BOOLEAN DEFAULT false, createdat TEXT NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS production_register (
+    id TEXT PRIMARY KEY, date TEXT NOT NULL, item TEXT NOT NULL,
+    category TEXT DEFAULT 'Eatery',
+    qty INTEGER DEFAULT 0, costeach DOUBLE PRECISION DEFAULT 0,
+    total DOUBLE PRECISION DEFAULT 0, createdat TEXT NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS wastage_log (
+    id TEXT PRIMARY KEY, date TEXT NOT NULL, item TEXT NOT NULL,
+    category TEXT DEFAULT 'Eatery',
+    qty INTEGER DEFAULT 0, costeach DOUBLE PRECISION DEFAULT 0,
+    lossamount DOUBLE PRECISION DEFAULT 0, reason TEXT DEFAULT 'remaining',
+    createdat TEXT NOT NULL
+  )`;
+  try { await sql`ALTER TABLE credit_eats ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
+  try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
+  try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'credit_eats', 'production_register', 'wastage_log']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -92,6 +115,9 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_cashtrans_cwid ON cash_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tailoring_cwid ON tailoring_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_design_cwid ON design_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_crediteats_cwid ON credit_eats(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_cwid ON production_register(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_wastage_cwid ON wastage_log(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
   // Random HMAC secret, stored in the DB so all serverless instances agree.
@@ -525,8 +551,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
     ),
     stock AS (
       UPDATE products p SET stockQty = GREATEST(0, p.stockQty - sub.qty)
-      FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub(productId text, qty int)
-      WHERE p.id = sub.productId AND p.isService = false
+      FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub("productId" text, qty int)
+      WHERE p.id = sub."productId" AND p.isService = false
       RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
     )
     SELECT (SELECT count(*)::int FROM ins) AS inserted,
@@ -554,8 +580,8 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
     ),
     stock AS (
       UPDATE products p SET stockQty = p.stockQty + sub.qty
-      FROM del, jsonb_to_recordset(del.items::jsonb) AS sub(productId text, qty int)
-      WHERE p.id = sub.productId AND p.isService = false
+      FROM del, jsonb_to_recordset(del.items::jsonb) AS sub("productId" text, qty int)
+      WHERE p.id = sub."productId" AND p.isService = false
       RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
     )
     SELECT (SELECT count(*)::int FROM del) AS deleted,
@@ -580,16 +606,16 @@ app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
     ),
     stock AS (
       UPDATE products p SET stockQty = p.stockQty + sub.qty
-      FROM upd, jsonb_to_recordset(upd.items::jsonb) AS sub(productId text, qty int)
-      WHERE p.id = sub.productId AND p.isService = false
-      RETURNING p.id, p.name, p.stockqty
+      FROM upd, jsonb_to_recordset(upd.items::jsonb) AS sub("productId" text, qty int)
+      WHERE p.id = sub."productId" AND p.isService = false
+      RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
     )
     SELECT (SELECT count(*)::int FROM upd) AS updated,
-           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty)) FROM stock), '[]'::json) AS stock
+           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'stockqty', stockqty, 'qty', qty)) FROM stock), '[]'::json) AS stock
   `;
   if (r.length === 0 || r[0].updated === 0) return res.status(404).json({ error: 'Sale not found or already refunded' });
   for (const row of r[0].stock || []) {
-    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.stockqty >= 0 ? 0 : 0, type: 'refund', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Refunded' });
+    await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.qty || 0, type: 'refund', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Refunded' });
   }
   res.json({ success: true });
 }));
@@ -612,7 +638,7 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const e = req.body;
   const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,client_write_id)
     VALUES (${e.id},${e.timestamp},${e.description},${e.amount},${e.category||''},${e.clientWriteId||null})
-    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
     return res.json(existing.length ? existing[0] : e);
@@ -658,7 +684,7 @@ app.post('/api/credit-payments', asHandler(async (req, res) => {
   const p = req.body;
   const inserted = await sql`INSERT INTO credit_payments (id,saleid,amount,createdat,client_write_id)
     VALUES (${p.id},${p.saleId},${p.amount},${p.createdAt},${p.clientWriteId||null})
-    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM credit_payments WHERE client_write_id=${p.clientWriteId}`;
     return res.json(existing.length ? existing[0] : p);
@@ -676,7 +702,7 @@ app.post('/api/cash-transfers', asHandler(async (req, res) => {
   const t = req.body;
   const inserted = await sql`INSERT INTO cash_transfers (id,fromcategory,tocategory,amount,reason,createdat,settledat,client_write_id)
     VALUES (${t.id},${t.fromCategory},${t.toCategory},${t.amount},${t.reason||''},${t.createdAt},${t.settledAt||null},${t.clientWriteId||null})
-    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM cash_transfers WHERE client_write_id=${t.clientWriteId}`;
     return res.json(existing.length ? existing[0] : t);
@@ -699,7 +725,7 @@ app.post('/api/tailoring-orders', asHandler(async (req, res) => {
   const o = req.body;
   const inserted = await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat,client_write_id)
     VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.workType},${o.workDescription},${o.totalAmount||0},${o.depositPaid||0},${o.materialCost||0},${o.status||'pending'},${o.notes||''},${o.measurements||''},${o.createdAt},${o.clientWriteId||null})
-    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM tailoring_orders WHERE client_write_id=${o.clientWriteId}`;
     return res.json(existing.length ? existing[0] : o);
@@ -728,7 +754,7 @@ app.post('/api/design-orders', asHandler(async (req, res) => {
   const o = req.body;
   const inserted = await sql`INSERT INTO design_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,ordertype,designbrief,qty,size,materialcost,laborcost,transportcost,unitprice,totalamount,depositpaid,targetmarginpct,status,notes,createdat,client_write_id)
     VALUES (${o.id},${o.customerName},${o.customerPhone||''},${o.orderDate},${o.expectedDate},${o.completedDate||null},${o.orderType},${o.designBrief},${o.qty||1},${o.size||''},${o.materialCost||0},${o.laborCost||0},${o.transportCost||0},${o.unitPrice||0},${o.totalAmount||0},${o.depositPaid||0},${o.targetMarginPct||50},${o.status||'pending'},${o.notes||''},${o.createdAt},${o.clientWriteId||null})
-    ON CONFLICT (client_write_id) DO NOTHING RETURNING id`;
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM design_orders WHERE client_write_id=${o.clientWriteId}`;
     return res.json(existing.length ? existing[0] : o);
@@ -744,6 +770,87 @@ app.put('/api/design-orders/:id', asHandler(async (req, res) => {
 
 app.delete('/api/design-orders/:id', asHandler(async (req, res) => {
   await sql`DELETE FROM design_orders WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
+// === CREDIT EATS (Ababanjibwa Sente) API ===
+app.get('/api/credit-eats', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM credit_eats ORDER BY date DESC, createdat DESC`;
+  res.json(rows.map(mapCreditEat));
+}));
+
+app.post('/api/credit-eats', asHandler(async (req, res) => {
+  const e = req.body;
+  const inserted = await sql`INSERT INTO credit_eats (id,customername,date,item,category,qty,unitprice,total,paidamount,paid,createdat,client_write_id)
+    VALUES (${e.id},${e.customerName},${e.date},${e.item},${e.category||'Eatery'},${e.qty||1},${e.unitPrice||0},${e.total||0},${e.paidAmount||0},${!!e.paid},${e.createdAt||new Date().toISOString()},${e.clientWriteId||null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM credit_eats WHERE client_write_id=${e.clientWriteId}`;
+    return res.json(existing.length ? mapCreditEat(existing[0]) : e);
+  }
+  res.json(e);
+}));
+
+app.post('/api/credit-eats/:id/pay', asHandler(async (req, res) => {
+  const { amount } = req.body || {};
+  const amt = parseFloat(amount) || 0;
+  if (amt <= 0) return res.status(400).json({ error: 'Invalid payment amount' });
+  const r = await sql`
+    WITH upd AS (
+      UPDATE credit_eats
+      SET paidamount = LEAST(total, GREATEST(0, paidamount + ${amt})),
+          paid = (LEAST(total, GREATEST(0, paidamount + ${amt})) >= total)
+      WHERE id=${req.params.id}
+      RETURNING *
+    )
+    SELECT * FROM upd`;
+  if (r.length === 0) return res.status(404).json({ error: 'Credit record not found' });
+  res.json(mapCreditEat(r[0]));
+}));
+
+// === PRODUCTION REGISTER API (daily snack production) ===
+app.get('/api/production-register', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM production_register ORDER BY date DESC, createdat DESC`;
+  res.json(rows.map(mapProductionRegister));
+}));
+
+app.post('/api/production-register', asHandler(async (req, res) => {
+  const p = req.body;
+  const inserted = await sql`INSERT INTO production_register (id,date,item,category,qty,costeach,total,createdat,client_write_id)
+    VALUES (${p.id},${p.date},${p.item},${p.category||'Eatery'},${p.qty||0},${p.costEach||0},${p.total||0},${p.createdAt||new Date().toISOString()},${p.clientWriteId||null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM production_register WHERE client_write_id=${p.clientWriteId}`;
+    return res.json(existing.length ? mapProductionRegister(existing[0]) : p);
+  }
+  res.json(p);
+}));
+
+app.delete('/api/production-register/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM production_register WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
+// === WASTAGE / LOSSES API (remaining or expired eats) ===
+app.get('/api/wastage-log', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM wastage_log ORDER BY date DESC, createdat DESC`;
+  res.json(rows.map(mapWastageLog));
+}));
+
+app.post('/api/wastage-log', asHandler(async (req, res) => {
+  const w = req.body;
+  const inserted = await sql`INSERT INTO wastage_log (id,date,item,category,qty,costeach,lossamount,reason,createdat,client_write_id)
+    VALUES (${w.id},${w.date},${w.item},${w.category||'Eatery'},${w.qty||0},${w.costEach||0},${w.lossAmount||0},${w.reason||'remaining'},${w.createdAt||new Date().toISOString()},${w.clientWriteId||null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM wastage_log WHERE client_write_id=${w.clientWriteId}`;
+    return res.json(existing.length ? mapWastageLog(existing[0]) : w);
+  }
+  res.json(w);
+}));
+
+app.delete('/api/wastage-log/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM wastage_log WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
 
@@ -825,7 +932,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves] = await Promise.all([
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM sales`,
@@ -836,6 +943,9 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM tailoring_orders`,
     sql`SELECT * FROM design_orders`,
     sql`SELECT * FROM stock_movements`,
+    sql`SELECT * FROM credit_eats`,
+    sql`SELECT * FROM production_register`,
+    sql`SELECT * FROM wastage_log`,
   ]);
   res.json({
     exportedAt: new Date().toISOString(),
@@ -849,6 +959,9 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     tailoringOrders: tailoring.map(mapTailoringOrder),
     designOrders: design.map(mapDesignOrder),
     stockMovements: stockMoves.map(mapStockMovement),
+    creditEats: creditEats.map(mapCreditEat),
+    productionRegisters: productionRegisters.map(mapProductionRegister),
+    wastageLogs: wastageLogs.map(mapWastageLog),
   });
 }));
 
@@ -929,6 +1042,32 @@ function mapStockMovement(r) {
     id: r.id, productId: r.product_id, productName: r.product_name,
     delta: r.delta, type: r.type, qtyAfter: r.qty_after,
     saleId: r.sale_id, note: r.note, createdAt: r.createdat,
+  };
+}
+
+function mapCreditEat(r) {
+  return {
+    id: r.id, customerName: r.customername, date: r.date, item: r.item,
+    category: r.category || 'Eatery',
+    qty: r.qty || 1, unitPrice: r.unitprice || 0, total: r.total || 0,
+    paidAmount: r.paidamount || 0, paid: !!r.paid,
+  };
+}
+
+function mapProductionRegister(r) {
+  return {
+    id: r.id, date: r.date, item: r.item,
+    category: r.category || 'Eatery',
+    qty: r.qty || 0, costEach: r.costeach || 0, total: r.total || 0,
+  };
+}
+
+function mapWastageLog(r) {
+  return {
+    id: r.id, date: r.date, item: r.item,
+    category: r.category || 'Eatery',
+    qty: r.qty || 0, costEach: r.costeach || 0, lossAmount: r.lossamount || 0,
+    reason: r.reason || 'remaining',
   };
 }
 

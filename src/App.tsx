@@ -2,8 +2,8 @@ import { useState, useEffect, lazy, Suspense, useRef } from 'react';
 import { 
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
+import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog } from './types';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -57,6 +57,9 @@ export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [creditPayments, setCreditPayments] = useState<CreditPayment[]>([]);
+  const [creditEats, setCreditEats] = useState<CreditEat[]>([]);
+  const [productionRegisters, setProductionRegisters] = useState<ProductionRegister[]>([]);
+  const [wastageLogs, setWastageLogs] = useState<WastageLog[]>([]);
   const [categories, setCategories] = useState<string[]>(() => {
     const saved = localStorage.getItem('boss_pos_categories');
     return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
@@ -104,6 +107,9 @@ export default function App() {
       saleApi.list().then(setSales).catch(fail('sales')),
       expenseApi.list().then(setExpenses).catch(fail('expenses')),
       creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
+      creditEatApi.list().then(setCreditEats).catch(fail('credit eats')),
+      productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
+      wastageLogApi.list().then(setWastageLogs).catch(fail('wastage')),
     ]);
     setLoading(false);
     if (failed.length === 6) {
@@ -189,6 +195,22 @@ export default function App() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Flush pending offline writes on every unlock/boot too. The browser
+  // `online` event is unreliable on old Android, so queued writes may
+  // otherwise sit in the outbox until the next online event fires.
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    (async () => {
+      try {
+        const n = await flushOutbox();
+        if (n > 0) {
+          triggerToast(`Synced ${n} offline change(s)`, 'success');
+          fetchAllData();
+        }
+      } catch {}
+    })();
+  }, [authState]);
 
   // Persist settings (skip the very first render so we never clobber server
   // values with defaults before the real settings finish loading).
@@ -434,6 +456,38 @@ export default function App() {
     }
   };
 
+  const handleAddCreditEat = async (newEat: CreditEat) => {
+    setCreditEats(prev => [newEat, ...prev]);
+    try { await creditEatApi.create(newEat); } catch { triggerToast('Failed to save credit entry', 'error'); }
+  };
+
+  const handlePayCreditEat = async (id: string, amount: number) => {
+    const prev = creditEats.find(c => c.id === id);
+    const next = { ...(prev as CreditEat), paidAmount: (prev?.paidAmount || 0) + amount, paid: (prev?.paidAmount || 0) + amount >= (prev?.total || 0) };
+    setCreditEats(cs => cs.map(c => c.id === id ? next : c));
+    try { await creditEatApi.pay(id, amount); } catch { triggerToast('Failed to sync payment to server', 'error'); }
+  };
+
+  const handleAddProduction = async (p: ProductionRegister) => {
+    setProductionRegisters(prev => [p, ...prev]);
+    try { await productionRegisterApi.create(p); } catch { triggerToast('Failed to save production', 'error'); }
+  };
+
+  const handleDeleteProduction = async (id: string) => {
+    setProductionRegisters(prev => prev.filter(p => p.id !== id));
+    try { await productionRegisterApi.remove(id); } catch { triggerToast('Failed to delete production', 'error'); }
+  };
+
+  const handleAddWastage = async (w: WastageLog) => {
+    setWastageLogs(prev => [w, ...prev]);
+    try { await wastageLogApi.create(w); } catch { triggerToast('Failed to save loss', 'error'); }
+  };
+
+  const handleDeleteWastage = async (id: string) => {
+    setWastageLogs(prev => prev.filter(w => w.id !== id));
+    try { await wastageLogApi.remove(id); } catch { triggerToast('Failed to delete loss', 'error'); }
+  };
+
   const handleRepeatLastSale = () => {
     if (sales.length === 0) return;
     const lastSale = sales[0];
@@ -492,10 +546,19 @@ export default function App() {
           <Expenses 
             expenses={expenses} expenseCategories={expenseCategories}
             products={products}
+            creditEats={creditEats}
+            productionRegisters={productionRegisters}
+            wastageLogs={wastageLogs}
             onAddExpense={handleAddExpense} onDeleteExpense={handleDeleteExpense}
             onAddExpenseCategory={handleAddExpenseCategory}
             onUpdateExpenseCategory={handleUpdateExpenseCategory}
             onDeleteExpenseCategory={handleDeleteExpenseCategory}
+            onAddCreditEat={handleAddCreditEat}
+            onPayCreditEat={handlePayCreditEat}
+            onAddProduction={handleAddProduction}
+            onDeleteProduction={handleDeleteProduction}
+            onAddWastage={handleAddWastage}
+            onDeleteWastage={handleDeleteWastage}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
           </Suspense>

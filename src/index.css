@@ -18,6 +18,22 @@ body {
   color: #F5F5F5;
 }
 
+/* Old Android WebView/Chrome applies "font boosting" which inflates small text,
+   jumbling tightly spaced layouts. Opt out so our tiny labels stay their size. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* `100vh` on old Android counts the URL bar, so fixed-height shells overflow.
+   Use dvh when available, otherwise fall back to the safe svh/vh. */
+@supports (height: 100dvh) {
+  .h-screen, .min-h-screen {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
+
 .boss-card {
   background-color: var(--color-obsidian-card);
   border: 1px solid var(--color-obsidian-border);
