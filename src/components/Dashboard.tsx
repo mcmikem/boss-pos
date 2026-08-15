@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Sale, Expense, Product, StoreSettings } from '../types';
 import { printReceipt } from '../utils/receipt';
+import { localDayKey, todayLocalKey } from '../utils/dates';
 
 interface DashboardProps {
   sales: Sale[];
@@ -49,9 +50,9 @@ export default function Dashboard({
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showRepeatConfirm, setShowRepeatConfirm] = useState(false);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  
-  const todayAllSales = sales.filter(s => s.timestamp.startsWith(todayStr));
+  const todayStr = todayLocalKey();
+
+  const todayAllSales = sales.filter(s => localDayKey(s.timestamp) === todayStr);
   const todaySales = todayAllSales.filter(s => !s.refunded);
   const todaySalesSum = todaySales.reduce((acc, s) => acc + s.total, 0);
 
@@ -72,10 +73,10 @@ export default function Dashboard({
   }, 0);
   
   const todayExpensesSum = expenses
-    .filter(e => e.timestamp.startsWith(todayStr))
+    .filter(e => localDayKey(e.timestamp) === todayStr)
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const todayExpenses = expenses.filter(e => e.timestamp.startsWith(todayStr));
+  const todayExpenses = expenses.filter(e => localDayKey(e.timestamp) === todayStr);
 
   const grossProfit = todaySalesSum - todayCostSum;
   const netProfit = grossProfit - todayExpensesSum;

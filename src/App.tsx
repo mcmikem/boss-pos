@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken, setAuthToken } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -265,7 +265,10 @@ export default function App() {
     events.forEach(e => window.addEventListener(e, bump, { passive: true }));
     const iv = setInterval(() => {
       if (Date.now() - last > IDLE_LOCK_MS) {
-        setAuthToken(null);
+        // Keep the auth token: clearing it would make the outbox replay without
+        // auth after an offline re-unlock, and the server would drop those
+        // queued sales (data loss). The lock screen is still enforced via
+        // authState; the token only expires on the server after 7 days.
         setAuthState('locked');
         triggerToast('Locked after inactivity', 'info');
       }

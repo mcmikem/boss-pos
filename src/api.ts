@@ -65,8 +65,9 @@ export function outboxCount(): number {
   return getOutbox().length;
 }
 
-// Replay queued offline writes. Returns how many were flushed. Auth errors
-// (expired token) drop the entry rather than retrying forever.
+// Replay queued offline writes. Returns how many were flushed. On auth errors
+// the entry is kept so offline work is never silently lost — an expired token
+// is re-issued on the next online unlock, and the flush will then succeed.
 export async function flushOutbox(): Promise<number> {
   const list = getOutbox();
   if (list.length === 0) return 0;
@@ -83,7 +84,6 @@ export async function flushOutbox(): Promise<number> {
         flushed++;
         continue;
       }
-      if (res.status === 401 || res.status === 403) continue;
       remaining.push(entry);
     } catch {
       remaining.push(entry);

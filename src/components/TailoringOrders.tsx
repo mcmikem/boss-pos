@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
 import type { TailoringOrder } from '../types';
 import { tailoringOrderApi } from '../api';
+import { localDayKey, todayLocalKey } from '../utils/dates';
 
 const WORK_PRESETS: Record<string, string[]> = {
   repair: ['Trouser Hemming', 'Zip Replacement', 'Patching', 'Alteration', 'Other Repair'],
@@ -44,7 +45,7 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
     expectedDate: '', notes: '', measurements: '',
   });
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayLocalKey();
 
   useEffect(() => {
     tailoringOrderApi.list()
@@ -77,7 +78,7 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
   const pendingCount = orders.filter(o => o.status === 'pending').length;
   const inProgressCount = orders.filter(o => o.status === 'in_progress').length;
   const completedToday = orders.filter(o => o.status === 'completed' && o.completedDate?.startsWith(today)).length;
-  const deliveredToday = orders.filter(o => o.status === 'delivered' && o.createdAt.startsWith(today)).length;
+  const deliveredToday = orders.filter(o => o.status === 'delivered' && localDayKey(o.createdAt) === today).length;
 
   function resetForm() {
     setF({ customerName: '', customerPhone: '', workType: 'repair', workDescription: '', totalAmount: '', depositPaid: '', materialCost: '', expectedDate: '', notes: '', measurements: '' });

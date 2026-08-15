@@ -3,6 +3,7 @@ import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, Trending
 import type { Expense, Product, CreditEat, ProductionRegister, WastageLog } from '../types';
 import QuickExpenseModal from './QuickExpenseModal';
 import CategoryRegister from './CategoryRegister';
+import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
 interface ExpensesProps {
   expenses: Expense[];
@@ -67,8 +68,8 @@ export default function Expenses({
   const timeRange = useMemo(() => {
     switch (timeFilter) {
       case 'today': {
-        const today = new Date().toDateString();
-        return { label: 'Today', filter: (ts: string) => new Date(ts).toDateString() === today };
+        const today = todayLocalKey();
+        return { label: 'Today', filter: (ts: string) => localDayKey(ts) === today };
       }
       case 'week': {
         const cutoff = new Date();
@@ -76,8 +77,8 @@ export default function Expenses({
         return { label: 'Last 7 days', filter: (ts: string) => new Date(ts) >= cutoff };
       }
       case 'month': {
-        const month = new Date().toISOString().slice(0, 7);
-        return { label: 'This month', filter: (ts: string) => ts.startsWith(month) };
+        const month = localMonthKey(new Date().toISOString());
+        return { label: 'This month', filter: (ts: string) => localMonthKey(ts) === month };
       }
       default:
         return { label: 'All time', filter: () => true };

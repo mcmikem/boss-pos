@@ -76,6 +76,7 @@ export default function Sales({
   const [showTransfers, setShowTransfers] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
+  const [isCompleting, setIsCompleting] = useState(false);
   const [visibleCount, setVisibleCount] = useState(30);
   const PAGE_SIZE = 30;
 
@@ -213,7 +214,7 @@ export default function Sales({
   const subtotal = cart.reduce((acc, item) => acc + item.lineTotal, 0);
   const discountNum = discountType === 'percent'
     ? Math.min(parseFloat(discount) || 0, 100) / 100 * subtotal
-    : Math.max(0, parseFloat(discount) || 0);
+    : Math.min(Math.max(0, parseFloat(discount) || 0), subtotal);
   const total = Math.max(0, subtotal - discountNum);
   const isDisabled = cart.length === 0 || (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total);
   const disabledReason = cart.length === 0
@@ -224,19 +225,50 @@ export default function Sales({
   const tax = 0;
 
   const handleCompleteSale = async () => {
+    if (isCompleting) return;
     if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return; }
+
+    // Re-validate stock against the live catalog. The cart can go stale across
+    // tab switches or stock edits, so never sell more than is actually there.
+    const oversold: string[] = [];
+    const clampedItems = cart.map(item => {
+      const live = products.find(p => p.id === item.productId);
+      if (live?.isService) return item;
+      const available = live ? live.stockQty : item.qty;
+      if (item.qty > available) {
+        oversold.push(`${item.productName} (need ${item.qty}, have ${available})`);
+        return { ...item, qty: Math.max(0, available), lineTotal: Math.max(0, available) * item.unitPrice };
+      }
+      return item;
+    });
+    const itemsToSell = clampedItems.filter(i => i.qty > 0);
+    const saleSubtotal = itemsToSell.reduce((acc, item) => acc + item.lineTotal, 0);
+    const saleDiscount = discountType === 'percent'
+      ? Math.min(parseFloat(discount) || 0, 100) / 100 * saleSubtotal
+      : Math.min(Math.max(0, parseFloat(discount) || 0), saleSubtotal);
+    const saleTotal = Math.max(0, saleSubtotal - saleDiscount);
+    if (oversold.length > 0) {
+      setCart(clampedItems);
+      if (itemsToSell.length === 0) {
+        triggerToast(`Out of stock: ${oversold.join(', ')}`, 'error');
+        return;
+      }
+      triggerToast(`Stock shortage — selling available only: ${oversold.join(', ')}`, 'error');
+    }
+
+    setIsCompleting(true);
     const cashPaidNum = parseFloat(customCashReceived);
     let changeMsg = '';
-    if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= total) {
-      changeMsg = ` Change: ${formatCurrency(cashPaidNum - total)}`;
+    if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= saleTotal) {
+      changeMsg = ` Change: ${formatCurrency(cashPaidNum - saleTotal)}`;
     }
     let orderNumber = await nextOrderNumber();
     if (!orderNumber) orderNumber = localOrderNumber();
     const newSale: Sale = {
-      id: `sale-${Date.now()}`, orderNumber, timestamp: new Date().toISOString(),
-      items: [...cart], subtotal: total, tax, total, paymentMethod,
+      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, orderNumber, timestamp: new Date().toISOString(),
+      items: itemsToSell, subtotal: saleSubtotal, tax, total: saleTotal, paymentMethod,
       customerName: customerName.trim() || undefined,
-      discount: discountNum > 0 ? discountNum : undefined,
+      discount: saleDiscount > 0 ? saleDiscount : undefined,
     };
     onAddSale(newSale);
     setCart([]);
@@ -244,6 +276,7 @@ export default function Sales({
     setDiscount('');
     setCustomerName('');
     setIsMobileCartOpen(false);
+    setIsCompleting(false);
     triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
   };
   handleCompleteSaleRef.current = handleCompleteSale;
@@ -804,6 +837,7 @@ export default function Sales({
         isOpen={showConfirmSale}
         onClose={() => setShowConfirmSale(false)}
         onConfirm={handleCompleteSale}
+        isCompleting={isCompleting}
         cart={cart}
         total={total}
         discountNum={discountNum}

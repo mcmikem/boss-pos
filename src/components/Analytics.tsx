@@ -9,6 +9,7 @@ import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
 import { designOrderApi } from '../api';
 import { downloadBlob } from '../utils/download';
+import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -95,16 +96,16 @@ export default function Analytics({
   const timeRange = useMemo(() => {
     const now = new Date();
     if (timeFilter === 'Daily') {
-      const day = now.toISOString().split('T')[0];
-      return { prefix: day, filter: (ts: string) => ts.startsWith(day) };
+      const day = todayLocalKey();
+      return { prefix: day, filter: (ts: string) => localDayKey(ts) === day };
     }
     if (timeFilter === 'Weekly') {
       const weekAgo = new Date(now);
       weekAgo.setDate(weekAgo.getDate() - 7);
       return { prefix: '', filter: (ts: string) => new Date(ts) >= weekAgo };
     }
-    const month = now.toISOString().slice(0, 7);
-    return { prefix: month, filter: (ts: string) => ts.startsWith(month) };
+    const month = localMonthKey(now.toISOString());
+    return { prefix: month, filter: (ts: string) => localMonthKey(ts) === month };
   }, [timeFilter]);
 
   const filteredSales = useMemo(() => {

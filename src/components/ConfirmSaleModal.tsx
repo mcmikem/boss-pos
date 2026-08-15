@@ -4,6 +4,7 @@ interface ConfirmSaleModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
+  isCompleting?: boolean;
   cart: SaleItem[];
   total: number;
   discountNum: number;
@@ -11,7 +12,7 @@ interface ConfirmSaleModalProps {
   formatCurrency: (val: number) => string;
 }
 
-export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, cart, total, discountNum, paymentMethod, formatCurrency }: ConfirmSaleModalProps) {
+export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isCompleting = false, cart, total, discountNum, paymentMethod, formatCurrency }: ConfirmSaleModalProps) {
   if (!isOpen) return null;
 
   return (
@@ -39,10 +40,12 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, cart, tot
           </div>
         </div>
         <div className="flex gap-2">
-          <button onClick={onClose}
-            className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider">Cancel</button>
-          <button onClick={() => { Promise.resolve(onConfirm()).finally(onClose); }}
-            className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest">Confirm</button>
+          <button onClick={onClose} disabled={isCompleting}
+            className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed">Cancel</button>
+          <button onClick={() => { Promise.resolve(onConfirm()).finally(onClose); }} disabled={isCompleting}
+            className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed">
+            {isCompleting ? 'Saving...' : 'Confirm'}
+          </button>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Palette, Plus, Calendar, X, Search, User, Layers, Ruler, Calculator, ChevronRight, RotateCcw, Printer, MessageCircle, FileText } from 'lucide-react';
 import type { DesignOrder } from '../types';
 import { designOrderApi } from '../api';
+import { localDayKey, todayLocalKey } from '../utils/dates';
 
 const WORK_PRESETS: Record<string, string[]> = {
   logo: ['Logo Design', 'Brand Identity', 'Letterhead', 'Business Card + Logo', 'Full Branding Pack'],
@@ -67,7 +68,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
     material: 'sticker', unit: 'cm', width: '', height: '', rate: '13000', factor: '1',
   });
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayLocalKey();
 
   useEffect(() => {
     designOrderApi.list()
@@ -101,8 +102,8 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
   const pendingCount = orders.filter(o => o.status === 'pending').length;
   const activeCount = orders.filter(o => o.status === 'in_progress' || o.status === 'review').length;
   const completedToday = orders.filter(o => o.status === 'completed' && o.completedDate?.startsWith(today)).length;
-  const deliveredToday = orders.filter(o => o.status === 'delivered' && o.createdAt.startsWith(today)).length;
-  const revenueToday = orders.filter(o => o.status === 'delivered' && o.createdAt.startsWith(today))
+  const deliveredToday = orders.filter(o => o.status === 'delivered' && localDayKey(o.createdAt) === today).length;
+  const revenueToday = orders.filter(o => o.status === 'delivered' && localDayKey(o.createdAt) === today)
     .reduce((acc, o) => acc + o.totalAmount, 0);
 
   // Generic pricing calc (non large-format jobs).
