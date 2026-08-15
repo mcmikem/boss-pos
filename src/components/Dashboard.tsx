@@ -10,13 +10,12 @@ import {
   Zap,
   ArrowRight,
   X,
-  Share2,
   Plus,
   Printer
 } from 'lucide-react';
 import type { Sale, Expense, Product, StoreSettings } from '../types';
-import { printReceipt } from '../utils/receipt';
 import { localDayKey, todayLocalKey } from '../utils/dates';
+import ReceiptModal from './ReceiptModal';
 
 interface DashboardProps {
   sales: Sale[];
@@ -29,6 +28,7 @@ interface DashboardProps {
   settings: StoreSettings;
   onAddExpense: (expense: Expense) => void;
   expenseCategories: string[];
+  triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
 export default function Dashboard({ 
@@ -41,9 +41,11 @@ export default function Dashboard({
   onRefundSale,
   settings,
   onAddExpense,
-  expenseCategories
+  expenseCategories,
+  triggerToast
 }: DashboardProps) {
   const [selectedSaleForModal, setSelectedSaleForModal] = useState<Sale | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [quickExpenseDesc, setQuickExpenseDesc] = useState('');
   const [quickExpenseAmt, setQuickExpenseAmt] = useState('');
   const [quickExpenseCat, setQuickExpenseCat] = useState(expenseCategories[0] || 'Stock Purchase');
@@ -108,13 +110,6 @@ export default function Dashboard({
     setQuickExpenseDesc('');
     setQuickExpenseAmt('');
     setShowQuickExpense(false);
-  };
-
-  const shareReceiptViaWhatsApp = (sale: Sale) => {
-    const itemsList = sale.items.map(i => `${i.productName} x${i.qty} = ${formatCurrency(i.lineTotal)}`).join('\n');
-    const msg = `*${settings.shopName}*\n${sale.orderNumber}\n${new Date(sale.timestamp).toLocaleString()}\n\n${itemsList}\n\nTotal: ${formatCurrency(sale.total)}\nPayment: ${sale.paymentMethod}${sale.customerName ? `\nCustomer: ${sale.customerName}` : ''}`;
-    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
   };
 
   return (
@@ -416,13 +411,9 @@ export default function Dashboard({
             )}
 
             <div className="flex gap-2 mt-4">
-              <button onClick={() => printReceipt(selectedSaleForModal, settings, formatCurrency)}
+              <button onClick={() => setShowReceiptModal(true)}
                 className="flex-1 h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2">
-                <Printer className="w-4 h-4" /> Print
-              </button>
-              <button onClick={() => shareReceiptViaWhatsApp(selectedSaleForModal)}
-                className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-xs tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2">
-                <Share2 className="w-4 h-4" /> Share
+                <Printer className="w-4 h-4" /> Receipt
               </button>
             </div>
             <div className="flex gap-2 mt-2">
@@ -457,6 +448,16 @@ export default function Dashboard({
             </div>
           </div>
         </div>
+      )}
+
+      {showReceiptModal && selectedSaleForModal && (
+        <ReceiptModal
+          sale={selectedSaleForModal}
+          settings={settings}
+          formatCurrency={formatCurrency}
+          onClose={() => setShowReceiptModal(false)}
+          triggerToast={triggerToast}
+        />
       )}
     </div>
   );

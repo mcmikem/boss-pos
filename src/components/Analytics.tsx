@@ -436,6 +436,7 @@ const colorsMap: { [key: string]: string } = {
             settings={settings}
             onAddExpense={onAddExpense}
             expenseCategories={expenseCategories}
+            triggerToast={triggerToast}
           />
           <nav className="flex gap-2 pb-2 overflow-x-auto no-scrollbar">
             {['Daily', 'Weekly', 'Monthly'].map(filter => (

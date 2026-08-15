@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, TrendingDown, LayoutGrid } from 'lucide-react';
-import type { Expense, Product, CreditEat, ProductionRegister, WastageLog } from '../types';
+import type { Expense, Product, Sale, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from '../types';
 import QuickExpenseModal from './QuickExpenseModal';
 import CategoryRegister from './CategoryRegister';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
@@ -9,9 +9,11 @@ interface ExpensesProps {
   expenses: Expense[];
   expenseCategories: string[];
   products: Product[];
+  sales: Sale[];
   creditEats: CreditEat[];
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
+  momoTransfers: MomoTransfer[];
   onAddExpense: (expense: Expense) => void;
   onDeleteExpense: (expenseId: string) => void;
   onAddExpenseCategory: (name: string) => void;
@@ -23,6 +25,8 @@ interface ExpensesProps {
   onDeleteProduction: (id: string) => void;
   onAddWastage: (w: WastageLog) => void;
   onDeleteWastage: (id: string) => void;
+  onAddMomoTransfer: (t: MomoTransfer) => void;
+  onDeleteMomoTransfer: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -48,12 +52,13 @@ const BREAKDOWN_COLORS = [
 ];
 
 export default function Expenses({
-  expenses, expenseCategories, products,
-  creditEats, productionRegisters, wastageLogs,
+  expenses, expenseCategories, products, sales,
+  creditEats, productionRegisters, wastageLogs, momoTransfers,
   onAddExpense, onDeleteExpense,
   onAddExpenseCategory, onUpdateExpenseCategory, onDeleteExpenseCategory,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
   onAddWastage, onDeleteWastage,
+  onAddMomoTransfer, onDeleteMomoTransfer,
   formatCurrency, triggerToast,
 }: ExpensesProps) {
   const [segment, setSegment] = useState<'general' | 'registers'>('general');
@@ -99,6 +104,24 @@ export default function Expenses({
     cats.add('Eatery');
     return Array.from(cats).sort();
   }, [products]);
+
+  // Today's collected cash per category (excludes credit/book — that money
+  // isn't in hand yet). Money from each buz is sent to Mobile Money.
+  const todayCollectedByCategory = useMemo(() => {
+    const map: { [key: string]: number } = {};
+    const today = todayLocalKey();
+    sales.forEach(s => {
+      if (s.refunded) return;
+      if (s.paymentMethod === 'Credit / Book') return;
+      if (localDayKey(s.timestamp) !== today) return;
+      s.items.forEach(item => {
+        const prod = products.find(p => p.id === item.productId);
+        const cat = prod?.category || 'Eatery';
+        map[cat] = (map[cat] || 0) + (item.lineTotal || 0);
+      });
+    });
+    return map;
+  }, [sales, products]);
 
   const categoryBreakdown = useMemo(() => {
     const map: { [key: string]: { total: number; count: number } } = {};
@@ -160,12 +183,16 @@ export default function Expenses({
           creditEats={creditEats}
           productionRegisters={productionRegisters}
           wastageLogs={wastageLogs}
+          momoTransfers={momoTransfers}
+          todayCollectedByCategory={todayCollectedByCategory}
           onAddCreditEat={onAddCreditEat}
           onPayCreditEat={onPayCreditEat}
           onAddProduction={onAddProduction}
           onDeleteProduction={onDeleteProduction}
           onAddWastage={onAddWastage}
           onDeleteWastage={onDeleteWastage}
+          onAddMomoTransfer={onAddMomoTransfer}
+          onDeleteMomoTransfer={onDeleteMomoTransfer}
           formatCurrency={formatCurrency}
           triggerToast={triggerToast}
         />

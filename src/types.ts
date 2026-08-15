@@ -133,6 +133,14 @@ export interface WastageLog {
   reason: 'remaining' | 'expired';
 }
 
+export interface MomoTransfer {
+  id: string;
+  category: string;
+  amount: number;
+  comment: string;
+  createdAt: string;
+}
+
 export interface Supplier {
   id: string;
   name: string;

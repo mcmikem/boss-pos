@@ -2,8 +2,8 @@ import { useState, useEffect, lazy, Suspense, useRef } from 'react';
 import { 
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download
 } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken } from './api';
+import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, exportApi, getAuthToken } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -60,6 +60,7 @@ export default function App() {
   const [creditEats, setCreditEats] = useState<CreditEat[]>([]);
   const [productionRegisters, setProductionRegisters] = useState<ProductionRegister[]>([]);
   const [wastageLogs, setWastageLogs] = useState<WastageLog[]>([]);
+  const [momoTransfers, setMomoTransfers] = useState<MomoTransfer[]>([]);
   const [categories, setCategories] = useState<string[]>(() => {
     const saved = localStorage.getItem('boss_pos_categories');
     return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
@@ -110,9 +111,10 @@ export default function App() {
       creditEatApi.list().then(setCreditEats).catch(fail('credit eats')),
       productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
       wastageLogApi.list().then(setWastageLogs).catch(fail('wastage')),
+      momoTransferApi.list().then(setMomoTransfers).catch(fail('momo transfers')),
     ]);
     setLoading(false);
-    if (failed.length === 6) {
+    if (failed.length >= 6) {
       setApiError(true);
     } else if (failed.length > 0) {
       triggerToast(`Failed to load: ${failed.join(', ')}. Check connection.`, 'error');
@@ -491,6 +493,16 @@ export default function App() {
     try { await wastageLogApi.remove(id); } catch { triggerToast('Failed to delete loss', 'error'); }
   };
 
+  const handleAddMomoTransfer = async (t: MomoTransfer) => {
+    setMomoTransfers(prev => [t, ...prev]);
+    try { await momoTransferApi.create(t); } catch { triggerToast('Failed to save transfer', 'error'); }
+  };
+
+  const handleDeleteMomoTransfer = async (id: string) => {
+    setMomoTransfers(prev => prev.filter(t => t.id !== id));
+    try { await momoTransferApi.remove(id); } catch { triggerToast('Failed to delete transfer', 'error'); }
+  };
+
   const handleRepeatLastSale = () => {
     if (sales.length === 0) return;
     const lastSale = sales[0];
@@ -549,9 +561,11 @@ export default function App() {
           <Expenses 
             expenses={expenses} expenseCategories={expenseCategories}
             products={products}
+            sales={sales}
             creditEats={creditEats}
             productionRegisters={productionRegisters}
             wastageLogs={wastageLogs}
+            momoTransfers={momoTransfers}
             onAddExpense={handleAddExpense} onDeleteExpense={handleDeleteExpense}
             onAddExpenseCategory={handleAddExpenseCategory}
             onUpdateExpenseCategory={handleUpdateExpenseCategory}
@@ -562,6 +576,8 @@ export default function App() {
             onDeleteProduction={handleDeleteProduction}
             onAddWastage={handleAddWastage}
             onDeleteWastage={handleDeleteWastage}
+            onAddMomoTransfer={handleAddMomoTransfer}
+            onDeleteMomoTransfer={handleDeleteMomoTransfer}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
           </Suspense>

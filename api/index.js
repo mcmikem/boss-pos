@@ -103,10 +103,15 @@ async function initDB() {
     lossamount DOUBLE PRECISION DEFAULT 0, reason TEXT DEFAULT 'remaining',
     createdat TEXT NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS momo_transfers (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL, comment TEXT DEFAULT '',
+    createdat TEXT NOT NULL
+  )`;
   try { await sql`ALTER TABLE credit_eats ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
-  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'credit_eats', 'production_register', 'wastage_log']) {
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -118,6 +123,7 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_crediteats_cwid ON credit_eats(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_cwid ON production_register(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_wastage_cwid ON wastage_log(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_momotrans_cwid ON momo_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
   // Random HMAC secret, stored in the DB so all serverless instances agree.
@@ -854,6 +860,31 @@ app.delete('/api/wastage-log/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === MOMO TRANSFERS API (confirm money sent from a business to Mobile Money) ===
+app.get('/api/momo-transfers', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM momo_transfers ORDER BY createdat DESC`;
+  res.json(rows.map(mapMomoTransfer));
+}));
+
+app.post('/api/momo-transfers', asHandler(async (req, res) => {
+  const t = req.body;
+  const amount = Math.max(0, parseFloat(t.amount) || 0);
+  if (amount <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
+  const inserted = await sql`INSERT INTO momo_transfers (id,category,amount,comment,createdat,client_write_id)
+    VALUES (${t.id},${t.category||'Eatery'},${amount},${t.comment||''},${t.createdAt||new Date().toISOString()},${t.clientWriteId||null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM momo_transfers WHERE client_write_id=${t.clientWriteId}`;
+    return res.json(existing.length ? mapMomoTransfer(existing[0]) : t);
+  }
+  res.json({ ...t, amount });
+}));
+
+app.delete('/api/momo-transfers/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM momo_transfers WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 // === SYNC PRODUCT CATALOG ===
 app.post('/api/sync-products', asHandler(async (req, res) => {
   const libCount = await syncLibraryProducts();
@@ -932,7 +963,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs] = await Promise.all([
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM sales`,
@@ -946,6 +977,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM credit_eats`,
     sql`SELECT * FROM production_register`,
     sql`SELECT * FROM wastage_log`,
+    sql`SELECT * FROM momo_transfers`,
   ]);
   res.json({
     exportedAt: new Date().toISOString(),
@@ -962,6 +994,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     creditEats: creditEats.map(mapCreditEat),
     productionRegisters: productionRegisters.map(mapProductionRegister),
     wastageLogs: wastageLogs.map(mapWastageLog),
+    momoTransfers: momoTransfers.map(mapMomoTransfer),
   });
 }));
 
@@ -1068,6 +1101,13 @@ function mapWastageLog(r) {
     category: r.category || 'Eatery',
     qty: r.qty || 0, costEach: r.costeach || 0, lossAmount: r.lossamount || 0,
     reason: r.reason || 'remaining',
+  };
+}
+
+function mapMomoTransfer(r) {
+  return {
+    id: r.id, category: r.category, amount: r.amount,
+    comment: r.comment || '', createdAt: r.createdat,
   };
 }
 

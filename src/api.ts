@@ -1,4 +1,4 @@
-import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog } from './types';
+import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -347,6 +347,12 @@ export const wastageLogApi = {
   list: () => api<WastageLog[]>('/api/wastage-log'),
   create: (w: WastageLog) => api<WastageLog>('/api/wastage-log', { method: 'POST', body: JSON.stringify(w) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/wastage-log/${id}`, { method: 'DELETE' }),
+};
+
+export const momoTransferApi = {
+  list: () => api<MomoTransfer[]>('/api/momo-transfers'),
+  create: (t: MomoTransfer) => api<MomoTransfer>('/api/momo-transfers', { method: 'POST', body: JSON.stringify(t) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/momo-transfers/${id}`, { method: 'DELETE' }),
 };
 
 export const settingsApi = {

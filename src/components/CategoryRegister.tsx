@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, ChefHat, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone
 } from 'lucide-react';
-import type { CreditEat, ProductionRegister, WastageLog, Product } from '../types';
+import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer } from '../types';
+import { localDayKey, todayLocalKey } from '../utils/dates';
 
 interface CategoryRegisterProps {
   segments: string[];
@@ -11,17 +12,21 @@ interface CategoryRegisterProps {
   creditEats: CreditEat[];
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
+  momoTransfers: MomoTransfer[];
+  todayCollectedByCategory: { [key: string]: number };
   onAddCreditEat: (e: CreditEat) => void;
   onPayCreditEat: (id: string, amount: number) => void;
   onAddProduction: (p: ProductionRegister) => void;
   onDeleteProduction: (id: string) => void;
   onAddWastage: (w: WastageLog) => void;
   onDeleteWastage: (id: string) => void;
+  onAddMomoTransfer: (t: MomoTransfer) => void;
+  onDeleteMomoTransfer: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => todayLocalKey();
 
 function formatDay(iso: string): string {
   if (!iso) return '—';
@@ -32,8 +37,10 @@ function formatDay(iso: string): string {
 
 export default function CategoryRegister({
   segments, products, creditEats, productionRegisters, wastageLogs,
+  momoTransfers, todayCollectedByCategory,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
-  onAddWastage, onDeleteWastage, formatCurrency, triggerToast,
+  onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
+  formatCurrency, triggerToast,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -75,6 +82,10 @@ export default function CategoryRegister({
 
   const [payId, setPayId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
+
+  const [showMomoForm, setShowMomoForm] = useState(false);
+  const [momoAmount, setMomoAmount] = useState('');
+  const [momoComment, setMomoComment] = useState('');
 
   const activeItem = (list: string[], custom: string, picked: string) =>
     picked === '__custom' ? custom.trim() : (list.find(i => i === picked) || '');
@@ -149,6 +160,29 @@ export default function CategoryRegister({
   // ---- Wastage ----
   const todayWastage = catWastage.filter(w => w.date === todayStr()).reduce((s, w) => s + w.lossAmount, 0);
 
+  // ---- Mobile Money ----
+  const collectedToday = todayCollectedByCategory[selected] || 0;
+  const sentToday = momoTransfers
+    .filter(t => t.category === selected && localDayKey(t.createdAt) === todayStr())
+    .reduce((s, t) => s + t.amount, 0);
+  const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
+
+  const handleSubmitMomo = () => {
+    const amt = Math.round(parseFloat(momoAmount) || 0);
+    if (amt <= 0) { triggerToast('Enter the amount you sent', 'error'); return; }
+    onAddMomoTransfer({
+      id: `mt-${Date.now()}`,
+      category: selected,
+      amount: amt,
+      comment: momoComment.trim(),
+      createdAt: new Date().toISOString(),
+    });
+    triggerToast(`Confirmed: ${formatCurrency(amt)} sent to Mobile Money`, 'success');
+    setMomoAmount('');
+    setMomoComment('');
+    setShowMomoForm(false);
+  };
+
   const handleSubmitWastage = () => {
     const item = activeItem(catProducts.map(p => p.name), wasteCustomItem, wasteItem);
     if (!item) { triggerToast('Select the item', 'error'); return; }
@@ -222,6 +256,13 @@ export default function CategoryRegister({
         <div className="boss-card p-3 border-l-4 border-l-emerald-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Outstanding</p>
           <p className="text-lg font-black text-emerald-400 font-display mt-1">{formatCurrency(outstanding)}</p>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-cyan-500 col-span-3 sm:col-span-1">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Collected today</p>
+          <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
+            Sent to MoMo: <span className="text-emerald-400 font-black">{formatCurrency(sentToday)}</span>
+          </p>
         </div>
       </section>
 
@@ -504,6 +545,84 @@ export default function CategoryRegister({
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ============ 4. SENT TO MOBILE MONEY ============ */}
+      <section className="boss-card p-5 rounded-2xl">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+            <Smartphone className="w-4 h-4 text-cyan-400" /> Sent to Mobile Money
+          </h3>
+          <button onClick={() => setShowMomoForm(v => !v)}
+            className="flex items-center gap-1 text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
+            <Plus className="w-3.5 h-3.5" /> {showMomoForm ? 'Close' : 'Confirm Sent'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Collected today</p>
+            <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(collectedToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Sent today</p>
+            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(sentToday)}</p>
+          </div>
+        </div>
+
+        {showMomoForm && (
+          <div className="bg-zinc-950/60 border border-cyan-600/20 rounded-xl p-4 space-y-3 mb-4">
+            <p className="text-[11px] font-bold text-zinc-400 uppercase">
+              Confirm the money from <span className="text-cyan-400">{selected}</span> that you sent to Mobile Money.
+            </p>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Amount Sent (UGX)</label>
+              <input type="number" min="0" value={momoAmount}
+                onChange={(e) => setMomoAmount(e.target.value)}
+                placeholder={String(collectedToday)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500 font-bold" />
+              {collectedToday > 0 && (
+                <button onClick={() => setMomoAmount(String(collectedToday))}
+                  className="mt-1 text-[10px] text-cyan-400 font-bold uppercase tracking-wider cursor-pointer">
+                  Use collected total {formatCurrency(collectedToday)}
+                </button>
+              )}
+            </div>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Comment (optional)</label>
+              <input type="text" value={momoComment} onChange={e => setMomoComment(e.target.value)}
+                placeholder="e.g. Sent by MTN MoMo to 0700 000 000"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
+            </div>
+            <button onClick={handleSubmitMomo}
+              className="w-full h-11 bg-cyan-600 hover:bg-cyan-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5">
+              <Check className="w-4 h-4" /> Confirm Sent
+            </button>
+          </div>
+        )}
+
+        {catMomoTransfers.length === 0 ? (
+          <div className="text-center py-6">
+            <Smartphone className="w-10 h-10 text-cyan-500 mx-auto mb-2 opacity-40" />
+            <p className="text-xs text-zinc-500 font-bold uppercase">No transfers confirmed for {selected}</p>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {catMomoTransfers.slice(0, 100).map(t => (
+              <div key={t.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(t.amount)}</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(t.createdAt)}</p>
+                  {t.comment && <p className="text-[11px] text-zinc-400 mt-0.5 truncate">{t.comment}</p>}
+                </div>
+                <button onClick={() => { onDeleteMomoTransfer(t.id); triggerToast('Transfer entry deleted', 'info'); }}
+                  className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             ))}
           </div>
