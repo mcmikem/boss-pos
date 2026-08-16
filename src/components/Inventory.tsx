@@ -86,23 +86,36 @@ export default function Inventory({
       return;
     }
 
-    // Preferred path: upload the RAW file to the server and let sharp resize it
-    // there — no canvas, no createObjectURL, no OOM. This is what makes photo
-    // capture work reliably on old Androids. Files up to ~4MB use this path
-    // (Vercel serverless bodies top out around 4.5MB); anything larger goes
-    // straight to the in-browser downscale below, which is already compressed
-    // well under every platform limit.
-    const MAX_RAW_UPLOAD_BYTES = 4 * 1024 * 1024;
-    if (navigator.onLine && file.size <= MAX_RAW_UPLOAD_BYTES) {
+    // The old-Android renderer dies the moment we try to DECODE a camera photo
+    // into an <img>/canvas — that OOM is the "page just goes off" crash. So the
+    // hard rule here is: while online, NEVER decode on the device. Upload the
+    // raw bytes to the server (XHR, no Image object) and let sharp resize.
+    if (navigator.onLine) {
+      // Vercel serverless caps request bodies just under 4.5MB, so anything
+      // bigger can't reach sharp — tell the user instead of guessing.
+      const MAX_RAW_UPLOAD_BYTES = 4 * 1024 * 1024;
+      if (file.size > MAX_RAW_UPLOAD_BYTES) {
+        triggerToast('Photo too big for your connection (max ~4MB). Pick a smaller one.', 'error');
+        return;
+      }
       try {
         const url = await uploadImage(file);
         setImageUrl(url);
         return;
-      } catch {
-        // offline / server rejected -> use the client-side fallback path.
+      } catch (err) {
+        // Never fall back to the decoding path while online — that's the crash.
+        triggerToast(err instanceof Error && err.message ? err.message : 'Photo upload failed — try again', 'error');
+        return;
       }
     }
 
+    // Offline fallback (last resort): downscale with a canvas. Only reached when
+    // the device is offline and can't reach the server at all. Keep the input
+    // small so a low-memory Android has a fighting chance.
+    if (file.size > 2 * 1024 * 1024) {
+      triggerToast('Offline photo limit is 2MB. Connect to the internet to use bigger photos.', 'error');
+      return;
+    }
     const MAX_W = 200;
     let img: HTMLImageElement | null = null;
     try {

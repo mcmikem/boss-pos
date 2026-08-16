@@ -204,17 +204,50 @@ export async function authMigratePin(hash: string): Promise<boolean> {
   return true;
 }
 
-// Upload a photo to the server for server-side resizing (raw file — no canvas,
-// no createObjectURL, no OOM on old Androids). Returns the public image URL.
-export async function uploadImage(file: File | Blob): Promise<string> {
-  const res = await fetch(`${BASE}/api/uploads`, {
-    method: 'POST',
-    headers: { Authorization: getAuthHeader(), 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
+// Upload a photo to the server for server-side resizing (raw file bytes — no
+// canvas, no createObjectURL, no Image decode, so the old-Android renderer
+// never has to load a photo into memory and OOM the whole page). Uses
+// XMLHttpRequest (not fetch): XHR uploading a large File is the battle-tested
+// path on old WebViews, where fetch() with a Blob body has known crashers.
+export function uploadImage(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/api/uploads`);
+    xhr.setRequestHeader('Authorization', getAuthHeader());
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    const timer = window.setTimeout(() => {
+      try { xhr.abort(); } catch {}
+      reject(new ApiError('Upload timed out — try a smaller photo', 0));
+    }, 45000);
+    xhr.onload = () => {
+      window.clearTimeout(timer);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.url) return resolve(data.url as string);
+        } catch {}
+        return reject(new ApiError('Unexpected upload response', xhr.status));
+      }
+      let message = `Upload failed (${xhr.status})`;
+      let code: string | undefined;
+      try {
+        const data = JSON.parse(xhr.responseText) as { error?: string; code?: string };
+        if (data.error) message = data.error;
+        code = data.code;
+      } catch {}
+      reject(new ApiError(message, xhr.status, code));
+    };
+    xhr.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new ApiError('Upload failed — check your connection', 0));
+    };
+    try {
+      xhr.send(file);
+    } catch (err) {
+      window.clearTimeout(timer);
+      reject(new ApiError('Upload failed — check your connection', 0));
+    }
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.error || `Upload failed: ${res.status}`, res.status, data.code);
-  return data.url as string;
 }
 
 // Bump the server token version -> every other device's token 401s immediately.
