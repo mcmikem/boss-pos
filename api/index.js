@@ -111,6 +111,8 @@ async function initDB() {
   try { await sql`ALTER TABLE credit_eats ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
+  try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
+  try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
@@ -1005,18 +1007,34 @@ app.get('/api/production-register', asHandler(async (req, res) => {
 
 app.post('/api/production-register', asHandler(async (req, res) => {
   const p = req.body;
-  const inserted = await sql`INSERT INTO production_register (id,date,item,category,qty,costeach,total,createdat,client_write_id)
-    VALUES (${p.id},${p.date},${p.item},${p.category||'Eatery'},${p.qty||0},${p.costEach||0},${p.total||0},${p.createdAt||new Date().toISOString()},${p.clientWriteId||null})
+  const qty = Math.max(0, Math.round(num(p.qty)));
+  const inserted = await sql`INSERT INTO production_register (id,date,item,category,qty,costeach,total,createdat,client_write_id,product_id)
+    VALUES (${p.id},${p.date},${p.item},${p.category||'Eatery'},${qty},${num(p.costEach)},${num(p.total)},${p.createdAt||new Date().toISOString()},${p.clientWriteId||null},${p.productId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM production_register WHERE client_write_id=${p.clientWriteId}`;
     return res.json(existing.length ? mapProductionRegister(existing[0]) : p);
   }
+  // Producing adds to the dish's live stock so on-hand stays accurate.
+  if (p.productId && qty > 0) {
+    const upd = await sql`UPDATE products SET stockQty = stockQty + ${qty} WHERE id=${p.productId} RETURNING id, name, stockqty`;
+    if (upd.length) {
+      await logStockMovement(sql, { productId: p.productId, productName: upd[0].name, delta: qty, type: 'production', qtyAfter: upd[0].stockqty, note: `Produced ${qty} × ${p.item}` });
+    }
+  }
   res.json(p);
 }));
 
 app.delete('/api/production-register/:id', asHandler(async (req, res) => {
+  const old = await sql`SELECT * FROM production_register WHERE id=${req.params.id}`;
   await sql`DELETE FROM production_register WHERE id=${req.params.id}`;
+  // Reverse the stock bump when a production entry is removed.
+  if (old.length && old[0].product_id && (old[0].qty || 0) > 0) {
+    const upd = await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${old[0].qty}) WHERE id=${old[0].product_id} RETURNING id, name, stockqty`;
+    if (upd.length) {
+      await logStockMovement(sql, { productId: old[0].product_id, productName: upd[0].name, delta: -(old[0].qty), type: 'adjust', qtyAfter: upd[0].stockqty, note: `Production entry removed (${old[0].item})` });
+    }
+  }
   res.json({ success: true });
 }));
 
@@ -1028,18 +1046,34 @@ app.get('/api/wastage-log', asHandler(async (req, res) => {
 
 app.post('/api/wastage-log', asHandler(async (req, res) => {
   const w = req.body;
-  const inserted = await sql`INSERT INTO wastage_log (id,date,item,category,qty,costeach,lossamount,reason,createdat,client_write_id)
-    VALUES (${w.id},${w.date},${w.item},${w.category||'Eatery'},${w.qty||0},${w.costEach||0},${w.lossAmount||0},${w.reason||'remaining'},${w.createdAt||new Date().toISOString()},${w.clientWriteId||null})
+  const qty = Math.max(0, Math.round(num(w.qty)));
+  const inserted = await sql`INSERT INTO wastage_log (id,date,item,category,qty,costeach,lossamount,reason,createdat,client_write_id,product_id)
+    VALUES (${w.id},${w.date},${w.item},${w.category||'Eatery'},${qty},${num(w.costEach)},${num(w.lossAmount)},${w.reason||'remaining'},${w.createdAt||new Date().toISOString()},${w.clientWriteId||null},${w.productId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM wastage_log WHERE client_write_id=${w.clientWriteId}`;
     return res.json(existing.length ? mapWastageLog(existing[0]) : w);
   }
+  // A loss removes from live stock (never below zero).
+  if (w.productId && qty > 0) {
+    const upd = await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${qty}) WHERE id=${w.productId} RETURNING id, name, stockqty`;
+    if (upd.length) {
+      await logStockMovement(sql, { productId: w.productId, productName: upd[0].name, delta: -qty, type: 'wastage', qtyAfter: upd[0].stockqty, note: `Lost ${qty} × ${w.item} (${w.reason || 'remaining'})` });
+    }
+  }
   res.json(w);
 }));
 
 app.delete('/api/wastage-log/:id', asHandler(async (req, res) => {
+  const old = await sql`SELECT * FROM wastage_log WHERE id=${req.params.id}`;
   await sql`DELETE FROM wastage_log WHERE id=${req.params.id}`;
+  // Reverse the stock removal when a loss entry is deleted.
+  if (old.length && old[0].product_id && (old[0].qty || 0) > 0) {
+    const upd = await sql`UPDATE products SET stockQty = stockQty + ${old[0].qty} WHERE id=${old[0].product_id} RETURNING id, name, stockqty`;
+    if (upd.length) {
+      await logStockMovement(sql, { productId: old[0].product_id, productName: upd[0].name, delta: old[0].qty, type: 'adjust', qtyAfter: upd[0].stockqty, note: `Loss entry removed (${old[0].item})` });
+    }
+  }
   res.json({ success: true });
 }));
 
@@ -1274,13 +1308,15 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
 
   const productionRows = (d.productionRegisters || []).map(p => ({
     id: p.id, date: p.date, item: text(p.item, 200),
-    category: p.category || 'Eatery', qty: Math.max(0, Math.round(num(p.qty))),
+    category: p.category || 'Eatery', product_id: p.productId || null,
+    qty: Math.max(0, Math.round(num(p.qty))),
     costeach: num(p.costEach), total: num(p.total), createdat: p.createdAt || p.date || null,
   }));
 
   const wastageRows = (d.wastageLogs || []).map(w => ({
     id: w.id, date: w.date, item: text(w.item, 200),
-    category: w.category || 'Eatery', qty: Math.max(0, Math.round(num(w.qty))),
+    category: w.category || 'Eatery', product_id: w.productId || null,
+    qty: Math.max(0, Math.round(num(w.qty))),
     costeach: num(w.costEach), lossamount: num(w.lossAmount),
     reason: w.reason || 'remaining', createdat: w.createdAt || w.date || null,
   }));
@@ -1303,8 +1339,8 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('design_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'ordertype', 'designbrief', 'qty', 'size', 'materialcost', 'laborcost', 'transportcost', 'unitprice', 'totalamount', 'depositpaid', 'targetmarginpct', 'status', 'notes', 'createdat'], designRows).then(n => counts.designOrders = n),
     batchUpsert('stock_movements', 'id', ['id', 'product_id', 'product_name', 'delta', 'type', 'qty_after', 'sale_id', 'note', 'createdat'], stockMoveRows).then(n => counts.stockMovements = n),
     batchUpsert('credit_eats', 'id', ['id', 'customername', 'date', 'item', 'category', 'qty', 'unitprice', 'total', 'paidamount', 'paid', 'createdat'], creditEatRows).then(n => counts.creditEats = n),
-    batchUpsert('production_register', 'id', ['id', 'date', 'item', 'category', 'qty', 'costeach', 'total', 'createdat'], productionRows).then(n => counts.productionRegisters = n),
-    batchUpsert('wastage_log', 'id', ['id', 'date', 'item', 'category', 'qty', 'costeach', 'lossamount', 'reason', 'createdat'], wastageRows).then(n => counts.wastageLogs = n),
+    batchUpsert('production_register', 'id', ['id', 'date', 'item', 'category', 'product_id', 'qty', 'costeach', 'total', 'createdat'], productionRows).then(n => counts.productionRegisters = n),
+    batchUpsert('wastage_log', 'id', ['id', 'date', 'item', 'category', 'product_id', 'qty', 'costeach', 'lossamount', 'reason', 'createdat'], wastageRows).then(n => counts.wastageLogs = n),
     batchUpsert('momo_transfers', 'id', ['id', 'category', 'amount', 'comment', 'createdat'], momoRows).then(n => counts.momoTransfers = n),
   ]);
 
@@ -1403,7 +1439,7 @@ function mapCreditEat(r) {
 function mapProductionRegister(r) {
   return {
     id: r.id, date: r.date, item: r.item,
-    category: r.category || 'Eatery',
+    category: r.category || 'Eatery', productId: r.product_id || null,
     qty: r.qty || 0, costEach: r.costeach || 0, total: r.total || 0,
   };
 }
@@ -1411,7 +1447,7 @@ function mapProductionRegister(r) {
 function mapWastageLog(r) {
   return {
     id: r.id, date: r.date, item: r.item,
-    category: r.category || 'Eatery',
+    category: r.category || 'Eatery', productId: r.product_id || null,
     qty: r.qty || 0, costEach: r.costeach || 0, lossAmount: r.lossamount || 0,
     reason: r.reason || 'remaining',
   };

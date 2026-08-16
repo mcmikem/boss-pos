@@ -117,6 +117,7 @@ export interface ProductionRegister {
   date: string;
   item: string;
   category: string;
+  productId?: string;
   qty: number;
   costEach: number;
   total: number;
@@ -127,6 +128,7 @@ export interface WastageLog {
   date: string;
   item: string;
   category: string;
+  productId?: string;
   qty: number;
   costEach: number;
   lossAmount: number;

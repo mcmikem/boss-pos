@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, ChefHat, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays
 } from 'lucide-react';
-import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer } from '../types';
-import { localDayKey, todayLocalKey } from '../utils/dates';
+import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
+import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
 interface CategoryRegisterProps {
   segments: string[];
   products: Product[];
+  sales: Sale[];
   creditEats: CreditEat[];
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
   momoTransfers: MomoTransfer[];
-  todayCollectedByCategory: { [key: string]: number };
   onAddCreditEat: (e: CreditEat) => void;
   onPayCreditEat: (id: string, amount: number) => void;
   onAddProduction: (p: ProductionRegister) => void;
@@ -26,6 +26,15 @@ interface CategoryRegisterProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
+type TimeFilter = 'today' | 'week' | 'month' | 'all';
+
+const HIST_FILTERS: { key: TimeFilter; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: '7 Days' },
+  { key: 'month', label: 'This Month' },
+  { key: 'all', label: 'All' },
+];
+
 const todayStr = () => todayLocalKey();
 
 function formatDay(iso: string): string {
@@ -36,8 +45,8 @@ function formatDay(iso: string): string {
 }
 
 export default function CategoryRegister({
-  segments, products, creditEats, productionRegisters, wastageLogs,
-  momoTransfers, todayCollectedByCategory,
+  segments, products, sales, creditEats, productionRegisters, wastageLogs,
+  momoTransfers,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   formatCurrency, triggerToast,
@@ -69,6 +78,7 @@ export default function CategoryRegister({
   const [prodDate, setProdDate] = useState(todayStr());
   const [prodItem, setProdItem] = useState('');
   const [prodCustomItem, setProdCustomItem] = useState('');
+  const [prodProductId, setProdProductId] = useState<string | null>(null);
   const [prodQty, setProdQty] = useState('');
   const [prodCost, setProdCost] = useState('');
 
@@ -76,9 +86,72 @@ export default function CategoryRegister({
   const [wasteDate, setWasteDate] = useState(todayStr());
   const [wasteItem, setWasteItem] = useState('');
   const [wasteCustomItem, setWasteCustomItem] = useState('');
+  const [wasteProductId, setWasteProductId] = useState<string | null>(null);
   const [wasteQty, setWasteQty] = useState('');
   const [wasteCost, setWasteCost] = useState('');
   const [wasteReason, setWasteReason] = useState<'remaining' | 'expired'>('remaining');
+
+  const [histFilter, setHistFilter] = useState<TimeFilter>('today');
+  const [balanceDate, setBalanceDate] = useState(todayStr());
+
+  const timeRange = useMemo(() => {
+    switch (histFilter) {
+      case 'today': {
+        const today = todayLocalKey();
+        return { label: 'Today', filter: (d: string) => localDayKey(d) === today };
+      }
+      case 'week': {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 7);
+        return { label: 'Last 7 days', filter: (d: string) => new Date(d) >= cutoff };
+      }
+      case 'month': {
+        const month = localMonthKey(new Date().toISOString());
+        return { label: 'This month', filter: (d: string) => localMonthKey(d) === month };
+      }
+      default:
+        return { label: 'All time', filter: () => true };
+    }
+  }, [histFilter]);
+
+  const filteredProduction = useMemo(() => catProduction.filter(p => timeRange.filter(p.date)), [catProduction, timeRange]);
+  const filteredWastage = useMemo(() => catWastage.filter(w => timeRange.filter(w.date)), [catWastage, timeRange]);
+
+  // Today's collected cash per category (excludes credit/book and refunds).
+  const todayCollectedByCategory = useMemo(() => {
+    const map: { [key: string]: number } = {};
+    const today = todayLocalKey();
+    sales.forEach(s => {
+      if (s.refunded) return;
+      if (s.paymentMethod === 'Credit / Book') return;
+      if (localDayKey(s.timestamp) !== today) return;
+      s.items.forEach(item => {
+        const prod = products.find(p => p.id === item.productId);
+        const cat = prod?.category || 'Eatery';
+        map[cat] = (map[cat] || 0) + (item.lineTotal || 0);
+      });
+    });
+    return map;
+  }, [sales, products]);
+
+  // Daily close-out: for each dish, produced - sold - lost on the chosen day.
+  // A positive remainder is stock that "vanished" (shrinkage); negative means
+  // sales were covered from earlier production (normal when leftover existed).
+  const balanceRows = useMemo(() => {
+    const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === balanceDate);
+    return catProducts.map(p => {
+      const made = catProduction.filter(x => x.productId === p.id && x.date === balanceDate)
+        .reduce((s, x) => s + (x.qty || 0), 0);
+      const lost = catWastage.filter(x => x.productId === p.id && x.date === balanceDate)
+        .reduce((s, x) => s + (x.qty || 0), 0);
+      const sold = daySales.flatMap(s => s.items)
+        .filter(i => i.productId === p.id)
+        .reduce((s, i) => s + (i.qty || 0), 0);
+      return { product: p, made, sold, lost, onHand: p.stockQty || 0, recon: made - sold - lost };
+    }).filter(r => r.made + r.sold + r.lost > 0 || r.onHand > 0);
+  }, [catProducts, catProduction, catWastage, sales, balanceDate]);
+
+  const totalShrinkage = useMemo(() => balanceRows.reduce((s, r) => s + Math.max(0, r.recon), 0), [balanceRows]);
 
   const [payId, setPayId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -103,7 +176,7 @@ export default function CategoryRegister({
     const unitPrice = Math.max(0, parseFloat(creditPrice) || 0);
     if (unitPrice <= 0) { triggerToast('Enter the unit price', 'error'); return; }
     onAddCreditEat({
-      id: `ce-${Date.now()}`,
+      id: `ce-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       customerName: name,
       date: creditDate,
       item,
@@ -144,16 +217,17 @@ export default function CategoryRegister({
     const cost = parseFloat(prodCost) || 0;
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     onAddProduction({
-      id: `pr-${Date.now()}`,
+      id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: prodDate,
       item,
       category: selected,
+      productId: prodProductId || undefined,
       qty,
       costEach: cost,
       total: Math.round(qty * cost),
     });
     triggerToast(`Production logged: ${qty} × ${item}`, 'success');
-    setProdItem(''); setProdCustomItem(''); setProdQty(''); setProdCost('');
+    setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setShowProdForm(false);
   };
 
@@ -171,7 +245,7 @@ export default function CategoryRegister({
     const amt = Math.round(parseFloat(momoAmount) || 0);
     if (amt <= 0) { triggerToast('Enter the amount you sent', 'error'); return; }
     onAddMomoTransfer({
-      id: `mt-${Date.now()}`,
+      id: `mt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       category: selected,
       amount: amt,
       comment: momoComment.trim(),
@@ -191,27 +265,30 @@ export default function CategoryRegister({
     const cost = parseFloat(wasteCost) || 0;
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     onAddWastage({
-      id: `wl-${Date.now()}`,
+      id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: wasteDate,
       item,
       category: selected,
+      productId: wasteProductId || undefined,
       qty,
       costEach: cost,
       lossAmount: Math.round(qty * cost),
       reason: wasteReason,
     });
     triggerToast('Loss logged', 'success');
-    setWasteItem(''); setWasteCustomItem(''); setWasteQty(''); setWasteCost('');
+    setWasteItem(''); setWasteCustomItem(''); setWasteProductId(null); setWasteQty(''); setWasteCost('');
     setShowWasteForm(false);
   };
 
-  const selectOnChange = (value: string, custom: (v: string) => void, picked: (v: string) => void, price: (v: string) => void) => {
+  const selectOnChange = (value: string, custom: (v: string) => void, picked: (v: string) => void, price: (v: string) => void, setProductId: (v: string | null) => void) => {
     picked(value);
     if (value === '__custom') {
       custom('');
       price('');
+      setProductId(null);
     } else {
       const prod = catProducts.find(p => p.name === value);
+      setProductId(prod ? prod.id : null);
       if (prod) price(String(prod.price || prod.cost || ''));
     }
   };
@@ -243,6 +320,23 @@ export default function CategoryRegister({
         ))}
       </div>
 
+      {/* History time filter */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest shrink-0">History</p>
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-none">
+          {HIST_FILTERS.map(f => (
+            <button key={f.key} onClick={() => setHistFilter(f.key)}
+              className={`py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider border whitespace-nowrap transition-all cursor-pointer active:scale-95 min-h-[36px] ${
+                histFilter === f.key
+                  ? 'bg-gold-brand border-gold-brand text-black'
+                  : 'bg-[#141414]/60 border-white/5 text-zinc-500 hover:text-zinc-300'
+              }`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Today summary */}
       <section className="grid grid-cols-3 gap-2">
         <div className="boss-card p-3 border-l-4 border-l-amber-500">
@@ -264,6 +358,74 @@ export default function CategoryRegister({
             Sent to MoMo: <span className="text-emerald-400 font-black">{formatCurrency(sentToday)}</span>
           </p>
         </div>
+      </section>
+
+      {/* ============ DAILY BALANCE / CLOSE-OUT ============ */}
+      <section className="boss-card p-5 rounded-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-gold-brand" /> Daily Balance & Close-Out
+          </h3>
+          <div className="flex items-center gap-2">
+            <input type="date" value={balanceDate} max={todayStr()} onChange={e => setBalanceDate(e.target.value || todayStr())}
+              className="bg-zinc-900 border border-zinc-800 text-white rounded-lg h-9 px-2 text-xs outline-none focus:border-gold-brand" />
+          </div>
+        </div>
+
+        {balanceRows.length === 0 ? (
+          <div className="text-center py-6">
+            <CalendarDays className="w-9 h-9 text-gold-brand/40 mx-auto mb-2" />
+            <p className="text-xs text-zinc-500 font-bold uppercase">No {selected} items made, sold or in stock on this day</p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-widest text-zinc-500">
+                    <th className="text-left py-1.5 pr-2 font-bold">Item</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">Made</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-emerald-400">Sold</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-rose-400">Lost</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-cyan-400">On-hand</th>
+                    <th className="text-right py-1.5 pl-2 font-bold">Check</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {balanceRows.map(({ product, made, sold, lost, onHand, recon }) => {
+                    const status = recon > 0 ? 'miss' : recon < 0 ? 'fromStock' : 'ok';
+                    return (
+                      <tr key={product.id} className="border-t border-white/5">
+                        <td className="py-2 pr-2 font-bold text-white truncate max-w-[120px]">{product.name}</td>
+                        <td className="py-2 px-2 text-right font-mono text-amber-400">{made || '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-emerald-400">{sold || '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-rose-400">{lost || '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-cyan-400">{onHand}</td>
+                        <td className="py-2 pl-2 text-right">
+                          {status === 'ok' ? (
+                            <span className="text-emerald-400 font-black">✓</span>
+                          ) : status === 'miss' ? (
+                            <span className="text-amber-400 font-black" title={`${recon} made but not sold/lost`}>+{recon}</span>
+                          ) : (
+                            <span className="text-zinc-500 font-bold" title="Sold more than made — covered from earlier stock">−{Math.abs(recon)}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {totalShrinkage > 0 && (
+              <div className="mt-3 bg-amber-950/30 border border-amber-600/30 rounded-xl px-3 py-2.5 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <p className="text-[11px] font-bold text-amber-300 uppercase">
+                  {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} produced but not sold or lost — check for shrinkage
+                </p>
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
@@ -294,7 +456,7 @@ export default function CategoryRegister({
               </div>
               <div className="sm:col-span-2">
                 <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Taken</label>
-                <select value={creditItem} onChange={e => selectOnChange(e.target.value, setCreditCustomItem, setCreditItem, setCreditPrice)}
+                <select value={creditItem} onChange={e => selectOnChange(e.target.value, setCreditCustomItem, setCreditItem, setCreditPrice, () => {})}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
                   <option value="">Select item...</option>
                   {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — {formatCurrency(p.price)}</option>)}
@@ -379,7 +541,7 @@ export default function CategoryRegister({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
                 <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Made</label>
-                <select value={prodItem} onChange={e => selectOnChange(e.target.value, setProdCustomItem, setProdItem, setProdCost)}
+                <select value={prodItem} onChange={e => selectOnChange(e.target.value, setProdCustomItem, setProdItem, setProdCost, setProdProductId)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold" autoFocus>
                   <option value="">Select item...</option>
                   {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — cost {formatCurrency(p.cost)}</option>)}
@@ -426,7 +588,7 @@ export default function CategoryRegister({
           </div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {catProduction.slice(0, 100).map(p => (
+            {filteredProduction.map(p => (
               <div key={p.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-black text-white truncate">{p.item}</p>
@@ -465,7 +627,7 @@ export default function CategoryRegister({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
                 <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item</label>
-                <select value={wasteItem} onChange={e => selectOnChange(e.target.value, setWasteCustomItem, setWasteItem, setWasteCost)}
+                <select value={wasteItem} onChange={e => selectOnChange(e.target.value, setWasteCustomItem, setWasteItem, setWasteCost, setWasteProductId)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold" autoFocus>
                   <option value="">Select item...</option>
                   {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — cost {formatCurrency(p.cost)}</option>)}
@@ -525,7 +687,7 @@ export default function CategoryRegister({
           </div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {catWastage.slice(0, 100).map(w => (
+            {filteredWastage.map(w => (
               <div key={w.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${w.reason === 'expired' ? 'bg-rose-950/40 text-rose-400' : 'bg-amber-950/40 text-amber-400'}`}>
