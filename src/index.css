@@ -25,6 +25,18 @@ html {
   text-size-adjust: 100%;
 }
 
+/* Kill the focus "smart zoom" on phones: any focused input/select under 16px
+   makes old Androids blow the page up to fit the keyboard, hiding everything
+   else. 16px inputs disable that zoom natively even where a WebView ignores
+   `user-scalable=no` in the viewport meta. Only 16px while focused, so the
+   rest of the UI keeps its compact look. */
+@media (max-width: 480px) and (pointer: coarse) {
+  input:focus, select:focus, textarea:focus {
+    font-size: 16px !important;
+    touch-action: manipulation;
+  }
+}
+
 /* `100vh` on old Android counts the URL bar, so fixed-height shells overflow.
    Use dvh when available, otherwise fall back to the safe svh/vh. */
 @supports (height: 100dvh) {

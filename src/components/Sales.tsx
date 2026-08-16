@@ -355,7 +355,7 @@ export default function Sales({
               placeholder="Search items..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-xl text-sm transition-all outline-none"
+              className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-xl !text-base transition-all outline-none"
               id="search-inventory-input"
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -762,7 +762,7 @@ export default function Sales({
             <div className="relative flex-1">
               <input type="text" placeholder="Search products by name, category, or barcode..." value={quickSearchQuery} autoFocus
                 onChange={(e) => setQuickSearchQuery(e.target.value)}
-                className="w-full bg-zinc-900 border border-gold-brand/40 text-white h-12 pl-11 pr-4 rounded-xl text-sm outline-none focus:border-gold-brand" />
+                className="w-full bg-zinc-900 border border-gold-brand/40 text-white h-12 pl-11 pr-4 rounded-xl !text-base outline-none focus:border-gold-brand" />
               <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-gold-brand" />
             </div>
             <button onClick={() => { setIsQuickSale(false); setQuickSearchQuery(''); }}

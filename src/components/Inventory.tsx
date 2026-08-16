@@ -509,7 +509,7 @@ export default function Inventory({
       <section className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
         <div className="relative flex-1">
           <input type="text" placeholder="Search products..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-2xl text-sm transition-all outline-none" />
+            className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-2xl !text-base transition-all outline-none" />
           <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
         </div>
         <div className="flex items-center gap-3 shrink-0">
