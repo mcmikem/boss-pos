@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, bootApi, primeCache, type BootData } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -91,6 +91,42 @@ export default function App() {
       setProducts(enrichProductsWithIcons(cached));
       setLoading(false);
     }
+
+    const apply = (d: BootData) => {
+      setSettings(d.settings);
+      if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
+      if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
+      const enriched = enrichProductsWithIcons(d.products);
+      setProducts(enriched);
+      saveProducts(enriched);
+      setSuppliers(d.suppliers);
+      setSales(d.sales);
+      setExpenses(d.expenses);
+      setCreditPayments(d.creditPayments);
+      setCreditEats(d.creditEats);
+      setProductionRegisters(d.productionRegisters);
+      setWastageLogs(d.wastageLogs);
+      setMomoTransfers(d.momoTransfers);
+      // Warm per-endpoint caches so later reads (and offline reloads) hit cache.
+      primeCache('/api/products', d.products);
+      primeCache('/api/suppliers', d.suppliers);
+      primeCache('/api/sales', d.sales);
+      primeCache('/api/expenses', d.expenses);
+      primeCache('/api/credit-payments', d.creditPayments);
+      primeCache('/api/credit-eats', d.creditEats);
+      primeCache('/api/production-register', d.productionRegisters);
+      primeCache('/api/wastage-log', d.wastageLogs);
+      primeCache('/api/momo-transfers', d.momoTransfers);
+      primeCache('/api/settings', d.settings);
+    };
+
+    // 3G-friendly: one /api/boot round-trip. Fall back to individual endpoints
+    // only if the batched call fails (older API or cold server).
+    try {
+      apply(await bootApi.get());
+      setLoading(false);
+      return;
+    } catch {}
 
     const failed: string[] = [];
     const fail = (name: string) => () => { failed.push(name); };

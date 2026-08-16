@@ -1097,6 +1097,33 @@ app.post('/api/momo-transfers', asHandler(async (req, res) => {
   res.json({ ...t, amount });
 }));
 
+// One request boots the whole till (all list endpoints) — a big win on slow
+// 3G networks where 10 serialized calls each pay full RTT + connection setup.
+app.get('/api/boot', asHandler(async (req, res) => {
+  const settingsRows = await sql`SELECT * FROM settings`;
+  const obj = {};
+  for (const r of settingsRows) {
+    try { obj[r.key] = JSON.parse(r.value); } catch { obj[r.key] = r.value; }
+  }
+  const hasPin = !!obj.pinHash;
+  delete obj.pinHash;
+  obj.hasPin = hasPin;
+
+  const [products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
+    sql`SELECT * FROM products`.then(r => r.map(mapProduct)),
+    sql`SELECT * FROM suppliers`.then(r => r.map(mapSupplier)),
+    sql`SELECT * FROM sales ORDER BY timestamp DESC`.then(r => r.map(mapSale)),
+    sql`SELECT * FROM expenses ORDER BY timestamp DESC`,
+    sql`SELECT * FROM credit_payments ORDER BY createdat DESC`.then(r => r.map(x => ({ id: x.id, saleId: x.saleid, amount: x.amount, createdAt: x.createdat }))),
+    sql`SELECT * FROM credit_eats ORDER BY date DESC, createdat DESC`.then(r => r.map(mapCreditEat)),
+    sql`SELECT * FROM production_register ORDER BY date DESC, createdat DESC`.then(r => r.map(mapProductionRegister)),
+    sql`SELECT * FROM wastage_log ORDER BY date DESC, createdat DESC`.then(r => r.map(mapWastageLog)),
+    sql`SELECT * FROM momo_transfers ORDER BY createdat DESC`.then(r => r.map(mapMomoTransfer)),
+  ]);
+
+  res.json({ products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, settings: obj });
+}));
+
 app.delete('/api/momo-transfers/:id', asHandler(async (req, res) => {
   await sql`DELETE FROM momo_transfers WHERE id=${req.params.id}`;
   res.json({ success: true });

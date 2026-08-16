@@ -347,15 +347,19 @@ export default defineConfig(() => {
           skipWaiting: true,
           clientsClaim: true,
           cleanupOutdatedCaches: true,
+          navigateFallback: 'index.html',
           runtimeCaching: [
             {
               urlPattern: /^https?:\/\/.*/,
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'external-cache',
+                // Don't let a flaky 3G link hang the UI — fall back to cache
+                // after 5s and refresh in the background.
+                networkTimeoutSeconds: 5,
                 expiration: {
-                  maxEntries: 100,
-                  maxAgeSeconds: 60 * 60 * 24 * 7,
+                  maxEntries: 200,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
                 },
               },
             },

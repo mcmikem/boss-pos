@@ -182,21 +182,35 @@ function saveCacheKeys(keys: Set<string>): void {
 }
 
 function getCache<T>(path: string): T | null {
+  const hit = getCacheMeta<T>(path);
+  return hit ? hit.data : null;
+}
+
+// Returns cached data even after its TTL (stale) so slow/offline networks can
+// always render last-known data. The caller decides whether to revalidate.
+function getCacheMeta<T>(path: string): { data: T; expired: boolean } | null {
   try {
     const raw = localStorage.getItem(cacheKey(path));
     if (!raw) return null;
     const { data, expiry } = JSON.parse(raw);
-    if (Date.now() > expiry) {
-      localStorage.removeItem(cacheKey(path));
-      const keys = getCacheKeys();
-      keys.delete(cacheKey(path));
-      saveCacheKeys(keys);
-      return null;
-    }
-    return data as T;
+    return { data: data as T, expired: Date.now() > expiry };
   } catch {
     return null;
   }
+}
+
+// Dedupe concurrent background refreshes per path.
+const inFlightRefresh = new Set<string>();
+function refreshInBackground(path: string, ttlMs?: number): void {
+  if (inFlightRefresh.has(path)) return;
+  inFlightRefresh.add(path);
+  fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } })
+    .then(res => {
+      if (!res.ok) return;
+      return res.json().then(data => setCache(path, data, ttlMs)).catch(() => {});
+    })
+    .catch(() => {})
+    .finally(() => inFlightRefresh.delete(path));
 }
 
 function setCache<T>(path: string, data: T, ttlMs = 5 * 60 * 1000): void {
@@ -213,7 +227,9 @@ function clearRelatedCaches(path: string): void {
   const basePath = path.split('/').slice(0, 3).join('/');
   const keys = getCacheKeys();
   for (const key of keys) {
-    if (key.includes(basePath)) {
+    // Writes invalidate the matching list AND the combined /api/boot blob, so
+    // a later offline boot never shows data that contradicts what was saved.
+    if (key.includes(basePath) || key.includes('/api/boot')) {
       localStorage.removeItem(key);
       keys.delete(key);
     }
@@ -224,15 +240,20 @@ function clearRelatedCaches(path: string): void {
 async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number }): Promise<T> {
   const isRead = !options || !options.method || options.method === 'GET';
 
-  if (isRead && !options?.fresh) {
-    const cached = getCache<T>(path);
-    if (cached) return cached;
-  }
-
-  if (isRead && !navigator.onLine) {
-    const cached = getCache<T>(path);
-    if (cached) return cached;
-    throw new Error('Offline and no cached data');
+  if (isRead) {
+    const hit = getCacheMeta<T>(path);
+    if (hit) {
+      // Expired: serve the stale copy immediately and refresh in the background
+      // so slow/3G networks never wait on the network for data we already have.
+      if (hit.expired) {
+        refreshInBackground(path, typeof options?.store === 'number' ? options.store : undefined);
+        return hit.data;
+      }
+      // Fresh cache: no network round-trip at all.
+      if (!options?.fresh) return hit.data;
+    } else if (!navigator.onLine) {
+      throw new Error('Offline and no cached data');
+    }
   }
 
   // Idempotency: attach a stable client_write_id to every create/update body so
@@ -267,6 +288,8 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     return data;
   } catch (err) {
     if (isRead) {
+      // Any network/server failure (flaky 3G, dropped WiFi, expired token)
+      // falls back to last-known data instead of erroring out.
       const cached = getCache<T>(path);
       if (cached) return cached;
       throw err;
@@ -366,6 +389,32 @@ export const settingsApi = {
   get: () => api<StoreSettings>('/api/settings', { fresh: true, store: 24 * 60 * 60 * 1000 }),
   update: (s: StoreSettings) => api<{ success: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
 };
+
+export interface BootData {
+  products: Product[];
+  suppliers: Supplier[];
+  sales: Sale[];
+  expenses: Expense[];
+  creditPayments: CreditPayment[];
+  creditEats: CreditEat[];
+  productionRegisters: ProductionRegister[];
+  wastageLogs: WastageLog[];
+  momoTransfers: MomoTransfer[];
+  settings: StoreSettings;
+}
+
+// One round-trip boots the whole till on 3G instead of 10 serialized requests.
+// fresh:true means online boots always revalidate; on failure the SWR read path
+// serves the cached boot blob so offline reloads still work.
+export const bootApi = {
+  get: () => api<BootData>('/api/boot', { fresh: true, store: 24 * 60 * 60 * 1000 }),
+};
+
+// Seed individual list caches from a boot payload so per-endpoint reads (e.g.
+// after a write invalidated the boot blob) still hit warm caches offline.
+export function primeCache(path: string, data: unknown, ttlMs = 24 * 60 * 60 * 1000): void {
+  setCache(path, data, ttlMs);
+}
 
 export const summaryApi = {
   list: (from?: string, to?: string) => {
