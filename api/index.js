@@ -668,7 +668,10 @@ app.get('/uploads/:file', asHandler(async (req, res) => {
 }));
 
 // Everything after this point requires a valid token — writes AND reads.
+// /api/cron/* self-guard with CRON_SECRET, so they bypass the till-token check
+// (the fleet provisioner and the scheduled backup/export run headless).
 app.use((req, res, next) => {
+  if (req.path.startsWith('/api/cron/')) return next();
   if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
     requireAuth(req, res, next).catch(next);
     return;
@@ -1742,6 +1745,17 @@ app.get('/api/cron/backup', asHandler(async (req, res) => {
   if (!secret || supplied !== secret) return res.status(404).json({ error: 'Not found' });
   const ok = await maybeAutoBackup(true);
   res.json({ success: true, backupCreated: ok });
+}));
+
+// Platform-owner off-site export: same CRON_SECRET as the backup endpoint, so a
+// fleet operator script can pull a shop's full snapshot without ever knowing
+// its till PIN. Identity-matched: returns the same JSON as /api/export.
+app.get('/api/cron/export', asHandler(async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const header = req.headers['authorization'] || '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
+  if (!secret || supplied !== secret) return res.status(404).json({ error: 'Not found' });
+  res.json(await gatherExport());
 }));
 
 // === ACTIVITY / AUDIT LOG (who changed what, when) ===

@@ -64,6 +64,20 @@ test('public upload files are served without auth', { skip: !HAS_DB && skipMsg }
   assert.equal(res.status, 404);
 });
 
+test('cron endpoints self-guard with CRON_SECRET and answer when correct', { skip: !HAS_DB && skipMsg }, async () => {
+  const wrong = await fetch(`${base}/api/cron/export`, { headers: { Authorization: 'Bearer nope' } });
+  assert.equal(wrong.status, 404, 'wrong CRON_SECRET must not leak');
+
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return; // no secret configured -> can only assert the 404 above
+  const res = await fetch(`${base}/api/cron/export`, { headers: { Authorization: `Bearer ${secret}` } });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.match(body.exportedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(Array.isArray(body.products));
+  assert.ok(Array.isArray(body.sales));
+});
+
 // A tiny 1x1 PNG (8 bytes is enough for a content check).
 const TINY_PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082', 'hex');
 

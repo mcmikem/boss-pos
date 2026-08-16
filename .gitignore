@@ -9,3 +9,6 @@ coverage/
 .vercel
 pos.db
 pos.db*
+
+# Fleet ops (per-shop secrets + off-site backups) — never commit.
+fleet/

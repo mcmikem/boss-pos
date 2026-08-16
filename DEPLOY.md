@@ -79,6 +79,15 @@ For a true "wipe and restore to an earlier point", restore into an **empty** dat
 2. Add it as a repo secret `VERCEL_TOKEN` alongside the already-set `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`.
 3. Every push to `main` then deploys straight to production (`vercel deploy --prod`).
 
+### Fleet mode (selling to other shops)
+The repo productizes cleanly — see `scripts/`:
+
+- `scripts/provision-shop.mjs` — creates an isolated shop: fresh Neon database (or `--database-url`), own `AUTH_SECRET`/`CRON_SECRET`, own Vercel project (`imac-pos-<slug>`), build-time `VITE_APP_NAME` brand, blank catalog unless `--seed-catalog`. Records the shop + secrets in `fleet/registry.json` (git-ignored).
+- `scripts/init-db.mjs` — boot a shop's database against the app's idempotent migrations/`ensureDefaultSettings`.
+- `scripts/pull-backups.mjs` — weekly off-site pull of every shop's full snapshot via `GET /api/cron/export` (guarded by that shop's `CRON_SECRET`; no till PIN needed).
+
+The /api/cron/backup and /api/cron/export endpoints self-guard with CRON_SECRET and are exempt from the till-token middleware (they run headless from cron/fleet tooling).
+
 ### Important Notes
 - Render free tier spins down after 15 min of inactivity (first load takes ~30s)
 - Data persists in Postgres (`DATABASE_URL`), never SQLite
