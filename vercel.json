@@ -10,5 +10,8 @@
     { "source": "/uploads/(.*)", "destination": "/api" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/cron/backup", "schedule": "0 3 * * *" }
   ]
 }
