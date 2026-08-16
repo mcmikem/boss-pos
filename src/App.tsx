@@ -1,9 +1,9 @@
-import { useState, useEffect, lazy, Suspense, useRef, useMemo } from 'react';
+import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, bootApi, primeCache, type BootData } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -77,6 +77,11 @@ export default function App() {
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
   const [apiError, setApiError] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [showAudit, setShowAudit] = useState(false);
 
   const readyRef = useRef(false);
 
@@ -85,6 +90,44 @@ export default function App() {
     setToastType(type);
   };
 
+  const formatSyncedAgo = (ts: number) => {
+    const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (secs < 60) return 'just now';
+    const mins = Math.round(secs / 60);
+    return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
+  };
+
+  // Shared boot-apply: lands a /api/boot payload into local state + caches. Used
+  // by the initial load AND the silent 3-minute background refresh (multi-till).
+  const applyBootData = useCallback((d: BootData) => {
+    setSettings(d.settings);
+    if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
+    if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
+    const enriched = enrichProductsWithIcons(d.products);
+    setProducts(enriched);
+    saveProducts(enriched);
+    setSuppliers(d.suppliers);
+    setSales(d.sales);
+    setExpenses(d.expenses);
+    setCreditPayments(d.creditPayments);
+    setCreditEats(d.creditEats);
+    setProductionRegisters(d.productionRegisters);
+    setWastageLogs(d.wastageLogs);
+    setMomoTransfers(d.momoTransfers);
+    // Warm per-endpoint caches so later reads (and offline reloads) hit cache.
+    primeCache('/api/products', d.products);
+    primeCache('/api/suppliers', d.suppliers);
+    primeCache('/api/sales', d.sales);
+    primeCache('/api/expenses', d.expenses);
+    primeCache('/api/credit-payments', d.creditPayments);
+    primeCache('/api/credit-eats', d.creditEats);
+    primeCache('/api/production-register', d.productionRegisters);
+    primeCache('/api/wastage-log', d.wastageLogs);
+    primeCache('/api/momo-transfers', d.momoTransfers);
+    primeCache('/api/settings', d.settings);
+    setLastSyncedAt(Date.now());
+  }, []);
+
   const fetchAllData = async () => {
     const cached = loadProducts();
     if (cached) {
@@ -92,38 +135,10 @@ export default function App() {
       setLoading(false);
     }
 
-    const apply = (d: BootData) => {
-      setSettings(d.settings);
-      if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
-      if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
-      const enriched = enrichProductsWithIcons(d.products);
-      setProducts(enriched);
-      saveProducts(enriched);
-      setSuppliers(d.suppliers);
-      setSales(d.sales);
-      setExpenses(d.expenses);
-      setCreditPayments(d.creditPayments);
-      setCreditEats(d.creditEats);
-      setProductionRegisters(d.productionRegisters);
-      setWastageLogs(d.wastageLogs);
-      setMomoTransfers(d.momoTransfers);
-      // Warm per-endpoint caches so later reads (and offline reloads) hit cache.
-      primeCache('/api/products', d.products);
-      primeCache('/api/suppliers', d.suppliers);
-      primeCache('/api/sales', d.sales);
-      primeCache('/api/expenses', d.expenses);
-      primeCache('/api/credit-payments', d.creditPayments);
-      primeCache('/api/credit-eats', d.creditEats);
-      primeCache('/api/production-register', d.productionRegisters);
-      primeCache('/api/wastage-log', d.wastageLogs);
-      primeCache('/api/momo-transfers', d.momoTransfers);
-      primeCache('/api/settings', d.settings);
-    };
-
     // 3G-friendly: one /api/boot round-trip. Fall back to individual endpoints
     // only if the batched call fails (older API or cold server).
     try {
-      apply(await bootApi.get());
+      applyBootData(await bootApi.get());
       setLoading(false);
       return;
     } catch {}
@@ -212,6 +227,54 @@ export default function App() {
   useEffect(() => {
     readyRef.current = authState === 'ready';
   }, [authState]);
+
+  // Multi-till visibility: silently re-boot every 3 minutes so changes made on
+  // a second till show up without a manual reload. Skipped while offline and
+  // never overlapped. Keeps the "Synced Xm ago" pill honest too.
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    let busy = false;
+    const iv = setInterval(async () => {
+      if (!navigator.onLine || busy) return;
+      busy = true;
+      try {
+        const d = await bootApi.get();
+        applyBootData(d);
+        setPendingCount(outboxCount());
+      } catch {} finally {
+        busy = false;
+      }
+    }, 3 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [authState, applyBootData]);
+
+  // Refresh the offline-pending badge + "Synced" pill every 30s.
+  useEffect(() => {
+    const iv = setInterval(() => setPendingCount(outboxCount()), 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // A replay lost the race against another device (server 409 CONFLICT).
+  const onSyncConflict = (e: Event) => {
+    const n = (e as CustomEvent).detail || 1;
+    triggerToast(`Another device saved a newer version — ${n} offline change(s) were skipped to avoid overwriting it.`, 'error');
+    fetchAllData();
+  };
+  useEffect(() => {
+    window.addEventListener('boss-pos-sync-conflict', onSyncConflict);
+    return () => window.removeEventListener('boss-pos-sync-conflict', onSyncConflict);
+  }, []);
+
+  // "Log out all devices" (or an expired token) just got enforced server-side:
+  // drop the session and re-lock the till.
+  useEffect(() => {
+    const onRevoked = () => {
+      setAuthState('locked');
+      triggerToast('Logged out on all devices — re-enter your PIN to continue.', 'info');
+    };
+    window.addEventListener('boss-pos-auth-revoked', onRevoked);
+    return () => window.removeEventListener('boss-pos-auth-revoked', onRevoked);
+  }, []);
 
   useEffect(() => {
     if (products.length > 0) saveProducts(products);
@@ -374,6 +437,38 @@ export default function App() {
 
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
+  const handleRevokeAll = async () => {
+    if (!confirm('Log out on ALL devices (including this one)? You will need the PIN to log back in.')) return;
+    try {
+      await revokeAllSessions();
+      try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+    } catch {
+      triggerToast('Failed to log out other devices', 'error');
+    }
+  };
+
+  const handleRunBackupNow = async () => {
+    try {
+      const res = await backupsApi.run();
+      if (res.success) {
+        setLastBackupAt(new Date().toISOString());
+        triggerToast('Backup saved to server', 'success');
+      } else {
+        triggerToast('Backup could not run right now', 'error');
+      }
+    } catch {
+      triggerToast('Backup failed', 'error');
+    }
+  };
+
+  // When the settings sheet opens, show the last automatic server-backup time
+  // and the recent activity log.
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    backupsApi.latest().then((b) => setLastBackupAt(b.createdAt)).catch(() => {});
+    auditApi.list(30).then((entries) => setAuditEntries(entries)).catch(() => {});
+  }, [isSettingsOpen]);
+
   const handleRestoreData = async (file: File | undefined) => {
     if (!file) return;
     if (!confirm(`Restore from ${file.name}? This replaces matching records with the backup. Continue?`)) return;
@@ -405,9 +500,10 @@ export default function App() {
   };
 
   const handleAddProduct = async (newProd: Product) => {
-    const prodWithIcon = enrichProductsWithIcons([newProd])[0];
+    const stamped = { ...newProd, updatedAt: new Date().toISOString() };
+    const prodWithIcon = enrichProductsWithIcons([stamped])[0];
     setProducts(prev => [prodWithIcon, ...prev]);
-    try { await productApi.create(newProd); } catch {
+    try { await productApi.create(stamped); } catch {
       setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
       triggerToast('Failed to save product — not added', 'error');
     }
@@ -415,9 +511,18 @@ export default function App() {
 
   const handleUpdateProduct = async (updatedProd: Product) => {
     const prev = products.find(p => p.id === updatedProd.id);
-    setProducts(prev => prev.map(p => p.id === updatedProd.id ? updatedProd : p));
-    try { await productApi.update(updatedProd); } catch {
-      if (prev) setProducts(list => list.map(p => p.id === updatedProd.id ? prev : p));
+    const stamped = { ...updatedProd, updatedAt: new Date().toISOString() };
+    setProducts(list => list.map(p => p.id === stamped.id ? stamped : p));
+    try { await productApi.update(stamped); } catch (err) {
+      if (err instanceof ApiError && err.code === 'CONFLICT') {
+        // Another device saved a newer version. Pull the server copy so the
+        // winner's row wins cleanly instead of silently keeping stale data.
+        triggerToast('This product was updated on another device — loading the latest version. Your edit was not saved.', 'error');
+        setProducts(list => list.filter(p => p.id !== stamped.id));
+        fetchAllData();
+        return;
+      }
+      if (prev) setProducts(list => list.map(p => p.id === stamped.id ? prev : p));
       triggerToast('Failed to update product — changes reverted', 'error');
     }
   };
@@ -838,6 +943,15 @@ export default function App() {
           <span className="hidden sm:inline-block text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans">
             {settings.vibe}
           </span>
+          {pendingCount > 0 ? (
+            <span className="text-[8px] bg-amber-950/40 text-amber-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-amber-500/30" title={`${pendingCount} unsynced change(s)`}>
+              {pendingCount} unsynced
+            </span>
+          ) : lastSyncedAt ? (
+            <span className="hidden md:inline-block text-[8px] bg-emerald-950/40 text-emerald-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-emerald-500/30" title="Latest server sync time">
+              Synced {formatSyncedAgo(lastSyncedAt)}
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2 shrink-0 min-h-[40px]">
@@ -902,7 +1016,7 @@ export default function App() {
 
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-md p-6 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-md p-6 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
             <div className="absolute -right-20 -top-20 w-48 h-48 rounded-full bg-gold-brand/5 blur-3xl pointer-events-none"></div>
             <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
               <div className="flex items-center gap-2">
@@ -913,7 +1027,7 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="space-y-4">
+            <div className="space-y-4 flex-1 overflow-y-auto pr-1">
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Name</label>
                 <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'IMAC Enterprises' }))}
@@ -989,9 +1103,22 @@ export default function App() {
                   )}
                 </div>
                 <p className="text-[10px] text-zinc-600">App locks automatically after 10 minutes idle. PIN is required on load.</p>
+                <button onClick={handleRevokeAll}
+                  className="w-full h-10 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
+                  Log out all devices
+                </button>
+                <p className="text-[10px] text-zinc-600">Use if a till is lost/stolen or shared. Ends the session everywhere instantly.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
+                <div className="flex items-center justify-between text-[10px] text-zinc-500 font-bold">
+                  <span>Server backup</span>
+                  <span>{lastBackupAt ? `Last: ${new Date(lastBackupAt).toLocaleString()}` : 'Checking…'}</span>
+                </div>
+                <button onClick={handleRunBackupNow}
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                  Back up to server now
+                </button>
                 <button onClick={handleExportData}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup
@@ -1025,6 +1152,31 @@ export default function App() {
                   saveProducts(enriched);
                 });
               }} />
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Activity Log</label>
+                <button onClick={() => setShowAudit(v => !v)}
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                  {showAudit ? 'Hide' : 'View'} recent activity ({auditEntries.length})
+                </button>
+                {showAudit && (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                    {auditEntries.map(entry => (
+                      <div key={entry.id} className="flex items-start justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider truncate">{entry.action}</p>
+                          <p className="text-[9px] text-zinc-500 font-bold truncate">{entry.detail}</p>
+                        </div>
+                        <span className="text-[9px] text-zinc-600 font-bold shrink-0">
+                          {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    ))}
+                    {auditEntries.length === 0 && (
+                      <p className="text-[10px] text-zinc-600 font-bold uppercase text-center py-2">No activity recorded yet.</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
             <button onClick={() => { setIsSettingsOpen(false); triggerToast("Settings saved!", "success"); }}
               className="w-full mt-6 h-11 bg-gold-brand text-black font-black uppercase tracking-widest rounded-2xl text-xs hover:opacity-90 active:scale-98 transition-all font-display">

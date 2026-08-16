@@ -323,7 +323,7 @@ export default defineConfig(() => {
       }),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg'],
+        includeAssets: ['icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'apple-touch-icon.png', 'maskable-512x512.png'],
         manifest: {
           name: 'IMAC Enterprises POS',
           short_name: 'IMAC POS',
@@ -334,12 +334,10 @@ export default defineConfig(() => {
           orientation: 'portrait',
           start_url: '/',
           icons: [
-            {
-              src: 'icon.svg',
-              sizes: 'any',
-              type: 'image/svg+xml',
-              purpose: 'any maskable',
-            },
+            { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: 'maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+            { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           ],
         },
         workbox: {
@@ -349,6 +347,17 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           navigateFallback: 'index.html',
           runtimeCaching: [
+            // Product photos are immutable public assets — CacheFirst means the
+            // till serves them instantly from the SW after the first fetch, so
+            // product grids don't re-download thumbnails on every boot.
+            {
+              urlPattern: ({ url }) => url.pathname.startsWith('/uploads/'),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'uploads-cache',
+                expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              },
+            },
             {
               urlPattern: /^https?:\/\/.*/,
               handler: 'NetworkFirst',

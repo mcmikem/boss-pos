@@ -36,6 +36,7 @@ export interface Product {
   barcode?: string;
   variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
   recipe?: Recipe; // ingredient cost breakdown for a dish; COGS is derived from this
+  updatedAt?: string; // server conflict-detection timestamp
 }
 
 export interface CashTransfer {

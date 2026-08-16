@@ -7,7 +7,7 @@ import {
 import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder } from '../types';
 import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
-import { designOrderApi } from '../api';
+import { designOrderApi, summaryApi, type SummaryResult } from '../api';
 import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
@@ -145,7 +145,31 @@ export default function Analytics({
 
   const totalIncome = revenue + designRevenue;
   const grossProfit = (revenue - cogs) + designProfit;
+  // For Weekly/Monthly the same trick gives exact totals + per-day buckets, so a
+  // busy shop with more than the in-memory 2000-sale cap doesn't undercount.
+  const [serverWindowSummary, setServerWindowSummary] = useState<SummaryResult | null>(null);
+
   const netProfit = grossProfit - totalExpenses;
+
+  // Weekly/Monthly: the server window totals are authoritative (they scan the
+  // whole table, not the in-memory 2000-row cap), so prefer them when loaded.
+  const displayIncome = serverWindowSummary ? serverWindowSummary.revenue : totalIncome;
+  const displayDesignRevenue = serverWindowSummary ? (serverWindowSummary.designRevenue || 0) : designRevenue;
+  const displayNetProfit = serverWindowSummary ? serverWindowSummary.netProfit : netProfit;
+
+  const dailySeries = useMemo(() => {
+    if (serverWindowSummary?.daily && serverWindowSummary.daily.length > 0) {
+      return serverWindowSummary.daily.map(d => ({ label: d.date.slice(5), val: d.revenue }));
+    }
+    const map = new Map<string, number>();
+    filteredSales.forEach(s => {
+      const k = localDayKey(s.timestamp);
+      map.set(k, (map.get(k) || 0) + s.total);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, val]) => ({ label: label.slice(5), val }));
+  }, [serverWindowSummary, filteredSales]);
 
   const categoryBreakdown = useMemo(() => {
     const categoriesSum: { [key: string]: number } = {};
@@ -271,7 +295,41 @@ export default function Analytics({
     setEditingSupplier(null);
   };
 
+  // Server-computed hourly buckets (08:00–20:00, one per hour) for the Daily
+  // view — the server aggregates without shipping every sale row to the phone,
+  // which keeps the 3G payload small even after the client stops loading the
+  // full 2000-sale history. Falls back to the client-side scan if the server
+  // doesn't return buckets (older API) or we're offline.
+  const [serverHourly, setServerHourly] = useState<number[] | null>(null);
+  useEffect(() => {
+    if (timeFilter !== 'Daily') { setServerHourly(null); return; }
+    let active = true;
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+    summaryApi.list(dayStart.toISOString(), dayEnd.toISOString(), 'hourly')
+      .then(r => { if (active && r.hourly && r.hourly.length > 0) setServerHourly(r.hourly); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [timeFilter]);
+
+  useEffect(() => {
+    if (timeFilter === 'Daily') { setServerWindowSummary(null); return; }
+    let active = true;
+    const now = new Date();
+    const from = new Date(now);
+    from.setDate(from.getDate() - (timeFilter === 'Weekly' ? 7 : 31));
+    from.setHours(0, 0, 0, 0);
+    summaryApi.list(from.toISOString(), now.toISOString(), 'daily')
+      .then(r => { if (active) setServerWindowSummary(r); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [timeFilter]);
+
   const hourlyValues = useMemo(() => {
+    if (serverHourly && serverHourly.length === 13) {
+      // Merge the 13 one-hour buckets into the chart's 7 two-hour slots.
+      return Array.from({ length: 7 }, (_, i) => (serverHourly[i * 2] || 0) + (serverHourly[i * 2 + 1] || 0));
+    }
     const values = Array(7).fill(0);
     filteredSales.forEach(sale => {
       const hour = new Date(sale.timestamp).getHours();
@@ -284,7 +342,7 @@ export default function Analytics({
       else values[6] += sale.total;
     });
     return values;
-  }, [filteredSales]);
+  }, [serverHourly, filteredSales]);
 
   const maxVal = useMemo(() => Math.max(...hourlyValues, 1000), [hourlyValues]);
 
@@ -490,14 +548,14 @@ const colorsMap: { [key: string]: string } = {
             </div>
             <div className="boss-card p-5 flex flex-col justify-between h-32">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Total Sales</span>
-              <h3 className="text-2xl font-black text-white font-display mt-2">{formatCurrency(totalIncome)}</h3>
+              <h3 className="text-2xl font-black text-white font-display mt-2">{formatCurrency(displayIncome)}</h3>
               <p className="text-xs text-zinc-500 font-bold uppercase">
-                Money in{designRevenue > 0 ? ` • Design ${formatCurrency(designRevenue)}` : ''}
+                Money in{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''}
               </p>
             </div>
             <div className="boss-card p-5 flex flex-col justify-between h-32">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Profit</span>
-              <h3 className={`text-2xl font-black font-display mt-2 ${netProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(netProfit)}</h3>
+              <h3 className={`text-2xl font-black font-display mt-2 ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(displayNetProfit)}</h3>
               <p className="text-xs text-zinc-500 font-bold uppercase">After all costs</p>
             </div>
           </div>
@@ -507,26 +565,50 @@ const colorsMap: { [key: string]: string } = {
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Sales Over Time</h3>
               <TrendingUp className="w-4 h-4 text-gold-brand" />
             </div>
-            <div className="relative h-44 w-full bg-[#0A0A0A] p-4 border border-white/5 rounded-2xl overflow-hidden">
-              <svg className="w-full h-full" viewBox="0 0 400 150" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="glowingChart" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0%" stopColor="#f1c100" stopOpacity="0.25"></stop>
-                    <stop offset="100%" stopColor="#f1c100" stopOpacity="0"></stop>
-                  </linearGradient>
-                </defs>
-                {areaPath && <path d={areaPath} fill="url(#glowingChart)"></path>}
-                {linePath && <path d={linePath} fill="none" stroke="#f1c100" strokeWidth="3.5" className="chart-glow"></path>}
-                {chartPoints.map((pt, i) => (
-                  <circle key={i} cx={pt.x} cy={pt.y} fill="#0f0f0f" r="4.5" stroke="#f1c100" strokeWidth="2">
-                    <title>{`${8 + i * 2}:00: ${formatCurrency(pt.val)}`}</title>
-                  </circle>
-                ))}
-              </svg>
-              <div className="absolute bottom-2 inset-x-4 flex justify-between text-xs text-zinc-500 font-black">
-                <span>08:00</span><span>10:00</span><span>12:00</span><span>14:00</span><span>16:00</span><span>18:00</span><span>20:00</span>
+            {timeFilter === 'Daily' ? (
+              <div className="relative h-44 w-full bg-[#0A0A0A] p-4 border border-white/5 rounded-2xl overflow-hidden">
+                <svg className="w-full h-full" viewBox="0 0 400 150" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="glowingChart" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stopColor="#f1c100" stopOpacity="0.25"></stop>
+                      <stop offset="100%" stopColor="#f1c100" stopOpacity="0"></stop>
+                    </linearGradient>
+                  </defs>
+                  {areaPath && <path d={areaPath} fill="url(#glowingChart)"></path>}
+                  {linePath && <path d={linePath} fill="none" stroke="#f1c100" strokeWidth="3.5" className="chart-glow"></path>}
+                  {chartPoints.map((pt, i) => (
+                    <circle key={i} cx={pt.x} cy={pt.y} fill="#0f0f0f" r="4.5" stroke="#f1c100" strokeWidth="2">
+                      <title>{`${8 + i * 2}:00: ${formatCurrency(pt.val)}`}</title>
+                    </circle>
+                  ))}
+                </svg>
+                <div className="absolute bottom-2 inset-x-4 flex justify-between text-xs text-zinc-500 font-black">
+                  <span>08:00</span><span>10:00</span><span>12:00</span><span>14:00</span><span>16:00</span><span>18:00</span><span>20:00</span>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="relative h-44 w-full bg-[#0A0A0A] p-4 border border-white/5 rounded-2xl overflow-hidden">
+                <div className="flex items-end justify-between gap-1 h-full">
+                  {(() => {
+                    const dailyMax = Math.max(...dailySeries.map(x => x.val), 1000);
+                    return dailySeries.map((d, idx) => {
+                    const pct = dailyMax > 0 ? (d.val / dailyMax) * 100 : 0;
+                    const isPeak = d.val === dailyMax;
+                    return (
+                      <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative">
+                        <div className="absolute -top-7 bg-[#141414] border border-white/5 text-xs text-gold-brand px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none font-bold whitespace-nowrap">
+                          {d.label}: {formatCurrency(d.val)}
+                        </div>
+                        <div className={`w-full rounded-t transition-all duration-500 ${isPeak ? 'bg-gradient-to-t from-gold-medium to-gold-brand' : 'bg-zinc-800 group-hover:bg-zinc-700'}`}
+                          style={{ height: `${Math.max(pct, 4)}%` }}></div>
+                        <span className="text-[9px] text-zinc-500 font-bold mt-1.5 truncate max-w-full">{d.label}</span>
+                      </div>
+                    );
+                    });
+                  })()}
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="grid grid-cols-1 md:grid-cols-2 gap-6">

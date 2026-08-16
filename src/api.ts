@@ -6,6 +6,46 @@ const CACHE_INDEX_KEY = 'boss_api_cache_keys';
 const TOKEN_KEY = 'boss_pos_token';
 const OUTBOX_KEY = 'boss_pos_outbox';
 
+// Error that carries the HTTP status + server error code so callers can react
+// to specific failures (e.g. 409 CONFLICT from multi-device product edits).
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// Stable per-device id + monotonic write sequence. Every write body carries
+// them, and clientWriteId is derived from them, so an offline outbox replay is
+// deterministic per device and can never collide with another device's id.
+function getDeviceId(): string {
+  try {
+    let id = localStorage.getItem('boss_pos_device_id');
+    if (!id) {
+      id = `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem('boss_pos_device_id', id);
+    }
+    return id;
+  } catch {
+    return 'd-unknown';
+  }
+}
+
+function nextWriteSeq(): number {
+  try {
+    const raw = parseInt(localStorage.getItem('boss_pos_write_seq') || '0', 10);
+    const next = raw + 1;
+    localStorage.setItem('boss_pos_write_seq', String(next));
+    return next;
+  } catch {
+    return Math.floor(Math.random() * 1e9);
+  }
+}
+
 export function getAuthToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY);
@@ -32,6 +72,8 @@ interface OutboxEntry {
   method: string;
   body: string;
   queuedAt: number;
+  deviceId?: string;
+  seq?: number;
 }
 
 function getOutbox(): OutboxEntry[] {
@@ -55,6 +97,8 @@ function enqueue(path: string, method: string, body: string): void {
     method,
     body,
     queuedAt: Date.now(),
+    deviceId: getDeviceId(),
+    seq: nextWriteSeq(),
   };
   const list = getOutbox();
   list.push(entry);
@@ -70,10 +114,14 @@ export function outboxCount(): number {
 // is re-issued on the next online unlock, and the flush will then succeed.
 // 404 responses count as flushed: the server DELETEs are idempotent now, and a
 // 404 from an already-drained replay must not wedge the outbox forever.
+// A 409 CONFLICT (a product edit that lost the race to a newer edit on another
+// device) is also dropped — retrying forever can't change the outcome, and the
+// newest version already won on the server. The caller is told so it can warn.
 export async function flushOutbox(): Promise<number> {
   const list = getOutbox();
   if (list.length === 0) return 0;
   let flushed = 0;
+  let conflicts = 0;
   const remaining: OutboxEntry[] = [];
   for (const entry of list) {
     try {
@@ -86,6 +134,14 @@ export async function flushOutbox(): Promise<number> {
         flushed++;
         continue;
       }
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        if (body.code === 'CONFLICT') {
+          conflicts++;
+          flushed++;
+          continue;
+        }
+      }
       remaining.push(entry);
     } catch {
       remaining.push(entry);
@@ -93,6 +149,11 @@ export async function flushOutbox(): Promise<number> {
   }
   saveOutbox(remaining);
   if (flushed > 0) clearRelatedCaches('/api');
+  if (conflicts > 0) {
+    try {
+      window.dispatchEvent(new CustomEvent('boss-pos-sync-conflict', { detail: conflicts }));
+    } catch {}
+  }
   return flushed;
 }
 
@@ -140,6 +201,30 @@ export async function authMigratePin(hash: string): Promise<boolean> {
     body: JSON.stringify({ hash }),
   });
   if (!res.ok) throw new Error('Failed to migrate PIN');
+  return true;
+}
+
+// Upload a photo to the server for server-side resizing (raw file — no canvas,
+// no createObjectURL, no OOM on old Androids). Returns the public image URL.
+export async function uploadImage(file: File | Blob): Promise<string> {
+  const res = await fetch(`${BASE}/api/uploads`, {
+    method: 'POST',
+    headers: { Authorization: getAuthHeader(), 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.error || `Upload failed: ${res.status}`, res.status, data.code);
+  return data.url as string;
+}
+
+// Bump the server token version -> every other device's token 401s immediately.
+export async function revokeAllSessions(): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/auth/revoke-all`, {
+    method: 'POST',
+    headers: { Authorization: getAuthHeader() },
+  });
+  if (!res.ok) throw new Error('Failed to log out all devices');
+  setAuthToken(null);
   return true;
 }
 
@@ -256,13 +341,15 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     }
   }
 
-  // Idempotency: attach a stable client_write_id to every create/update body so
-  // an offline outbox replay can't double-insert a sale/expense/etc. The same
-  // id rides along when the request is queued, so the server can dedupe it.
+  // Idempotency + write versioning: every create/update body carries a stable
+  // client_write_id derived from (device, seq) so an offline outbox replay can't
+  // double-insert and the write order is deterministic per device. The deviceId
+  // rides along so the server could cross-device order later.
   if (!isRead && options?.method && (options.method === 'POST' || options.method === 'PUT')) {
     let parsed: Record<string, unknown> = {};
     try { parsed = (options.body as string) ? JSON.parse(options.body as string) : {}; } catch {}
-    if (!parsed.clientWriteId) parsed.clientWriteId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    if (!parsed.clientWriteId) parsed.clientWriteId = `${getDeviceId()}:${nextWriteSeq()}`;
+    parsed.deviceId = getDeviceId();
     options = { ...options, body: JSON.stringify(parsed) };
   }
 
@@ -271,7 +358,24 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
       headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
       ...options,
     });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    if (!res.ok) {
+      let message = `API error: ${res.status}`;
+      let code: string | undefined;
+      try {
+        const body = await res.json().catch(() => ({}));
+        if (body.error) message = body.error;
+        if (body.code) code = body.code;
+      } catch {}
+      if (res.status === 401 && path.startsWith('/api/') && getAuthToken()) {
+        // Revoked/expired token: drop it and re-lock the till (outbox is kept —
+        // it replays after the next online unlock mints a fresh token). Only
+        // fires when a token was actually present — a wrong PIN on the lock
+        // screen is also a 401 and must NOT be treated as a global revoke.
+        setAuthToken(null);
+        try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+      }
+      throw new ApiError(message, res.status, code);
+    }
     const data = await res.json();
 
     if (isRead) {
@@ -401,6 +505,8 @@ export interface BootData {
   wastageLogs: WastageLog[];
   momoTransfers: MomoTransfer[];
   settings: StoreSettings;
+  salesTruncated?: boolean;
+  expensesTruncated?: boolean;
 }
 
 // One round-trip boots the whole till on 3G instead of 10 serialized requests.
@@ -416,25 +522,48 @@ export function primeCache(path: string, data: unknown, ttlMs = 24 * 60 * 60 * 1
   setCache(path, data, ttlMs);
 }
 
+export interface SummaryResult {
+  from: string | null;
+  to: string | null;
+  salesCount: number;
+  revenue: number;
+  designRevenue: number;
+  designProfit: number;
+  cogs: number;
+  grossProfit: number;
+  expenseTotal: number;
+  netProfit: number;
+  creditOutstanding: number;
+  lowStockCount: number;
+  hourly?: number[];
+  daily?: { date: string; revenue: number }[];
+}
+
 export const summaryApi = {
-  list: (from?: string, to?: string) => {
+  list: (from?: string, to?: string, bucket?: 'hourly' | 'daily') => {
     const qs = new URLSearchParams();
     if (from) qs.set('from', from);
     if (to) qs.set('to', to);
+    if (bucket) qs.set('bucket', bucket);
     const q = qs.toString();
-    return api<{
-      from: string | null;
-      to: string | null;
-      salesCount: number;
-      revenue: number;
-      cogs: number;
-      grossProfit: number;
-      expenseTotal: number;
-      netProfit: number;
-      creditOutstanding: number;
-      lowStockCount: number;
-    }>(`/api/summary${q ? `?${q}` : ''}`);
+    return api<SummaryResult>(`/api/summary${q ? `?${q}` : ''}`);
   },
+};
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  action: string;
+  detail: string;
+}
+
+export const auditApi = {
+  list: (limit = 100) => api<AuditEntry[]>(`/api/audit?limit=${limit}`, { fresh: true }),
+};
+
+export const backupsApi = {
+  latest: () => api<{ createdAt: string | null }>('/api/backups/latest', { fresh: true }),
+  run: () => api<{ success: boolean }>('/api/backups/run', { method: 'POST' }),
 };
 
 export const exportApi = {

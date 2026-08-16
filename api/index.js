@@ -1,5 +1,6 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
+import sharp from 'sharp';
 import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const app = express();
@@ -128,6 +129,21 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_momotrans_cwid ON momo_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
+  await sql`CREATE TABLE IF NOT EXISTS uploads (
+    id TEXT PRIMARY KEY, data BYTEA NOT NULL,
+    content_type TEXT DEFAULT 'image/jpeg', created_at TEXT NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS backups (
+    id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data JSONB NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, detail TEXT DEFAULT ''
+  )`;
+  // updated_at enables multi-device conflict detection (last-write-wins + warn),
+  // deleted is a tombstone so offline deletes/updates can't resurrect rows.
+  try { await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TEXT`; } catch {}
+  try { await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT false`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_products_deleted ON products(deleted) WHERE deleted = true`; } catch {}
   // Query indexes so the most common reads (date ranges, category browsing,
   // low-stock, order number lookup) don't seq-scan as the shop grows.
   try { await sql`CREATE INDEX IF NOT EXISTS idx_sales_timestamp ON sales(timestamp)`; } catch {}
@@ -162,6 +178,10 @@ async function initDB() {
       AUTH_SECRET = again.length && again[0].value ? again[0].value : AUTH_SECRET;
     }
   }
+  // Token version for "log out all devices" (bump on revoke-all).
+  await sql`INSERT INTO settings (key, value) VALUES ('authVersion', '0') ON CONFLICT (key) DO NOTHING`;
+  // Auto-backup bookkeeping (epoch ms; 0 = never).
+  await sql`INSERT INTO settings (key, value) VALUES ('lastAutoBackupAt', '0') ON CONFLICT (key) DO NOTHING`;
 }
 
 function escapeId(id) {
@@ -178,6 +198,78 @@ function text(v, max) {
 function num(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// Render an image Buffer to a ~200px JPEG thumbnail with sharp.
+async function renderThumbnail(buf) {
+  const img = sharp(buf, { failOn: 'none', limitInputPixels: 64 * 1024 * 1024 });
+  const meta = await img.metadata().catch(() => null);
+  if (!meta || !meta.width || !meta.height) return null;
+  return img
+    .rotate()
+    .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 70, mozjpeg: true })
+    .toBuffer();
+}
+
+// Store a raw image or data: URL as an /uploads/<id>.jpg thumbnail. Returns the
+// public URL, or null when the input isn't a usable image. Base64 is converted
+// server-side so product rows (and JSON payloads) never carry data URIs.
+async function resolveImageUrl(url) {
+  if (!url) return null;
+  const raw = String(url);
+  let buf;
+  if (raw.startsWith('data:image/')) {
+    const comma = raw.indexOf(',');
+    if (comma < 0) return null;
+    const b64 = raw.slice(comma + 1).replace(/\s+/g, '');
+    if (!b64 || b64.length > 100_000) return null;
+    try { buf = Buffer.from(b64, 'base64'); } catch { return null; }
+  } else if (raw.startsWith('/uploads/')) {
+    return raw.slice(0, 200);
+  } else if (/^https?:\/\//.test(raw)) {
+    return raw.slice(0, 2000);
+  } else {
+    return null;
+  }
+  const jpeg = await renderThumbnail(buf);
+  if (!jpeg) return null;
+  const id = 'u-' + randomUUID();
+  await sql`INSERT INTO uploads (id, data, content_type, created_at) VALUES (${id}, ${jpeg}, 'image/jpeg', ${new Date().toISOString()})`;
+  return `/uploads/${id}.jpg`;
+}
+
+// Best-effort activity log (who/what/when). A failed write never fails the
+// caller — same philosophy as logStockMovement.
+async function audit(action, detail) {
+  try {
+    await sql`INSERT INTO audit_log (id, at, action, detail)
+      VALUES (${'al-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)}, ${new Date().toISOString()}, ${action}, ${detail || ''})`;
+  } catch (e) {
+    console.error('Audit log failed:', e.message);
+  }
+}
+
+// One-time migration: legacy base64 product images -> /uploads rows so list
+// payloads stop shipping megabytes of data URIs. Idempotent via a settings flag.
+async function migrateLegacyImages() {
+  const flag = await sql`SELECT value FROM settings WHERE key='legacyImagesMigrated'`;
+  if (flag.length && flag[0].value === 'true') return;
+  const rows = await sql`SELECT id, imageurl FROM products WHERE imageurl LIKE 'data:image/%'`;
+  let done = 0;
+  for (const r of rows) {
+    try {
+      const url = await resolveImageUrl(r.imageurl);
+      if (url) {
+        await sql`UPDATE products SET imageurl=${url} WHERE id=${r.id}`;
+        done++;
+      }
+    } catch (e) {
+      console.error('Legacy image migration failed for', r.id, e.message);
+    }
+  }
+  await sql`INSERT INTO settings (key, value) VALUES ('legacyImagesMigrated', 'true') ON CONFLICT (key) DO UPDATE SET value='true'`;
+  if (done > 0) console.log('Migrated legacy product images:', done);
 }
 
 async function batchInsert(table, columns, rows) {
@@ -383,6 +475,10 @@ initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
   console.error('Catalog sync failed:', err);
 });
 
+initPromise = initPromise.then(() => migrateLegacyImages()).catch(err => {
+  console.error('Legacy image migration failed:', err);
+});
+
 app.use((req, res, next) => {
   initPromise.then(() => next()).catch(err => {
     res.status(500).json({ error: 'Database initialization failed' });
@@ -394,19 +490,35 @@ app.use((req, res, next) => {
 // settings table; AUTH_SECRET is seeded on first boot (see initDB).
 let AUTH_SECRET = process.env.AUTH_SECRET || null;
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Cached token version; re-read from the DB at most every 10s so a revoke-all
+// on another serverless instance takes effect quickly without a per-request hit.
+let authVersionCache = { v: 0, at: 0 };
+
+async function currentAuthVersion() {
+  if (Date.now() - authVersionCache.at < 10_000) return authVersionCache.v;
+  try {
+    const rows = await sql`SELECT value FROM settings WHERE key='authVersion'`;
+    const v = rows.length ? parseInt(rows[0].value, 10) || 0 : 0;
+    authVersionCache = { v, at: Date.now() };
+    return v;
+  } catch {
+    return authVersionCache.v;
+  }
+}
 
 function sha256Hex(s) {
   return createHash('sha256').update(String(s || '')).digest('hex');
 }
 
-function signToken() {
+async function signToken() {
+  const v = await currentAuthVersion();
   const exp = Date.now() + TOKEN_TTL_MS;
-  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ exp, v })).toString('base64url');
   const sig = createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
-function verifyToken(token) {
+async function verifyToken(token) {
   if (!token) return false;
   const [payload, sig] = String(token).split('.');
   if (!payload || !sig) return false;
@@ -415,18 +527,19 @@ function verifyToken(token) {
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return false;
   try {
-    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    const { exp, v } = JSON.parse(Buffer.from(payload, 'base64url').toString());
     if (!exp || Date.now() > exp) return false;
+    if (typeof v === 'number' && v !== await currentAuthVersion()) return false;
     return true;
   } catch {
     return false;
   }
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
-  if (!verifyToken(token)) return res.status(401).json({ error: 'Unauthorized', code: 'AUTH_REQUIRED' });
+  if (!await verifyToken(token)) return res.status(401).json({ error: 'Unauthorized', code: 'AUTH_REQUIRED' });
   next();
 }
 
@@ -514,7 +627,8 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
     returnedHash = pinHashFormat(salt, hashPinStrong(String(pin || ''), salt));
     await sql`UPDATE settings SET value=${returnedHash} WHERE key='pinHash'`;
   }
-  res.json({ ok: true, token: signToken(), hasPin: !!stored, hash: returnedHash || undefined, salt: returnedHash.split('$')[2], iterations: returnedHash.startsWith('pbkdf2$') ? PIN_ITERATIONS : undefined });
+  await audit('auth.login', 'Unlocked the till');
+  res.json({ ok: true, token: await signToken(), hasPin: !!stored, hash: returnedHash || undefined, salt: returnedHash.split('$')[2], iterations: returnedHash.startsWith('pbkdf2$') ? PIN_ITERATIONS : undefined });
 }));
 
 // Public pre-auth status: only the fields the lock screen needs (no financial data).
@@ -525,11 +639,54 @@ app.get('/api/auth/status', asHandler(async (req, res) => {
   res.json({ shopName: obj.shopName || '', hasPin: !!(obj.pinHash) });
 }));
 
+// Product photos are public (like static assets) so <img> tags and the service
+// worker can fetch them without an Authorization header. They're immutable:
+// every upload is a unique id, so cache forever.
+app.get('/uploads/:file', asHandler(async (req, res) => {
+  const id = req.params.file.replace(/\.(jpe?g|png|webp)$/i, '');
+  const rows = await sql`SELECT data, content_type FROM uploads WHERE id=${id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+  res.setHeader('Content-Type', rows[0].content_type || 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('ETag', `"${id}"`);
+  res.send(Buffer.from(rows[0].data));
+}));
+
 // Everything after this point requires a valid token — writes AND reads.
 app.use((req, res, next) => {
-  if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) return requireAuth(req, res, next);
+  if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
+    requireAuth(req, res, next).catch(next);
+    return;
+  }
   next();
 });
+
+// Revalidate cheaply on 3G: attach an ETag + short Cache-Control to every JSON
+// GET so the browser/SW can turn full downloads into 304s. (Not shared-cache
+// `public` — this is financial data.)
+app.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  const send = res.json.bind(res);
+  res.json = (body) => {
+    const etag = '"' + createHash('sha1').update(JSON.stringify(body)).digest('hex') + '"';
+    res.setHeader('Cache-Control', 'private, max-age=30, stale-while-revalidate=300');
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return res;
+    }
+    return send(body);
+  };
+  next();
+});
+
+// Log out every device: bump the token version. Old tokens 401 immediately.
+app.post('/api/auth/revoke-all', asHandler(async (req, res) => {
+  const r = await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key='authVersion' RETURNING value::int AS v`;
+  authVersionCache = { v: r.length ? r[0].v : 0, at: Date.now() };
+  await audit('auth.revoke_all', 'Logged out all devices');
+  res.json({ success: true });
+}));
 
 // Set or clear the PIN (empty string removes it). Accepts { pin } (hashed here)
 // or { hash } (stored as-is, used to migrate an existing client-side hash).
@@ -544,6 +701,7 @@ app.post('/api/auth/set', asHandler(async (req, res) => {
     value = pinHashFormat(salt, hashPinStrong(String(pin).slice(0, 64), salt));
   }
   await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value=${value}`;
+  await audit('auth.pin', value ? 'PIN set / changed' : 'PIN removed');
   res.json({
     ok: true,
     hasPin: !!value,
@@ -559,9 +717,37 @@ app.post('/api/orders/next', asHandler(async (req, res) => {
   res.json({ orderNumber: `Order #${next}`, number: next });
 }));
 
+// === IMAGE UPLOADS ===
+// Raw file (image/*) OR JSON { imageData: "data:image/..." }. The phone uploads
+// the raw file and sharp downsizes it here — no canvas, no createObjectURL, no
+// OOM on old Androids. Returns a public, immutable /uploads/<id>.jpg URL.
+app.post('/api/uploads', express.raw({ type: () => true, limit: '8mb' }), asHandler(async (req, res) => {
+  let buf;
+  const ctype = String(req.headers['content-type'] || '');
+  if (ctype.includes('application/json')) {
+    try {
+      const parsed = JSON.parse(req.body.toString('utf8'));
+      if (!parsed || !parsed.imageData) return res.status(400).json({ error: 'Missing imageData' });
+      const comma = String(parsed.imageData).indexOf(',');
+      if (comma < 0) return res.status(400).json({ error: 'Invalid image data' });
+      buf = Buffer.from(String(parsed.imageData).slice(comma + 1), 'base64');
+    } catch {
+      return res.status(400).json({ error: 'Invalid image payload' });
+    }
+  } else {
+    buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || []);
+  }
+  if (!buf.length) return res.status(400).json({ error: 'No image data' });
+  const jpeg = await renderThumbnail(buf);
+  if (!jpeg) return res.status(400).json({ error: 'Not a valid image' });
+  const id = 'u-' + randomUUID();
+  await sql`INSERT INTO uploads (id, data, content_type, created_at) VALUES (${id}, ${jpeg}, 'image/jpeg', ${new Date().toISOString()})`;
+  res.json({ url: `/uploads/${id}.jpg` });
+}));
+
 // === PRODUCTS API ===
 app.get('/api/products', asHandler(async (req, res) => {
-  const rows = await sql`SELECT * FROM products`;
+  const rows = await sql`SELECT * FROM products WHERE deleted = false`;
   res.json(rows.map(mapProduct));
 }));
 
@@ -588,11 +774,16 @@ app.post('/api/products', asHandler(async (req, res) => {
   const imei = text(p.imei, 100) || null;
   const barcode = text(p.barcode, 100) || null;
   const id = p.id || 'p-' + randomUUID();
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${p.imageUrl?String(p.imageUrl).slice(0,60000):null},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null})`;
+  // Base64 images from the offline canvas fallback are converted to /uploads
+  // rows here, so nothing data: stays in the DB (or the JSON payloads).
+  const imageUrl = await resolveImageUrl(p.imageUrl);
+  const nowIso = new Date().toISOString();
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe,updated_at) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${imageUrl},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null},${nowIso})`;
   if (!p.isService && (p.stockQty || 0) > 0) {
     await logStockMovement(sql, { productId: id, productName: name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
   }
-  res.json({ ...p, id });
+  await audit('product.create', `${name} (${id})`);
+  res.json({ ...p, id, updatedAt: nowIso });
 }));
 
 app.put('/api/products/:id', asHandler(async (req, res) => {
@@ -605,7 +796,25 @@ app.put('/api/products/:id', asHandler(async (req, res) => {
   const imei = text(p.imei, 100) || null;
   const barcode = text(p.barcode, 100) || null;
   const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
-  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${imei},barcode=${barcode},imageUrl=${p.imageUrl?String(p.imageUrl).slice(0,60000):null},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null} WHERE id=${req.params.id}`;
+  if (!old.length) return res.status(404).json({ error: 'Product not found' });
+
+  // Conflict detection: another device saved a NEWER version since this client
+  // last read the row. Keep the newest, reject the stale write with the server
+  // row so the till can warn staff and reload. An offline outbox replay of a
+  // stale edit gets this too — it's dropped as CONFLICT, not wedged.
+  const serverUpdatedAt = old[0].updated_at;
+  const clientUpdatedAt = p.updatedAt;
+  if (clientUpdatedAt && serverUpdatedAt && clientUpdatedAt < serverUpdatedAt) {
+    return res.status(409).json({
+      error: 'This item was changed on another device. Your edit was not saved.',
+      code: 'CONFLICT',
+      row: mapProduct(old[0]),
+    });
+  }
+
+  const imageUrl = await resolveImageUrl(p.imageUrl);
+  const nowIso = new Date().toISOString();
+  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${imei},barcode=${barcode},imageUrl=${imageUrl},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null},updated_at=${nowIso},deleted=false WHERE id=${req.params.id}`;
   if (!p.isService) {
     const prev = old.length ? (old[0].stockqty || 0) : 0;
     const next = p.stockQty || 0;
@@ -613,15 +822,20 @@ app.put('/api/products/:id', asHandler(async (req, res) => {
       await logStockMovement(sql, { productId: p.id, productName: name, delta: next - prev, type: 'adjust', qtyAfter: next, note: `Stock edited ${prev} -> ${next}` });
     }
   }
-  res.json(p);
+  await audit('product.update', `${name} (${req.params.id})`);
+  res.json({ ...p, updatedAt: nowIso });
 }));
 
+// Soft delete (tombstone): an offline UPDATE from another device un-deletes the
+// row instead of resurrecting via DELETE/UPDATE ordering races. Lists filter
+// deleted rows; the row stays for the audit trail and conflict resolution.
 app.delete('/api/products/:id', asHandler(async (req, res) => {
-  const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
-  await sql`DELETE FROM products WHERE id=${req.params.id}`;
+  const old = await sql`SELECT * FROM products WHERE id=${req.params.id} AND deleted = false`;
+  await sql`UPDATE products SET deleted=true, updated_at=${new Date().toISOString()} WHERE id=${req.params.id}`;
   if (old.length && !old[0].isservice && (old[0].stockqty || 0) > 0) {
     await logStockMovement(sql, { productId: old[0].id, productName: old[0].name, delta: -(old[0].stockqty || 0), type: 'delete', qtyAfter: 0, note: 'Product deleted' });
   }
+  await audit('product.delete', `${old.length ? old[0].name : req.params.id}`);
   res.json({ success: true });
 }));
 
@@ -635,31 +849,36 @@ app.post('/api/suppliers', asHandler(async (req, res) => {
   const s = req.body;
   const id = s.id || 'sup-' + randomUUID();
   await sql`INSERT INTO suppliers (id,name,contactPerson,phone,email) VALUES (${id},${s.name},${s.contactPerson||''},${s.phone||''},${s.email||''})`;
+  await audit('supplier.create', `${s.name} (${id})`);
   res.json({ ...s, id });
 }));
 
 app.put('/api/suppliers/:id', asHandler(async (req, res) => {
   const s = req.body;
   await sql`UPDATE suppliers SET name=${s.name},contactPerson=${s.contactPerson||''},phone=${s.phone||''},email=${s.email||''} WHERE id=${req.params.id}`;
+  await audit('supplier.update', `${s.name} (${req.params.id})`);
   res.json(s);
 }));
 
 app.delete('/api/suppliers/:id', asHandler(async (req, res) => {
   await sql`DELETE FROM suppliers WHERE id=${req.params.id}`;
+  await audit('supplier.delete', `Deleted ${req.params.id}`);
   res.json({ success: true });
 }));
 
 // === SALES API ===
 app.get('/api/sales', asHandler(async (req, res) => {
   const { from, to, limit, offset } = req.query;
+  // Bounded default: shipping every sale ever bloats 3G boots forever. Recent
+  // N is plenty for the till; older rows are one pageable query away.
+  const effLimit = limit ? parseInt(limit) : 2000;
+  const effOffset = offset ? parseInt(offset) : 0;
   let where = ' WHERE 1=1';
   const params = [];
   if (from) { params.push(from); where += ` AND timestamp >= $${params.length}`; }
   if (to) { params.push(to); where += ` AND timestamp <= $${params.length}`; }
-  let query = `SELECT * FROM sales${where} ORDER BY timestamp DESC`;
-  if (limit) { params.push(parseInt(limit)); query += ` LIMIT $${params.length}`; }
-  if (offset) { params.push(parseInt(offset)); query += ` OFFSET $${params.length}`; }
-  const rows = await sql.query(query, params);
+  const rows = await sql.query(
+    `SELECT * FROM sales${where} ORDER BY timestamp DESC LIMIT ${effLimit} OFFSET ${effOffset}`, params);
   res.json(rows.map(mapSale));
 }));
 
@@ -726,6 +945,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
       for (const row of stock || []) {
         await logStockMovement(sql, { productId: row.id, productName: row.name, delta: -(row.qty || 0), type: 'sale', qtyAfter: row.stockqty, saleId, note: `Order ${orderNumber}` });
       }
+      await audit('sale.create', `${orderNumber} (${s.paymentMethod || 'Cash'})`);
+      maybeAutoBackup().catch(() => {});
       return res.json({ ...s, id: saleId, orderNumber });
     } catch (err) {
       // Order-number collision from a queued/replayed offline sale: renumber
@@ -763,6 +984,7 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
   for (const row of r[0].stock || []) {
     await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.qty || 0, type: 'sale_deleted', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Sale deleted' });
   }
+  await audit('sale.delete', `Deleted ${req.params.id}`);
   res.json({ success: true, deleted: 1 });
 }));
 
@@ -788,20 +1010,21 @@ app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
   for (const row of r[0].stock || []) {
     await logStockMovement(sql, { productId: row.id, productName: row.name, delta: row.qty || 0, type: 'refund', qtyAfter: row.stockqty, saleId: req.params.id, note: 'Refunded' });
   }
+  await audit('sale.refund', `Refunded ${req.params.id}`);
   res.json({ success: true });
 }));
 
 // === EXPENSES API ===
 app.get('/api/expenses', asHandler(async (req, res) => {
   const { from, to, limit, offset } = req.query;
+  const effLimit = limit ? parseInt(limit) : 2000;
+  const effOffset = offset ? parseInt(offset) : 0;
   let where = ' WHERE 1=1';
   const params = [];
   if (from) { params.push(from); where += ` AND timestamp >= $${params.length}`; }
   if (to) { params.push(to); where += ` AND timestamp <= $${params.length}`; }
-  let query = `SELECT * FROM expenses${where} ORDER BY timestamp DESC`;
-  if (limit) { params.push(parseInt(limit)); query += ` LIMIT $${params.length}`; }
-  if (offset) { params.push(parseInt(offset)); query += ` OFFSET $${params.length}`; }
-  const rows = await sql.query(query, params);
+  const rows = await sql.query(
+    `SELECT * FROM expenses${where} ORDER BY timestamp DESC LIMIT ${effLimit} OFFSET ${effOffset}`, params);
   res.json(rows);
 }));
 
@@ -816,11 +1039,13 @@ app.post('/api/expenses', asHandler(async (req, res) => {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
     return res.json(existing.length ? existing[0] : e);
   }
+  await audit('expense.create', `${description} (${category || 'Miscellaneous'})`);
   res.json(e);
 }));
 
 app.delete('/api/expenses/:id', asHandler(async (req, res) => {
   await sql`DELETE FROM expenses WHERE id=${req.params.id}`;
+  await audit('expense.delete', `Deleted ${req.params.id}`);
   res.json({ success: true });
 }));
 
@@ -841,6 +1066,9 @@ app.put('/api/settings', asHandler(async (req, res) => {
   for (const [k, v] of Object.entries(req.body)) {
     await sql`INSERT INTO settings (key,value) VALUES (${k},${typeof v === 'string' ? v : JSON.stringify(v)}) ON CONFLICT (key) DO UPDATE SET value = ${typeof v === 'string' ? v : JSON.stringify(v)}`;
   }
+  // Deliberately NOT audited: the settings sheet debounces a PUT on every
+  // pause, which would drown the activity log. Security-relevant changes (PIN,
+  // revoke-all, backups, restores) are audited where they happen instead.
   res.json({ success: true });
 }));
 
@@ -1109,19 +1337,31 @@ app.get('/api/boot', asHandler(async (req, res) => {
   delete obj.pinHash;
   obj.hasPin = hasPin;
 
-  const [products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
-    sql`SELECT * FROM products`.then(r => r.map(mapProduct)),
+  const BOOT_SALE_CAP = 2000;
+  const [products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, counts] = await Promise.all([
+    sql`SELECT * FROM products WHERE deleted = false`.then(r => r.map(mapProduct)),
     sql`SELECT * FROM suppliers`.then(r => r.map(mapSupplier)),
-    sql`SELECT * FROM sales ORDER BY timestamp DESC`.then(r => r.map(mapSale)),
-    sql`SELECT * FROM expenses ORDER BY timestamp DESC`,
+    sql`SELECT * FROM sales ORDER BY timestamp DESC LIMIT ${BOOT_SALE_CAP}`.then(r => r.map(mapSale)),
+    sql`SELECT * FROM expenses ORDER BY timestamp DESC LIMIT ${BOOT_SALE_CAP}`,
     sql`SELECT * FROM credit_payments ORDER BY createdat DESC`.then(r => r.map(x => ({ id: x.id, saleId: x.saleid, amount: x.amount, createdAt: x.createdat }))),
     sql`SELECT * FROM credit_eats ORDER BY date DESC, createdat DESC`.then(r => r.map(mapCreditEat)),
     sql`SELECT * FROM production_register ORDER BY date DESC, createdat DESC`.then(r => r.map(mapProductionRegister)),
     sql`SELECT * FROM wastage_log ORDER BY date DESC, createdat DESC`.then(r => r.map(mapWastageLog)),
     sql`SELECT * FROM momo_transfers ORDER BY createdat DESC`.then(r => r.map(mapMomoTransfer)),
+    sql`SELECT
+      (SELECT COUNT(*)::int FROM sales) AS sales_total,
+      (SELECT COUNT(*)::int FROM expenses) AS expenses_total`,
   ]);
 
-  res.json({ products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, settings: obj });
+  maybeAutoBackup().catch(() => {});
+  res.json({
+    products, suppliers, sales, expenses, creditPayments, creditEats,
+    productionRegisters, wastageLogs, momoTransfers, settings: obj,
+    // Tells the client the history list was capped (aggregates still exact via
+    // /api/summary, older rows are one pageable query away).
+    salesTruncated: (counts[0]?.sales_total || 0) > BOOT_SALE_CAP,
+    expensesTruncated: (counts[0]?.expenses_total || 0) > BOOT_SALE_CAP,
+  });
 }));
 
 app.delete('/api/momo-transfers/:id', asHandler(async (req, res) => {
@@ -1150,13 +1390,13 @@ app.get('/api/stock-movements', asHandler(async (req, res) => {
 
 // === SERVER-SIDE SUMMARY (date-range aggregates) ===
 app.get('/api/summary', asHandler(async (req, res) => {
-  const { from, to } = req.query;
+  const { from, to, bucket } = req.query;
   const salesWhere = ['refunded=false'];
   const salesParams = [];
   if (from) { salesParams.push(from); salesWhere.push(`timestamp >= $${salesParams.length}`); }
   if (to) { salesParams.push(to); salesWhere.push(`timestamp <= $${salesParams.length}`); }
   const salesRows = await sql.query(
-    `SELECT items, total FROM sales WHERE ${salesWhere.join(' AND ')}`, salesParams);
+    `SELECT timestamp, items, total FROM sales WHERE ${salesWhere.join(' AND ')}`, salesParams);
   let revenue = 0;
   let cogs = 0;
   for (const r of salesRows) {
@@ -1189,6 +1429,27 @@ app.get('/api/summary', asHandler(async (req, res) => {
   const designProfit = designRows.length ? designRows[0].profit : 0;
   const grossProfit = (revenue - cogs) + designProfit;
   const expenseTotal = expRows.length ? expRows[0].total : 0;
+
+  // Server-side chart buckets so Reports stops shipping years of rows to draw
+  // a line chart. bucket=hourly -> 13 buckets (08:00..20:00 local);
+  // bucket=daily -> one {date,revenue} per calendar day in the range.
+  let hourly, daily;
+  if (bucket === 'hourly') {
+    hourly = Array(13).fill(0);
+    for (const r of salesRows) {
+      const h = new Date(r.timestamp).getHours();
+      if (h >= 8 && h <= 20) hourly[h - 8] += r.total || 0;
+    }
+  } else if (bucket === 'daily') {
+    const map = new Map();
+    for (const r of salesRows) {
+      const d = new Date(r.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      map.set(key, (map.get(key) || 0) + (r.total || 0));
+    }
+    daily = Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, revenue]) => ({ date, revenue }));
+  }
+
   res.json({
     from: from || null,
     to: to || null,
@@ -1202,6 +1463,8 @@ app.get('/api/summary', asHandler(async (req, res) => {
     netProfit: grossProfit - expenseTotal,
     creditOutstanding: (creditRows.length ? creditRows[0].total : 0) - (paidRows.length ? paidRows[0].total : 0),
     lowStockCount: lowRows.length ? lowRows[0].n : 0,
+    hourly: bucket === 'hourly' ? hourly : undefined,
+    daily: bucket === 'daily' ? daily : undefined,
   });
 }));
 
@@ -1371,7 +1634,106 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('momo_transfers', 'id', ['id', 'category', 'amount', 'comment', 'createdat'], momoRows).then(n => counts.momoTransfers = n),
   ]);
 
+  await audit('restore', `Restored ${Object.values(counts).reduce((a, b) => a + (b || 0), 0)} records`);
   res.json({ success: true, restored: counts });
+}));
+
+// === BACKUPS (automatic daily snapshots) ===
+async function gatherExport() {
+  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
+    sql`SELECT * FROM products`,
+    sql`SELECT * FROM suppliers`,
+    sql`SELECT * FROM sales`,
+    sql`SELECT * FROM expenses`,
+    sql`SELECT * FROM settings`,
+    sql`SELECT * FROM credit_payments`,
+    sql`SELECT * FROM cash_transfers`,
+    sql`SELECT * FROM tailoring_orders`,
+    sql`SELECT * FROM design_orders`,
+    sql`SELECT * FROM stock_movements`,
+    sql`SELECT * FROM credit_eats`,
+    sql`SELECT * FROM production_register`,
+    sql`SELECT * FROM wastage_log`,
+    sql`SELECT * FROM momo_transfers`,
+  ]);
+  return {
+    exportedAt: new Date().toISOString(),
+    products: products.map(mapProduct),
+    suppliers: suppliers.map(mapSupplier),
+    sales: sales.map(mapSale),
+    expenses,
+    settings: settingsRows,
+    creditPayments: credit.map(r => ({ id: r.id, saleId: r.saleid, amount: r.amount, createdAt: r.createdat })),
+    cashTransfers: transfers.map(mapTransfer),
+    tailoringOrders: tailoring.map(mapTailoringOrder),
+    designOrders: design.map(mapDesignOrder),
+    stockMovements: stockMoves.map(mapStockMovement),
+    creditEats: creditEats.map(mapCreditEat),
+    productionRegisters: productionRegisters.map(mapProductionRegister),
+    wastageLogs: wastageLogs.map(mapWastageLog),
+    momoTransfers: momoTransfers.map(mapMomoTransfer),
+  };
+}
+
+// Claim the 24h slot atomically (cross-instance safe via the settings row), run
+// the snapshot, keep the last 30. Never throws — backup is best-effort.
+async function maybeAutoBackup(force = false) {
+  try {
+    await sql`INSERT INTO settings (key, value) VALUES ('lastAutoBackupAt', '0') ON CONFLICT (key) DO NOTHING`;
+    if (!force) {
+      const claim = await sql`
+        UPDATE settings SET value=${String(Date.now())}
+        WHERE key='lastAutoBackupAt' AND (value::bigint) < ${Date.now() - 24 * 60 * 60 * 1000}
+        RETURNING value`;
+      if (!claim.length) return false;
+    } else {
+      await sql`UPDATE settings SET value=${String(Date.now())} WHERE key='lastAutoBackupAt'`;
+    }
+    try {
+      const data = await gatherExport();
+      await sql`INSERT INTO backups (id, created_at, data) VALUES (${'b-' + Date.now()}, ${data.exportedAt}, ${JSON.stringify(data)})`;
+      await sql`DELETE FROM backups WHERE id NOT IN (SELECT id FROM backups ORDER BY created_at DESC LIMIT 30)`;
+      await audit('backup.auto', 'Automatic daily backup completed');
+      return true;
+    } catch (err) {
+      // Roll the claim back so the next request retries.
+      await sql`UPDATE settings SET value='0' WHERE key='lastAutoBackupAt'`;
+      console.error('Auto backup failed:', err.message);
+      return false;
+    }
+  } catch (err) {
+    console.error('Auto backup failed:', err.message);
+    return false;
+  }
+}
+
+// Last automatic backup info (for the Settings UI).
+app.get('/api/backups/latest', asHandler(async (req, res) => {
+  const rows = await sql`SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1`;
+  res.json({ createdAt: rows.length ? rows[0].created_at : null });
+}));
+
+// Manual trigger — safe to hit with a browser; guarded so it only fires once/day.
+app.post('/api/backups/run', asHandler(async (req, res) => {
+  await maybeAutoBackup();
+  res.json({ success: true });
+}));
+
+// Scheduled daily backup (Vercel Cron -> GET with Authorization: Bearer CRON_SECRET).
+app.get('/api/cron/backup', asHandler(async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const header = req.headers['authorization'] || '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
+  if (!secret || supplied !== secret) return res.status(404).json({ error: 'Not found' });
+  const ok = await maybeAutoBackup(true);
+  res.json({ success: true, backupCreated: ok });
+}));
+
+// === ACTIVITY / AUDIT LOG (who changed what, when) ===
+app.get('/api/audit', asHandler(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const rows = await sql`SELECT * FROM audit_log ORDER BY at DESC LIMIT ${limit}`;
+  res.json(rows.map(r => ({ id: r.id, at: r.at, action: r.action, detail: r.detail })));
 }));
 
 function mapProduct(r) {
@@ -1387,7 +1749,12 @@ function mapProduct(r) {
     id: r.id, name: r.name, category: r.category, cost: r.cost, price: r.price,
     stockQty: r.stockqty, lowStockThreshold: r.lowstockthreshold,
     supplierId: r.supplierid, isService: !!r.isservice,
-    imei: r.imei, barcode: r.barcode, imageUrl: r.imageurl || '',
+    imei: r.imei, barcode: r.barcode,
+    // Never ship data: URIs in list payloads — they balloon 3G boots. The
+    // offline canvas fallback still works client-side, and base64 that reaches
+    // the server is converted to /uploads rows (see resolveImageUrl).
+    imageUrl: r.imageurl && r.imageurl.startsWith('data:') ? '' : (r.imageurl || ''),
+    updatedAt: r.updated_at || undefined,
     variants: variants || undefined,
     recipe: recipe || undefined,
   };

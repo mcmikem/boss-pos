@@ -4,6 +4,7 @@ import {
   PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat
 } from 'lucide-react';
 import type { Product, ProductVariant, Supplier, Recipe, RecipeIngredient } from '../types';
+import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
 import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
 
@@ -72,7 +73,7 @@ export default function Inventory({
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const handleImageSelect = (file: File, setImageUrl: (url: string) => void) => {
+  const handleImageSelect = async (file: File, setImageUrl: (url: string) => void) => {
     if (!file.type.startsWith('image/')) {
       triggerToast('Please select an image file', 'error');
       return;
@@ -84,6 +85,24 @@ export default function Inventory({
       triggerToast('Photo too large (max 6MB). Pick a smaller one.', 'error');
       return;
     }
+
+    // Preferred path: upload the RAW file to the server and let sharp resize it
+    // there — no canvas, no createObjectURL, no OOM. This is what makes photo
+    // capture work reliably on old Androids. Files up to ~4MB use this path
+    // (Vercel serverless bodies top out around 4.5MB); anything larger goes
+    // straight to the in-browser downscale below, which is already compressed
+    // well under every platform limit.
+    const MAX_RAW_UPLOAD_BYTES = 4 * 1024 * 1024;
+    if (navigator.onLine && file.size <= MAX_RAW_UPLOAD_BYTES) {
+      try {
+        const url = await uploadImage(file);
+        setImageUrl(url);
+        return;
+      } catch {
+        // offline / server rejected -> use the client-side fallback path.
+      }
+    }
+
     const MAX_W = 200;
     let img: HTMLImageElement | null = null;
     try {
@@ -601,6 +620,9 @@ export default function Inventory({
                 {newImageUrl && (
                   <img src={newImageUrl} alt="Preview" className="mt-2 w-16 h-16 object-cover rounded-xl border border-zinc-800" />
                 )}
+                <p className="text-[10px] text-zinc-600 font-bold uppercase">
+                  Photo not working? Save without one — you can attach it later from this screen.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -800,6 +822,9 @@ export default function Inventory({
               {editImageUrl && (
                 <img src={editImageUrl} alt="Preview" className="mt-2 w-16 h-16 object-cover rounded-xl border border-zinc-800" />
               )}
+              <p className="text-[10px] text-zinc-600 font-bold uppercase">
+                Photo not working? Save anyway — you can attach one later from this screen.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

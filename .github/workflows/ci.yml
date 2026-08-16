@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build (PWA + legacy targets)
+        run: npm run build
+
+      - name: Tests
+        run: npm test
+        env:
+          # Absent by default -> integration smoke test skips cleanly.
+          # Set DATABASE_URL as a repo secret to also run DB checks.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
