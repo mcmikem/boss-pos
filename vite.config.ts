@@ -336,6 +336,12 @@ export default defineConfig(() => {
       legacy({
         targets: ['Android >= 5', 'Chrome >= 49', 'iOS >= 12', 'Safari >= 12'],
         modernPolyfills: true,
+        // Chrome 64+ side of the two-tier split. ES-module-capable old WebViews
+        // (Android 7-8, and Android 9 unless its WebView was updated) load the
+        // modern bundle, so it must stay below optional-chaining/class-field
+        // syntax. Pin explicitly so a plugin default bump can't silently break
+        // Android 9. Browsers below this get the legacy bundle above.
+        modernTargets: ['chrome >= 64', 'chromeAndroid >= 64', 'edge >= 79', 'firefox >= 67', 'safari >= 12', 'ios_saf >= 12'],
       }),
       VitePWA({
         registerType: 'autoUpdate',
