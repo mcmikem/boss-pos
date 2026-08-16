@@ -30,3 +30,28 @@ jobs:
           # Absent by default -> integration smoke test skips cleanly.
           # Set DATABASE_URL as a repo secret to also run DB checks.
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  deploy:
+    name: Deploy to Vercel (production)
+    needs: build
+    # Only triggered for a full token; see DEPLOY.md for creating VERCEL_TOKEN.
+    if: github.ref == 'refs/heads/main' && secrets.VERCEL_TOKEN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Link Vercel project
+        run: |
+          mkdir -p .vercel
+          printf '{"projectId":"%s","orgId":"%s"}' "${{ secrets.VERCEL_PROJECT_ID }}" "${{ secrets.VERCEL_ORG_ID }}" > .vercel/project.json
+
+      - name: Deploy
+        run: npx vercel deploy --prod --yes --token "${{ secrets.VERCEL_TOKEN }}"
