@@ -340,7 +340,22 @@ const EATERY_MENU = [
   { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5',variants:null },
 ];
 
+async function ensureDefaultSettings() {
+  // Only stamped into a brand-new (empty) database. The live IMAC DB already
+  // has its own settings rows, so this is a no-op there — 'My Shop' is just
+  // the neutral default a freshly provisioned shop sees until it sets a name.
+  const rows = await sql`SELECT COUNT(*)::int AS n FROM settings`;
+  if (rows[0].n > 0) return;
+  const defaultSettings = { shopName: 'My Shop', themeId: 'gold', vibe: 'General Store', defaultPaymentMethod: 'Cash', dailyGoalNum: '10' };
+  await batchInsert('settings', ['key','value'], Object.entries(defaultSettings).map(([k,v]) => ({ key: k, value: typeof v === 'string' ? v : JSON.stringify(v) })));
+}
+
 async function seedDatabase() {
+  // Demo/starter catalog + sample sales are IMAC-specific. New shops whose
+  // provisioner did NOT set SEED_CATALOG=1 boot with a clean slate instead of
+  // inheriting IMAC's Kampala inventory. The live IMAC DB already has rows, so
+  // this branch was already a no-op there and stays one.
+  if (process.env.SEED_CATALOG !== '1') return;
   const result = await sql`SELECT COUNT(*)::int as count FROM products`;
   if (result[0].count > 0) return;
 
@@ -425,12 +440,9 @@ async function seedDatabase() {
   ];
   await batchInsert('sales', ['id','ordernumber','timestamp','items','subtotal','tax','total','paymentmethod','customername','discount','notes'],
     sales.map(s => ({ id: s.id, ordernumber: s.orderNumber, timestamp: s.timestamp, items: JSON.stringify(s.items), subtotal: s.subtotal, tax: s.tax, total: s.total, paymentmethod: s.paymentMethod, customername: s.customerName || null, discount: s.discount || null, notes: s.notes || null })));
-
-  const defaultSettings = { shopName:'IMAC Enterprises', themeId:'gold', vibe:'General Store', defaultPaymentMethod:'Cash', dailyGoalNum:'10' };
-  await batchInsert('settings', ['key','value'], Object.entries(defaultSettings).map(([k,v]) => ({ key: k, value: typeof v === 'string' ? v : JSON.stringify(v) })));
 }
 
-let initPromise = initDB().then(() => seedDatabase()).catch(err => {
+let initPromise = initDB().then(() => ensureDefaultSettings()).then(() => seedDatabase()).catch(err => {
   console.error('Database initialization failed:', err);
 });
 
@@ -466,6 +478,9 @@ async function syncEateryMenu() {
 async function ensureCatalogSynced() {
   const rows = await sql`SELECT value FROM settings WHERE key='catalogSynced'`;
   if (rows.length && rows[0].value === 'true') return;
+  // Fresh fleet shops start with a clean slate unless their provisioner asked
+  // for the starter catalog (SEED_CATALOG=1) — IMAC's menu is not their menu.
+  if (process.env.SEED_CATALOG !== '1') return;
   await syncLibraryProducts();
   await syncEateryMenu();
   await sql`INSERT INTO settings (key,value) VALUES ('catalogSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;

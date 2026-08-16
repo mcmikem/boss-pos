@@ -347,9 +347,12 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'apple-touch-icon.png', 'maskable-512x512.png'],
         manifest: {
-          name: 'IMAC Enterprises POS',
-          short_name: 'IMAC POS',
-          description: 'Point of Sale system for IMAC Enterprises',
+          // Build-time brand, set by the fleet provisioner per shop (e.g.
+          // VITE_APP_NAME="Katwe Hardware" in that project's build env).
+          // Unset -> current IMAC branding unchanged.
+          name: process.env.VITE_APP_NAME ? `${process.env.VITE_APP_NAME} POS` : 'IMAC Enterprises POS',
+          short_name: process.env.VITE_APP_NAME || 'IMAC POS',
+          description: process.env.VITE_APP_NAME ? `Point of Sale system for ${process.env.VITE_APP_NAME}` : 'Point of Sale system for IMAC Enterprises',
           theme_color: '#0A0A0A',
           background_color: '#0A0A0A',
           display: 'standalone',

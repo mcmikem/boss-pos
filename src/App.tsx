@@ -36,7 +36,7 @@ const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Ren
 const IDLE_LOCK_MS = 10 * 60 * 1000; // re-lock after 10 minutes of inactivity
 
 const DEFAULT_SETTINGS: StoreSettings = {
-  shopName: 'IMAC Enterprises',
+  shopName: 'My Shop',
   themeId: 'gold',
   vibe: 'General Store',
   defaultPaymentMethod: 'Cash',
@@ -227,6 +227,16 @@ export default function App() {
   useEffect(() => {
     readyRef.current = authState === 'ready';
   }, [authState]);
+
+  // Live browser-tab/app title follows the shop name from settings. The static
+  // index.html title is just the build-time brand; this keeps it accurate for
+  // fleet shops and unchanged for IMAC (same value).
+  useEffect(() => {
+    const name = settings.shopName || 'POS';
+    document.title = name;
+    const meta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (meta) meta.setAttribute('content', name);
+  }, [settings.shopName]);
 
   // Multi-till visibility: silently re-boot every 3 minutes so changes made on
   // a second till show up without a manual reload. Skipped while offline and
@@ -428,7 +438,8 @@ export default function App() {
     try {
       const data = await exportApi.download();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const ok = downloadBlob(blob, `imac-pos-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      const slug = (settings.shopName || 'pos').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const ok = downloadBlob(blob, `${slug}-backup-${new Date().toISOString().slice(0, 10)}.json`);
       triggerToast(ok ? 'Backup downloaded' : 'Download failed on this device', ok ? 'success' : 'error');
     } catch {
       triggerToast('Failed to export data', 'error');
@@ -1030,7 +1041,7 @@ export default function App() {
             <div className="space-y-4 flex-1 overflow-y-auto pr-1">
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Name</label>
-                <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'IMAC Enterprises' }))}
+                <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'My Shop' }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" placeholder="e.g. IMAC Phone Shop" />
               </div>
               <div className="space-y-1">
