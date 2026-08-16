@@ -9,7 +9,8 @@
 //   --name            display name, e.g. "Katwe Hardware"
 //   --database-url    Postgres connection string (OR set NEON_API_TOKEN +
 //                     NEON_PROJECT_ID to create a brand-new Neon DB)
-//   --vercel-token    Vercel token (or env VERCEL_TOKEN)
+//   --vercel-token    Vercel token (or env VERCEL_TOKEN). Optional: if omitted
+//                     the script uses the logged-in vercel CLI session.
 //   --org             Vercel org/team id (or env VERCEL_ORG_ID)
 //   --seed-catalog    optional flag: seed the starter catalog/sample data
 //
@@ -42,14 +43,18 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug === 'imac') {
   console.error(`Invalid slug "${slug}" (lowercase a-z0-9 with dashes, not "imac").`);
   process.exit(1);
 }
-if (!vercelToken || !org) {
-  console.error('Provide VERCEL_TOKEN and VERCEL_ORG_ID (or --vercel-token/--org).');
+if (!org) {
+  console.error('Provide VERCEL_ORG_ID (or --org). This is the id of the Vercel team this fleet lives in.');
   process.exit(1);
 }
 
+const vTokenArgs = vercelToken ? ['--token', vercelToken] : [];
+
 const run = (cmd, args, opts = {}) => {
-  console.log(`$ ${cmd} ${args.join(' ')}`);
-  return execFileSync(cmd, args, { stdio: 'inherit', ...opts });
+  const a = [...args];
+  if (cmd === 'npx' && a[1] === 'vercel') a.push(...vTokenArgs);
+  console.log(`$ ${cmd} ${a.join(' ')}`);
+  return execFileSync(cmd, a, { stdio: 'inherit', ...opts });
 };
 const secrets = {
   authSecret: crypto.randomBytes(24).toString('hex'),
