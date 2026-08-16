@@ -4,10 +4,20 @@ import legacy from '@vitejs/plugin-legacy';
 import {browserslistToTargets, transform as lightningcss} from 'lightningcss';
 import path from 'path';
 import postcss, {type Declaration} from 'postcss';
+import {execSync} from 'node:child_process';
 import {defineConfig, type Plugin} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 const LEGACY_CSS_TARGETS = browserslistToTargets(['Android >= 5', 'Chrome >= 49', 'iOS >= 12', 'Safari >= 12']);
+
+// Commit SHA shown in Settings -> quick truth-test for "am I on the newest
+// build?" Any device displaying no "Build" line is stuck on a stale SW cache.
+function buildCommit(): string {
+  for (const env of ['VERCEL_GIT_COMMIT_SHA', 'RENDER_GIT_COMMIT']) {
+    if (process.env[env]) return process.env[env]!;
+  }
+  try { return execSync('git rev-parse --short HEAD').toString().trim(); } catch { return 'dev'; }
+}
 
 const NATIVE_TRANSFORMS = ['translate', 'scale', 'rotate'] as const;
 
@@ -314,6 +324,12 @@ function deLayer(css: string): string {
 
 export default defineConfig(() => {
   return {
+    define: {
+      // Exposed in Settings as "Build: <short sha>" so a support session can
+      // immediately tell whether a phone is running the newest build or a
+      // stale service-worker cache (the #1 reason "it still crashes").
+      __BUILD_COMMIT__: JSON.stringify(buildCommit()),
+    },
     plugins: [
       react(),
       tailwindcss(),

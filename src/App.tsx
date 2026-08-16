@@ -1182,6 +1182,9 @@ export default function App() {
               className="w-full mt-6 h-11 bg-gold-brand text-black font-black uppercase tracking-widest rounded-2xl text-xs hover:opacity-90 active:scale-98 transition-all font-display">
               Done
             </button>
+            <p className="text-center text-[9px] text-zinc-600 font-bold uppercase tracking-widest mt-2">
+              Build {typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ !== 'dev' ? __BUILD_COMMIT__.slice(0, 7) : 'dev'}
+            </p>
           </div>
         </div>
       )}
