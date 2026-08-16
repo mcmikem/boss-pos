@@ -1,20 +1,23 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# IMAC Enterprises POS
 
-# Run and deploy your AI Studio app
+A lightweight, offline-first point-of-sale system for IMAC Enterprises. React/Vite PWA frontend with a single Express serverless function (`api/index.js`) backed by a Neon Postgres database.
 
-This contains everything you need to run your app locally.
+- Works offline — service-worker cached app + product photos, syncs on reconnect
+- Old-device friendly — supports Android 9 and back (Chrome 64+, legacy bundles for older)
+- Multi-till sync with conflict resolution
+- Daily close-out, inventory, expenses, tailoring/design orders, analytics
+- Daily automated backups
 
-View your app in AI Studio: https://ai.studio/apps/c34a633b-c4e9-4c13-a358-cfd1c0fd39f0
+## Run locally
 
-## Run Locally
+1. Install dependencies: `npm install`
+2. Copy `.env.example` to `.env` and fill in `DATABASE_URL` (Neon Postgres), `AUTH_SECRET`, and `CRON_SECRET`.
+3. `npm run dev` — Vite serves the app on port 3000, API on 3001. Any device on the same WiFi can reach it via the printed Network URL.
 
-**Prerequisites:**  Node.js
+## Test
 
+`npm test` — integration smoke tests against the API. They require `DATABASE_URL` to point at a real database; write round-trips are opt-in via `ALLOW_TEST_WRITES=1`.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Deploy
+
+See [DEPLOY.md](DEPLOY.md) for Vercel/Render setup, environment variables, cron, and backup/restore notes.
