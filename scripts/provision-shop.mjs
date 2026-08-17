@@ -93,7 +93,8 @@ async function main() {
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), `imac-fleet-${slug}-`));
   const repo = fs.readdirSync('.');
-  const skip = new Set(['node_modules', 'dist', '.git', '.vercel', 'fleet', 'pos.db', 'pos.db-shm', 'pos.db-wal', '.DS_Store']);
+  // .env carries the production DATABASE_URL — never ship it to a shop build.
+  const skip = new Set(['node_modules', 'dist', '.git', '.vercel', 'fleet', 'pos.db', 'pos.db-shm', 'pos.db-wal', '.DS_Store', '.env']);
   for (const entry of repo) {
     if (!skip.has(entry)) fs.cpSync(entry, path.join(work, entry), { recursive: true, verbatimSymlinks: true });
   }
@@ -102,7 +103,10 @@ async function main() {
   const dir = path.join(os.tmpdir(), projectName);
 
   try {
-    run('npx', ['vercel', 'link', '--yes', '--project', projectName, '--scope', org, '--token', vercelToken], { cwd: dir });
+    run('npx', ['vercel', 'link', '--yes', '--project', projectName, '--scope', org], { cwd: dir });
+    // Vercel builds locally and the copied repo has no node_modules — install
+    // deps so both init-db and the deploy build work.
+    run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: dir });
     for (const [envName, value] of [
       ['DATABASE_URL', finalUrl],
       ['AUTH_SECRET', secrets.authSecret],
@@ -110,10 +114,10 @@ async function main() {
       ['VITE_APP_NAME', name],
       ['SEED_CATALOG', seed ? '1' : '0'],
     ]) {
-      run('npx', ['vercel', 'env', 'add', envName, 'production', '--token', vercelToken], { cwd: dir, input: value });
+      run('npx', ['vercel', 'env', 'add', envName, 'production'], { cwd: dir, input: value });
     }
     run('node', ['scripts/init-db.mjs', `--database-url=${finalUrl}`], { cwd: dir, env: { ...process.env, AUTH_SECRET: secrets.authSecret } });
-    run('npx', ['vercel', 'deploy', '--prod', '--yes', '--token', vercelToken], { cwd: dir });
+    run('npx', ['vercel', 'deploy', '--prod', '--yes'], { cwd: dir });
 
     const registryDir = 'fleet';
     fs.mkdirSync(registryDir, { recursive: true });

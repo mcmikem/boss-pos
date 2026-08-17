@@ -6,6 +6,19 @@ const CACHE_INDEX_KEY = 'boss_api_cache_keys';
 const TOKEN_KEY = 'boss_pos_token';
 const OUTBOX_KEY = 'boss_pos_outbox';
 
+// Bounded fetch: dead WiFi / no-internet Android WebViews can hang a plain
+// fetch() for minutes (navigator.onLine lies on old devices). Reject after
+// `ms` so callers fall through to cached data / offline mode quickly.
+function fetchTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new TypeError('Network timeout')), ms);
+    fetch(url, options).then(
+      (res) => { window.clearTimeout(timer); resolve(res); },
+      (err) => { window.clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 // Error that carries the HTTP status + server error code so callers can react
 // to specific failures (e.g. 409 CONFLICT from multi-device product edits).
 export class ApiError extends Error {
@@ -52,6 +65,12 @@ export function getAuthToken(): string | null {
   } catch {
     return null;
   }
+}
+
+// Read a cache entry without any network (used by the boot path so the lock
+// screen / offline render can show last-known data instantly).
+export function readCached<T>(path: string): T | null {
+  return getCache<T>(path);
 }
 
 export function setAuthToken(token: string | null): void {
@@ -125,11 +144,11 @@ export async function flushOutbox(): Promise<number> {
   const remaining: OutboxEntry[] = [];
   for (const entry of list) {
     try {
-      const res = await fetch(`${BASE}${entry.path}`, {
+      const res = await fetchTimeout(`${BASE}${entry.path}`, {
         method: entry.method,
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
         body: entry.body,
-      });
+      }, 15000);
       if (res.ok || res.status === 404) {
         flushed++;
         continue;
@@ -159,11 +178,11 @@ export async function flushOutbox(): Promise<number> {
 
 // Server-side PIN auth (plain PIN over HTTPS; hashing happens on the server).
 export async function authVerify(pin: string): Promise<{ token: string; hasPin: boolean; hash?: string }> {
-  const res = await fetch(`${BASE}/api/auth/verify`, {
+  const res = await fetchTimeout(`${BASE}/api/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pin }),
-  });
+  }, 12000);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Auth failed');
   setAuthToken(data.token);
@@ -177,29 +196,29 @@ export async function authVerify(pin: string): Promise<{ token: string; hasPin: 
 // Public pre-auth status: shop name + whether a PIN is set. Safe to call
 // before unlock because it exposes no financial data.
 export async function authStatus(): Promise<{ shopName: string; hasPin: boolean }> {
-  const res = await fetch(`${BASE}/api/auth/status`);
+  const res = await fetchTimeout(`${BASE}/api/auth/status`, {}, 12000);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Status failed');
   return { shopName: data.shopName || '', hasPin: !!data.hasPin };
 }
 
 export async function authSetPin(pin: string): Promise<{ hasPin: boolean; hash: string }> {
-  const res = await fetch(`${BASE}/api/auth/set`, {
+  const res = await fetchTimeout(`${BASE}/api/auth/set`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
     body: JSON.stringify({ pin }),
-  });
+  }, 12000);
   if (!res.ok) throw new Error('Failed to save PIN');
   return res.json();
 }
 
 // Migrate an existing client-side SHA-256 pin hash so users keep their PIN.
 export async function authMigratePin(hash: string): Promise<boolean> {
-  const res = await fetch(`${BASE}/api/auth/set`, {
+  const res = await fetchTimeout(`${BASE}/api/auth/set`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
     body: JSON.stringify({ hash }),
-  });
+  }, 12000);
   if (!res.ok) throw new Error('Failed to migrate PIN');
   return true;
 }
@@ -252,10 +271,10 @@ export function uploadImage(file: File | Blob): Promise<string> {
 
 // Bump the server token version -> every other device's token 401s immediately.
 export async function revokeAllSessions(): Promise<boolean> {
-  const res = await fetch(`${BASE}/api/auth/revoke-all`, {
+  const res = await fetchTimeout(`${BASE}/api/auth/revoke-all`, {
     method: 'POST',
     headers: { Authorization: getAuthHeader() },
-  });
+  }, 12000);
   if (!res.ok) throw new Error('Failed to log out all devices');
   setAuthToken(null);
   return true;
@@ -263,10 +282,10 @@ export async function revokeAllSessions(): Promise<boolean> {
 
 export async function nextOrderNumber(): Promise<string | null> {
   try {
-    const res = await fetch(`${BASE}/api/orders/next`, {
+    const res = await fetchTimeout(`${BASE}/api/orders/next`, {
       method: 'POST',
       headers: { Authorization: getAuthHeader() },
-    });
+    }, 12000);
     if (res.ok) {
       const data = await res.json();
       // Keep the local offline fallback counter in sync so a later offline
@@ -322,7 +341,7 @@ const inFlightRefresh = new Set<string>();
 function refreshInBackground(path: string, ttlMs?: number): void {
   if (inFlightRefresh.has(path)) return;
   inFlightRefresh.add(path);
-  fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } })
+  fetchTimeout(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } }, 12000)
     .then(res => {
       if (!res.ok) return;
       return res.json().then(data => setCache(path, data, ttlMs)).catch(() => {});
@@ -387,10 +406,10 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
   }
 
   try {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetchTimeout(`${BASE}${path}`, {
       headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
       ...options,
-    });
+    }, 15000);
     if (!res.ok) {
       let message = `API error: ${res.status}`;
       let code: string | undefined;

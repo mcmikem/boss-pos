@@ -38,10 +38,15 @@ html {
 }
 
 /* `100vh` on old Android counts the URL bar, so fixed-height shells overflow.
-   Use dvh when available, otherwise fall back to the safe svh/vh. */
+   Use dvh when available, otherwise fall back to the safe svh/vh. Note:
+   only `.h-screen` is a true fixed height — `.min-h-screen` must stay
+   growable (its content is taller than the viewport), or the page's bottom
+   padding never lands and the fixed nav covers the last bit of content. */
 @supports (height: 100dvh) {
-  .h-screen, .min-h-screen {
+  .h-screen {
     height: 100dvh;
+  }
+  .min-h-screen {
     min-height: 100dvh;
   }
 }

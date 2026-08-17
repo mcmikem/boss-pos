@@ -43,7 +43,7 @@ export default function Inventory({
   const [isAddingNew, setIsAddingNew] = useState(false);
   
   const [stockAdjustment, setStockAdjustment] = useState<number>(0);
-  const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove'>('add');
+  const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
 
   const [newName, setNewName] = useState('');
   const [newCategory, setNewCategory] = useState('Electronics');
@@ -253,8 +253,11 @@ export default function Inventory({
     }
 
     let finalStock = editingProduct.stockQty;
-    if (stockAdjustment > 0) {
-      if (adjustmentType === 'add') {
+    if (stockAdjustment > 0 || adjustmentType === 'set') {
+      if (adjustmentType === 'set') {
+        finalStock = Math.max(0, stockAdjustment);
+        triggerToast(`Set stock to ${finalStock}`, 'success');
+      } else if (adjustmentType === 'add') {
         finalStock += stockAdjustment;
         triggerToast(`Added ${stockAdjustment} units!`, 'success');
       } else {
@@ -906,10 +909,14 @@ export default function Inventory({
                   className={`flex-1 h-11 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${
                     adjustmentType === 'remove' ? 'bg-rose-950/20 border-rose-500 text-rose-400' : 'bg-zinc-950 border-zinc-800 text-zinc-500'
                   }`}>- Used / Sold</button>
+                <button onClick={() => setAdjustmentType('set')}
+                  className={`flex-1 h-11 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${
+                    adjustmentType === 'set' ? 'bg-gold-brand/15 border-gold-brand text-gold-brand' : 'bg-zinc-950 border-zinc-800 text-zinc-500'
+                  }`}>= Set exact</button>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-500 font-bold uppercase">Qty:</span>
-                <input type="number" min="0" value={stockAdjustment === 0 ? '' : stockAdjustment} placeholder="0"
+                <span className="text-xs text-zinc-500 font-bold uppercase">{adjustmentType === 'set' ? 'New total' : 'Qty:'}</span>
+                <input type="number" min="0" value={stockAdjustment === 0 ? '' : stockAdjustment} placeholder={adjustmentType === 'set' ? '40' : '0'}
                   onChange={(e) => setStockAdjustment(Math.max(0, parseInt(e.target.value, 10) || 0))}
                   className="w-24 bg-zinc-950 border border-zinc-800 text-gold-light rounded text-center text-xs h-8 focus:border-gold-brand focus:outline-none font-bold" />
                 <span className="text-xs text-zinc-400 font-bold uppercase">(Current: {editingProduct.stockQty})</span>

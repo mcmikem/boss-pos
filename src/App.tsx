@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -178,6 +178,17 @@ export default function App() {
     (async () => {
       let serverHasPin: boolean | null = null;
       let shopName = '';
+
+      // Fast path: we already know a PIN is set on the server from a previous
+      // unlock. Show the lock screen immediately (offline included) instead of
+      // burning 1-2 network round-trips that can hang on dead WiFi.
+      if (localStorage.getItem('boss_pos_has_pin') === 'true') {
+        const cachedSettings = readCached<StoreSettings>('/api/settings');
+        if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
+        setAuthState('locked');
+        return;
+      }
+
       try {
         const status = await authStatus();
         serverHasPin = status.hasPin;
@@ -405,20 +416,30 @@ export default function App() {
   }, [authState]);
 
   const handleUnlock = async (pin: string) => {
+    const local = localStorage.getItem('boss_pos_pin');
+    const cachedSettings = readCached<StoreSettings>('/api/settings');
+    if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
+    if (local && !local.startsWith('fb_') && await verifyPinAgainstHash(pin, local)) {
+      // Local hash matches: unlock instantly from cache, refresh in background.
+      setAuthState('ready');
+      fetchAllData().catch(() => {});
+      return;
+    }
     try {
       const data = await authVerify(pin);
       localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
-      await fetchAllData();
       setAuthState('ready');
+      fetchAllData().catch(() => {});
     } catch (err) {
       // Offline / flaky network (navigator.onLine is unreliable on some Androids,
       // so we can't gate on it): fall back to the locally-stored hash so sales
       // can still run. Only possible once this device has unlocked online before
       // (authVerify caches the hash to boss_pos_pin).
-      const local = localStorage.getItem('boss_pos_pin');
-      if (local && !local.startsWith('fb_')) {
-        if (await verifyPinAgainstHash(pin, local)) {
+      const localHash = localStorage.getItem('boss_pos_pin');
+      if (localHash && !localHash.startsWith('fb_')) {
+        if (await verifyPinAgainstHash(pin, localHash)) {
           setAuthState('ready');
+          fetchAllData().catch(() => {});
           return;
         }
       }

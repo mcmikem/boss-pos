@@ -24,6 +24,21 @@ export default class ErrorBoundary extends Component<Props, State> {
     console.error('ErrorBoundary caught:', error, info.componentStack);
   }
 
+  handleRetry = () => {
+    // A failed lazy-chunk fetch (404 after a deploy re-hashed the file) can't
+    // be fixed by re-rendering — the old chunk is gone. Reload so the newest
+    // index.html + chunks load. Anything else just clears and re-tries.
+    const msg = this.state.error?.message || '';
+    if (
+      msg.includes('Failed to fetch dynamically imported module') ||
+      msg.includes('Importing a module script failed')
+    ) {
+      window.location.reload();
+      return;
+    }
+    this.setState({ hasError: false });
+  };
+
   render() {
     if (this.state.hasError) {
       return this.props.fallback || (
@@ -35,7 +50,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <p className="text-sm font-black text-rose-400 uppercase tracking-widest mb-1">Something went wrong</p>
             <p className="text-xs text-zinc-500 mb-4">{this.state.error?.message || 'An unexpected error occurred'}</p>
             <button
-              onClick={() => this.setState({ hasError: false })}
+              onClick={this.handleRetry}
               className="px-5 h-10 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl"
             >
               Try Again

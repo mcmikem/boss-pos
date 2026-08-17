@@ -11,6 +11,30 @@ root.render(
   </StrictMode>,
 );
 
+// Stale-chunk self-heal: after a deploy the new service worker purges the old
+// hashed chunks, but a still-open page may try to lazy-load one (404 ->
+// "Failed to fetch dynamically imported module"). Reload once so the newest
+// index.html + chunks load. Capped via sessionStorage so a genuinely dead
+// network can't loop forever.
+let chunkReloads = 0;
+try {
+  chunkReloads = parseInt(sessionStorage.getItem('boss_chunk_reloads') || '0', 10);
+} catch {}
+
+window.addEventListener('error', (event) => {
+  const msg = (event && event.message) || '';
+  if (
+    msg.includes('Failed to fetch dynamically imported module') ||
+    msg.includes('Importing a module script failed')
+  ) {
+    event.preventDefault();
+    if (chunkReloads >= 2) return;
+    chunkReloads += 1;
+    try { sessionStorage.setItem('boss_chunk_reloads', String(chunkReloads)); } catch {}
+    window.location.reload();
+  }
+}, true);
+
 // Service worker: auto-update to the latest version on deploy
 // (reloads once when a new SW takes control, so stale lazy-loaded chunks never fail)
 if ('serviceWorker' in navigator) {
