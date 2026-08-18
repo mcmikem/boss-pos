@@ -10,10 +10,12 @@ import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
 import KeyboardShortcuts from './KeyboardShortcuts';
 import CustomChargeModal from './CustomChargeModal';
+import ServiceQtyModal from './ServiceQtyModal';
 import ConfirmSaleModal from './ConfirmSaleModal';
 import CashTransferModal from './CashTransferModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
+import { unitLabel } from '../utils/units';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
 // bundle) stays small — important on the slow connections this app targets.
@@ -58,6 +60,7 @@ export default function Sales({
   const [showDesignOrders, setShowDesignOrders] = useState<boolean>(false);
   const [showEateryPricing, setShowEateryPricing] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
+  const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
     if (settings?.defaultPaymentMethod === 'MTN MoMo') return 'MTN MoMo';
@@ -116,10 +119,14 @@ export default function Sales({
       setVariantProduct(product);
       return;
     }
-    addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService);
+    if (product.saleUnit) {
+      setServiceQtyProduct(product);
+      return;
+    }
+    addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService, product.saleUnit);
   };
 
-  const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean) => {
+  const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean, saleUnit?: string) => {
     setCart(prev => {
       const key = `${productId}::${variantId || ''}`;
       const existing = prev.find(i => `${i.productId}::${i.variantId || ''}` === key);
@@ -138,16 +145,24 @@ export default function Sales({
       return [...prev, {
         productId, variantId: variantId || undefined, variantLabel: variantLabel || undefined,
         productName: variantLabel ? `${productName} — ${variantLabel}` : productName,
-        qty, unitPrice, unitCost, lineTotal: unitPrice * qty,
+        qty, unitPrice, unitCost, lineTotal: unitPrice * qty, saleUnit,
       } as SaleItem];
     });
   };
 
   const handleVariantAdd = (variant: { id: string; label: string; price: number; cost?: number }) => {
     if (!variantProduct) return;
-    addCartLine(variantProduct.id, variant.id, variant.label, variantProduct.name, 1, variant.price, variant.cost ?? variantProduct.cost, variantProduct.stockQty, !!variantProduct.isService);
+    addCartLine(variantProduct.id, variant.id, variant.label, variantProduct.name, 1, variant.price, variant.cost ?? variantProduct.cost, variantProduct.stockQty, !!variantProduct.isService, variantProduct.saleUnit);
     triggerToast(`${variantProduct.name} (${variant.label}) added`, 'success');
     setVariantProduct(null);
+  };
+
+  const handleServiceQtyAdd = (qty: number) => {
+    if (!serviceQtyProduct) return;
+    const p = serviceQtyProduct;
+    addCartLine(p.id, undefined, undefined, p.name, qty, p.price, p.cost, p.stockQty, true, p.saleUnit);
+    triggerToast(`${p.name} (${unitLabel(qty, p.saleUnit)}) added`, 'success');
+    setServiceQtyProduct(null);
   };
 
   const handleCompleteSaleRef = useRef<(() => void | Promise<void>) | null>(null);
@@ -317,7 +332,7 @@ export default function Sales({
           ) : (
             <button onClick={() => { setEditingItemId(lineKey); setEditingQtyValue(String(item.qty)); }}
               className="text-xs font-bold text-zinc-400 bg-zinc-900 hover:text-gold-brand hover:bg-zinc-800 px-3 py-1.5 rounded-lg cursor-pointer transition-all touch-target">
-              Qty: <span className="text-gold-light underline font-black">{item.qty}</span>
+              {item.saleUnit ? <>{unitLabel(item.qty, item.saleUnit)}</> : <>Qty: <span className="text-gold-light underline font-black">{item.qty}</span></>}
             </button>
           )}
           <div className="flex items-center gap-1.5">
@@ -680,7 +695,7 @@ export default function Sales({
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
                     className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
-                  <span className="text-sm font-black text-white min-w-[24px] text-center">{item.qty}</span>
+                  <span className="text-sm font-black text-white min-w-[24px] text-center">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
                   <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
                     className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
                   <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
@@ -846,6 +861,13 @@ export default function Sales({
       )}
 
       {/* Other Modals */}
+      <ServiceQtyModal
+        product={serviceQtyProduct}
+        formatCurrency={formatCurrency}
+        onAdd={handleServiceQtyAdd}
+        onClose={() => setServiceQtyProduct(null)}
+      />
+
       <ConfirmSaleModal
         isOpen={showConfirmSale}
         onClose={() => setShowConfirmSale(false)}

@@ -55,6 +55,7 @@ export default function Inventory({
   const [newImei, setNewImei] = useState('');
   const [newBarcode, setNewBarcode] = useState('');
   const [newImageUrl, setNewImageUrl] = useState('');
+  const [newSaleUnit, setNewSaleUnit] = useState('');
   const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
   const [newRecipe, setNewRecipe] = useState<Recipe | null>(null);
 
@@ -68,6 +69,7 @@ export default function Inventory({
   const [editBarcode, setEditBarcode] = useState('');
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editIsService, setEditIsService] = useState(false);
+  const [editSaleUnit, setEditSaleUnit] = useState('');
   const [editVariants, setEditVariants] = useState<ProductVariant[]>([]);
   const [editRecipe, setEditRecipe] = useState<Recipe | null>(null);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
@@ -210,6 +212,7 @@ export default function Inventory({
     setEditBarcode(product.barcode || '');
     setEditImageUrl(product.imageUrl || '');
     setEditIsService(product.isService || false);
+    setEditSaleUnit(product.saleUnit || '');
     setEditVariants(product.variants ? product.variants.map(v => ({ ...v })) : []);
     setEditRecipe(product.recipe ? JSON.parse(JSON.stringify(product.recipe)) : null);
     setStockAdjustment(0);
@@ -288,6 +291,7 @@ export default function Inventory({
       barcode: editBarcode || undefined,
       imageUrl: editImageUrl || undefined,
       isService: editIsService,
+      saleUnit: editSaleUnit.trim() || undefined,
       variants: cleanVariants.length ? cleanVariants : undefined,
       recipe: sanitizeRecipe(editRecipe),
     };
@@ -346,6 +350,7 @@ export default function Inventory({
       imei: newImei || undefined,
       barcode: newBarcode || undefined,
       imageUrl: newImageUrl || undefined,
+      saleUnit: newSaleUnit.trim() || undefined,
       variants: cleanVariants.length ? cleanVariants : undefined,
       recipe: sanitizeRecipe(newRecipe),
     };
@@ -353,7 +358,7 @@ export default function Inventory({
     onAddProduct(newProd);
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
-    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewImageUrl('');
+    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewImageUrl(''); setNewSaleUnit('');
     setNewVariants([]);
     triggerToast(`Added "${newProd.name}"`, 'success');
   };
@@ -708,6 +713,14 @@ export default function Inventory({
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">
+                  Per unit (e.g. page, copy, meter) — price shown as "{formatCurrency(parseFloat(newPrice) || 0)} / unit"
+                </label>
+                <input type="text" placeholder="Empty = sold per item; e.g. 'page' for printing" value={newSaleUnit} onChange={(e) => setNewSaleUnit(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+              </div>
+
               <div className="bg-zinc-900/60 rounded-xl p-3 border border-zinc-800/60">
                 <div className="flex justify-between items-center mb-1">
                   <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
@@ -777,6 +790,14 @@ export default function Inventory({
                 <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${editIsService ? 'left-5' : 'left-0.5'}`}></span>
               </button>
               <span className="text-xs text-zinc-500">{editIsService ? 'No stock tracking' : 'Stock tracked'}</span>
+            </div>
+
+            <div>
+              <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">
+                Per unit (e.g. page, copy, meter) {editIsService && editSaleUnit ? <span className="text-gold-brand normal-case">— sold as "{editSaleUnit}", price is per {editSaleUnit}</span> : null}
+              </label>
+              <input type="text" placeholder="Leave empty to sell per item" value={editSaleUnit} onChange={(e) => setEditSaleUnit(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
             </div>
 
             <div className="grid grid-cols-2 gap-3">

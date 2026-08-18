@@ -87,7 +87,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         </h3>
         <div className="flex items-center justify-between mt-auto gap-1">
           <div>
-            <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}</p>
+            <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-bold normal-case"> / {product.saleUnit}</span> : null}</p>
             {marginPct !== null ? (
               <p className={`text-[10px] font-black uppercase mt-0.5 ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
                 {marginPct <= 0 ? 'LOSS' : `+${marginPct.toFixed(0)}%`}

@@ -32,6 +32,7 @@ export interface Product {
   supplierId?: string;
   imageUrl?: string; // small SVG data URI or emoji
   isService?: boolean;
+  saleUnit?: string; // per-unit pricing label, e.g. "page", "copy", "meter" -> "500 / page"
   imei?: string;
   barcode?: string;
   variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
@@ -74,6 +75,7 @@ export interface SaleItem {
   lineTotal: number;
   variantId?: string;
   variantLabel?: string;
+  saleUnit?: string; // snapshot of the product's per-unit label at sale time
 }
 
 export interface Sale {

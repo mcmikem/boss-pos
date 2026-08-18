@@ -24,6 +24,7 @@ async function initDB() {
   try { await sql`ALTER TABLE products ADD COLUMN imageurl TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN variants TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN recipe TEXT`; } catch {}
+  try { await sql`ALTER TABLE products ADD COLUMN saleunit TEXT`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
@@ -313,13 +314,13 @@ async function nextOrderNumberValue() {
 
 const LIBRARY_MENU = [
   { id:'prod-60',name:'Movie Download',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-  { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-61',name:'Music Download (per song)',category:'Library',cost:100,price:250,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5',saleUnit:'song' },
   { id:'prod-62',name:'Android App (Basic)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
   { id:'prod-63',name:'Android App (Premium)',category:'Library',cost:400,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
   { id:'prod-64',name:'Windows Software (Basic)',category:'Library',cost:1000,price:2000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
   { id:'prod-65',name:'Windows Software (Pro)',category:'Library',cost:1500,price:3000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-  { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
-  { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5' },
+  { id:'prod-66',name:'Document Scanning (per page)',category:'Library',cost:200,price:500,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5',saleUnit:'page' },
+  { id:'prod-67',name:'Internet Browsing (per 30min)',category:'Library',cost:300,price:1000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-5',saleUnit:'30min' },
 ];
 
 const EATERY_MENU = [
@@ -395,11 +396,11 @@ async function seedDatabase() {
     { id:'prod-34',name:'Glue Stick',category:'Stationery',cost:1500,price:4000,stockQty:30,lowStockThreshold:6,supplierId:'sup-2' },
     { id:'prod-35',name:'Notebook (A5)',category:'Stationery',cost:3000,price:7000,stockQty:50,lowStockThreshold:10,supplierId:'sup-2' },
     { id:'prod-36',name:'Marker Pen (Permanent)',category:'Stationery',cost:1500,price:4000,stockQty:35,lowStockThreshold:7,supplierId:'sup-2' },
-    { id:'prod-40',name:'Photocopy (B&W Page)',category:'Printing',cost:50,price:300,stockQty:500,lowStockThreshold:100,supplierId:'sup-2' },
-    { id:'prod-41',name:'Color Printing (A4)',category:'Printing',cost:500,price:1500,stockQty:200,lowStockThreshold:30,supplierId:'sup-2' },
-    { id:'prod-42',name:'Lamination (A4)',category:'Printing',cost:1000,price:3000,stockQty:40,lowStockThreshold:8,supplierId:'sup-2' },
-    { id:'prod-43',name:'Spiral Binding',category:'Printing',cost:2000,price:5000,stockQty:30,lowStockThreshold:5,supplierId:'sup-2' },
-    { id:'prod-44',name:'Passport Photos',category:'Printing',cost:1500,price:5000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-2' },
+{ id:'prod-40',name:'Photocopy (B&W Page)',category:'Printing',cost:50,price:300,stockQty:500,lowStockThreshold:100,supplierId:'sup-2',saleUnit:'page' },
+  { id:'prod-41',name:'Color Printing (A4)',category:'Printing',cost:500,price:1500,stockQty:200,lowStockThreshold:30,supplierId:'sup-2',saleUnit:'page' },
+  { id:'prod-42',name:'Lamination (A4)',category:'Printing',cost:1000,price:3000,stockQty:40,lowStockThreshold:8,supplierId:'sup-2',saleUnit:'sheet' },
+  { id:'prod-43',name:'Spiral Binding',category:'Printing',cost:2000,price:5000,stockQty:30,lowStockThreshold:5,supplierId:'sup-2' },
+  { id:'prod-44',name:'Passport Photos',category:'Printing',cost:1500,price:5000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-2',saleUnit:'photo' },
     { id:'prod-50',name:'Trouser Hemming',category:'Tailoring',cost:2000,price:8000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
     { id:'prod-51',name:'Zip Replacement',category:'Tailoring',cost:2000,price:7000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
     { id:'prod-52',name:'Kitenge Dress (Custom)',category:'Tailoring',cost:18000,price:45000,stockQty:10,lowStockThreshold:2,supplierId:'sup-3' },
@@ -413,7 +414,7 @@ async function seedDatabase() {
     { id:'prod-80',name:'Logo Design (Basic)',category:'Graphics',cost:30000,price:80000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-2' },
     { id:'prod-81',name:'Flyer Design (A5)',category:'Graphics',cost:15000,price:45000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-2' },
     { id:'prod-82',name:'Business Cards (100pcs)',category:'Graphics',cost:15000,price:40000,stockQty:20,lowStockThreshold:3,supplierId:'sup-2' },
-    { id:'prod-83',name:'PVC Banner (per sq m)',category:'Graphics',cost:12000,price:25000,stockQty:30,lowStockThreshold:5,supplierId:'sup-2' },
+    { id:'prod-83',name:'PVC Banner (per sq m)',category:'Graphics',cost:12000,price:25000,stockQty:30,lowStockThreshold:5,supplierId:'sup-2',saleUnit:'sq m' },
     { id:'prod-90',name:'Jersey (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:20,lowStockThreshold:3,supplierId:'sup-1' },
     { id:'prod-91',name:'Jersey (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:15,lowStockThreshold:3,supplierId:'sup-1' },
     { id:'prod-92',name:'T-Shirt (Standard)',category:'Tailoring',cost:10000,price:15000,stockQty:25,lowStockThreshold:5,supplierId:'sup-1' },
@@ -421,8 +422,8 @@ async function seedDatabase() {
     { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
     ...EATERY_MENU,
   ];
-  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','variants'],
-    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, variants: p.variants ? JSON.stringify(p.variants) : null })));
+  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','variants','saleunit'],
+    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, variants: p.variants ? JSON.stringify(p.variants) : null, saleunit: p.saleUnit || null })));
 
   const expenses = [
     { id:'exp-1',timestamp:'2026-07-15T08:30:00Z',description:'Phone accessories restock',amount:85000,category:'Stock Purchase' },
@@ -450,8 +451,8 @@ async function syncLibraryProducts() {
   let inserted = 0;
   for (const p of LIBRARY_MENU) {
     const r = await sql`
-      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl)
-      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},${p.isService},null)
+      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,saleUnit)
+      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},${p.isService},null,${p.saleUnit || null})
       ON CONFLICT (id) DO NOTHING
       RETURNING id
     `;
@@ -465,8 +466,8 @@ async function syncEateryMenu() {
   let inserted = 0;
   for (const p of EATERY_MENU) {
     const r = await sql`
-      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,variants)
-      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},false,null,${p.variants ? JSON.stringify(p.variants) : null})
+      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,variants,saleUnit)
+      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},false,null,${p.variants ? JSON.stringify(p.variants) : null},${p.saleUnit || null})
       ON CONFLICT (id) DO NOTHING
       RETURNING id
     `;
@@ -796,7 +797,7 @@ app.post('/api/products', asHandler(async (req, res) => {
   // rows here, so nothing data: stays in the DB (or the JSON payloads).
   const imageUrl = await resolveImageUrl(p.imageUrl);
   const nowIso = new Date().toISOString();
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe,updated_at) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${imageUrl},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null},${nowIso})`;
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe,saleUnit,updated_at) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${imageUrl},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null},${p.saleUnit || null},${nowIso})`;
   if (!p.isService && (p.stockQty || 0) > 0) {
     await logStockMovement(sql, { productId: id, productName: name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
   }
@@ -832,7 +833,7 @@ app.put('/api/products/:id', asHandler(async (req, res) => {
 
   const imageUrl = await resolveImageUrl(p.imageUrl);
   const nowIso = new Date().toISOString();
-  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},imei=${imei},barcode=${barcode},imageUrl=${imageUrl},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null},updated_at=${nowIso},deleted=false WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},saleUnit=${p.saleUnit || null},imei=${imei},barcode=${barcode},imageUrl=${imageUrl},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null},updated_at=${nowIso},deleted=false WHERE id=${req.params.id}`;
   if (!p.isService) {
     const prev = old.length ? (old[0].stockqty || 0) : 0;
     const next = p.stockQty || 0;
@@ -1637,7 +1638,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
   const counts = {};
   await Promise.all([
     batchUpsert('settings', 'key', ['key', 'value'], settingsRows).then(n => counts.settings = n),
-    batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'imei', 'barcode', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
+    batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'saleunit', 'imei', 'barcode', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
     batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
     batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'client_write_id'], saleRows).then(n => counts.sales = n),
     batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100) }))).then(n => counts.expenses = n),
@@ -1778,6 +1779,7 @@ function mapProduct(r) {
     id: r.id, name: r.name, category: r.category, cost: r.cost, price: r.price,
     stockQty: r.stockqty, lowStockThreshold: r.lowstockthreshold,
     supplierId: r.supplierid, isService: !!r.isservice,
+    saleUnit: r.saleunit || undefined,
     imei: r.imei, barcode: r.barcode,
     // Never ship data: URIs in list payloads — they balloon 3G boots. The
     // offline canvas fallback still works client-side, and base64 that reaches

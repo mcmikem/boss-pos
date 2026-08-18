@@ -1,6 +1,7 @@
 import { X, Printer, Share2, Copy, Check } from 'lucide-react';
 import { useState } from 'react';
 import type { Sale, StoreSettings } from '../types';
+import { unitLabel } from '../utils/units';
 
 interface ReceiptModalProps {
   sale: Sale;
@@ -40,7 +41,8 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
   const items = sale.items
     .map(i => {
       const label = i.variantLabel ? ` (${i.variantLabel})` : '';
-      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} x${i.qty}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
+      const qtyLabel = i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`;
+      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} ${escapeHtml(qtyLabel)}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
     })
     .join('');
   const discountRow =
@@ -105,7 +107,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     sale.orderNumber,
     new Date(sale.timestamp).toLocaleString(),
     '',
-    ...sale.items.map(i => `${i.productName}${i.variantLabel ? ` (${i.variantLabel})` : ''} x${i.qty} = ${formatCurrency(i.lineTotal)}`),
+    ...sale.items.map(i => `${i.productName}${i.variantLabel ? ` (${i.variantLabel})` : ''} ${i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`} = ${formatCurrency(i.lineTotal)}`),
     ...(sale.discount && sale.discount > 0 ? [`Discount: -${formatCurrency(sale.discount)}`] : []),
     '',
     `TOTAL: ${formatCurrency(sale.total)}`,
@@ -163,7 +165,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           <div className="border-t border-dashed border-zinc-400 my-2" />
           {sale.items.map((i, idx) => (
             <div key={idx} className="flex justify-between text-[11px] py-0.5">
-              <span>{i.productName}{i.variantLabel ? ` (${i.variantLabel})` : ''} x{i.qty}</span>
+              <span>{i.productName}{i.variantLabel ? ` (${i.variantLabel})` : ''} {i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`}</span>
               <span className="whitespace-nowrap">{formatCurrency(i.lineTotal)}</span>
             </div>
           ))}
