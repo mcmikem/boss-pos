@@ -201,14 +201,15 @@ function num(v) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-// Render an image Buffer to a ~200px JPEG thumbnail with sharp.
+// Render an image Buffer to a uniform 320x320 square JPEG thumbnail (centre
+// crop) so every product photo is the same clean size/shape in the grid.
 async function renderThumbnail(buf) {
   const img = sharp(buf, { failOn: 'none', limitInputPixels: 64 * 1024 * 1024 });
   const meta = await img.metadata().catch(() => null);
   if (!meta || !meta.width || !meta.height) return null;
   return img
     .rotate()
-    .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
+    .resize(320, 320, { fit: 'cover', position: 'centre' })
     .jpeg({ quality: 70, mozjpeg: true })
     .toBuffer();
 }
@@ -271,6 +272,28 @@ async function migrateLegacyImages() {
   }
   await sql`INSERT INTO settings (key, value) VALUES ('legacyImagesMigrated', 'true') ON CONFLICT (key) DO UPDATE SET value='true'`;
   if (done > 0) console.log('Migrated legacy product images:', done);
+}
+
+// One-time migration: re-render every stored upload as a uniform 320x320 square
+// crop so thumbnails uploaded before square-cropping match the new clean grid.
+async function migrateSquareImages() {
+  const flag = await sql`SELECT value FROM settings WHERE key='squareImagesMigrated'`;
+  if (flag.length && flag[0].value === 'true') return;
+  const rows = await sql`SELECT id, data FROM uploads`;
+  let done = 0;
+  for (const r of rows) {
+    try {
+      const jpeg = await renderThumbnail(r.data);
+      if (jpeg) {
+        await sql`UPDATE uploads SET data=${jpeg} WHERE id=${r.id}`;
+        done++;
+      }
+    } catch (e) {
+      console.error('Square image migration failed for', r.id, e.message);
+    }
+  }
+  await sql`INSERT INTO settings (key, value) VALUES ('squareImagesMigrated', 'true') ON CONFLICT (key) DO UPDATE SET value='true'`;
+  if (done > 0) console.log('Square-cropped uploads:', done);
 }
 
 async function batchInsert(table, columns, rows) {
@@ -489,6 +512,10 @@ async function ensureCatalogSynced() {
 
 initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
   console.error('Catalog sync failed:', err);
+});
+
+initPromise = initPromise.then(() => migrateSquareImages()).catch(err => {
+  console.error('Square image migration failed:', err);
 });
 
 initPromise = initPromise.then(() => migrateLegacyImages()).catch(err => {

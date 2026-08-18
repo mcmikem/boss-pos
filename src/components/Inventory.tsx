@@ -133,8 +133,8 @@ export default function Inventory({
       window.clearTimeout(timer);
       try {
         URL.revokeObjectURL(img!.src);
-        let w = img!.naturalWidth;
-        let h = img!.naturalHeight;
+        const w = img!.naturalWidth;
+        const h = img!.naturalHeight;
         if (!w || !h) {
           triggerToast('Could not read image dimensions', 'error');
           return;
@@ -144,16 +144,17 @@ export default function Inventory({
           triggerToast('Photo resolution too high for this device', 'error');
           return;
         }
-        if (w > MAX_W) {
-          h = Math.round(h * (MAX_W / w));
-          w = MAX_W;
-        }
+        // Centre-crop to a square so the offline photo matches the clean,
+        // uniform square thumbnails the server produces.
+        const side = Math.min(w, h);
+        const sx = Math.floor((w - side) / 2);
+        const sy = Math.floor((h - side) / 2);
         const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+        canvas.width = Math.min(MAX_W, side);
+        canvas.height = Math.min(MAX_W, side);
         const ctx = canvas.getContext('2d');
         if (!ctx) { triggerToast('Failed to process image', 'error'); return; }
-        ctx.drawImage(img!, 0, 0, w, h);
+        ctx.drawImage(img!, sx, sy, side, side, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
         if (dataUrl.length > 60_000) {
           triggerToast('Image too large after compression', 'error');
