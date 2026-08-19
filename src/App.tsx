@@ -174,21 +174,41 @@ export default function App() {
   };
 
   // Boot: try open-mode auth, migrate an existing client PIN, then load data.
+  // Offline-first: old Androids report navigator.onLine=true on dead WiFi, so we
+  // NEVER trust it to decide the offline path. If this device has been used
+  // before (cached data exists) and isn't a locked till, render instantly from
+  // cache and refresh in the background instead of blocking on the network.
   useEffect(() => {
     (async () => {
       let serverHasPin: boolean | null = null;
       let shopName = '';
 
+      const cachedSettings = readCached<StoreSettings>('/api/settings');
+      if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
+
       // Fast path: we already know a PIN is set on the server from a previous
       // unlock. Show the lock screen immediately (offline included) instead of
       // burning 1-2 network round-trips that can hang on dead WiFi.
       if (localStorage.getItem('boss_pos_has_pin') === 'true') {
-        const cachedSettings = readCached<StoreSettings>('/api/settings');
-        if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
         setAuthState('locked');
         return;
       }
 
+      const cachedProducts = loadProducts();
+      const hasCachedData = !!cachedProducts || !!readCached<BootData>('/api/boot');
+      const token = getAuthToken();
+
+      // Offline-first: previously-used device that isn't a locked till opens
+      // straight from cache. No round-trip ever blocks the screen, so offline
+      // boots are instant even when the network lies.
+      if (hasCachedData && (token || localStorage.getItem('boss_pos_has_pin') === 'false')) {
+        setAuthState('ready');
+        fetchAllData().catch(() => {});
+        return;
+      }
+
+      // First run / unknown PIN state: must ask the server (bounded by
+      // fetchTimeout, so this can't hang forever).
       try {
         const status = await authStatus();
         serverHasPin = status.hasPin;
@@ -222,9 +242,12 @@ export default function App() {
         await fetchAllData();
         setAuthState('ready');
       } catch {
+        // Offline / flaky network: don't trust navigator.onLine here. A till
+        // that has cached data (and isn't PIN-locked) opens from cache; a
+        // genuinely locked till still waits for the PIN screen.
         const storedHasPin = localStorage.getItem('boss_pos_has_pin') === 'true';
-        const token = getAuthToken();
-        if (!navigator.onLine && (token || !storedHasPin)) {
+        const canBootOffline = !storedHasPin && (getAuthToken() || hasCachedData || !!loadProducts());
+        if (canBootOffline) {
           await fetchAllData();
           setAuthState('ready');
         } else {

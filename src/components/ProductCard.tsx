@@ -60,13 +60,15 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
           : 'border-white/5 hover:border-gold-brand/30'
       }`}
     >
-      <div className="relative aspect-[1/1] bg-gradient-to-br" style={{ backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
+      {/* aspect-ratio isn't supported on the old Androids this app targets
+          (Chrome < 88), so force a square with the padding-top: 100% trick. */}
+      <div className="relative w-full" style={{ paddingTop: '100%', backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
         {product.imageUrl ? (
           <img referrerPolicy="no-referrer" src={product.imageUrl} alt={product.name}
-            className="w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-cover"
             onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
         ) : (
-          <div className={`w-full h-full bg-gradient-to-br ${catVis.gradient} flex items-center justify-center`}>
+          <div className={`absolute inset-0 w-full h-full bg-gradient-to-br ${catVis.gradient} flex items-center justify-center`}>
                               <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
                             </div>
         )}

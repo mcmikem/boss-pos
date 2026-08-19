@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect, type FormEvent } from 'react';
 import { 
   TrendingUp, Plus, Coins, User, Phone, Mail,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
-  Settings2, Hash, Check, Edit2
+  Settings2, Hash, Check, Edit2, ChevronDown,
+  CalendarDays, Receipt
 } from 'lucide-react';
 import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder } from '../types';
 import CreditsLedger from './CreditsLedger';
@@ -93,6 +94,14 @@ export default function Analytics({
   const [supEmail, setSupEmail] = useState('');
   const [confirmDeleteSupplier, setConfirmDeleteSupplier] = useState<string | null>(null);
 
+  const DAY_VIEW_LIMIT = 6;
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+  const [showAllDays, setShowAllDays] = useState(false);
+  useEffect(() => {
+    setExpandedDays(new Set());
+    setShowAllDays(false);
+  }, [timeFilter]);
+
   const timeRange = useMemo(() => {
     const now = new Date();
     if (timeFilter === 'Daily') {
@@ -170,6 +179,49 @@ export default function Analytics({
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([label, val]) => ({ label: label.slice(5), val }));
   }, [serverWindowSummary, filteredSales]);
+
+  // Actual sales & expenses grouped by the day they were made, newest first.
+  const dailyBreakdown = useMemo(() => {
+    const map = new Map<string, { sales: Sale[]; expenses: Expense[] }>();
+    filteredSales.forEach(s => {
+      const k = localDayKey(s.timestamp);
+      if (!map.has(k)) map.set(k, { sales: [], expenses: [] });
+      map.get(k)!.sales.push(s);
+    });
+    filteredExpenses.forEach(e => {
+      const k = localDayKey(e.timestamp);
+      if (!map.has(k)) map.set(k, { sales: [], expenses: [] });
+      map.get(k)!.expenses.push(e);
+    });
+    return Array.from(map.entries())
+      .map(([date, data]) => ({
+        date,
+        sales: data.sales,
+        expenses: data.expenses,
+        revenue: data.sales.reduce((a, s) => a + s.total, 0),
+        expenseTotal: data.expenses.reduce((a, e) => a + e.amount, 0)
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [filteredSales, filteredExpenses]);
+
+  const visibleDays = useMemo(() => {
+    return showAllDays ? dailyBreakdown : dailyBreakdown.slice(0, DAY_VIEW_LIMIT);
+  }, [dailyBreakdown, showAllDays]);
+
+  const toggleDay = (date: string) => {
+    setExpandedDays(prev => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date);
+      else next.add(date);
+      return next;
+    });
+  };
+
+  const formatDayLabel = (dateKey: string) => {
+    const d = new Date(dateKey + 'T12:00:00');
+    const full = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+    return todayLocalKey() === dateKey ? `${full} • Today` : full;
+  };
 
   const categoryBreakdown = useMemo(() => {
     const categoriesSum: { [key: string]: number } = {};
@@ -608,6 +660,115 @@ const colorsMap: { [key: string]: string } = {
                   })()}
                 </div>
               </div>
+            )}
+          </section>
+
+          <section className="boss-card p-5">
+            <div className="flex justify-between items-center mb-1">
+              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+                <CalendarDays className="w-4 h-4 text-gold-brand" /> Daily Breakdown ({timeFilter})
+              </h3>
+              <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider">
+                {dailyBreakdown.length} {dailyBreakdown.length === 1 ? 'day' : 'days'}
+              </span>
+            </div>
+            <p className="text-xs text-zinc-500 font-bold uppercase mb-4">Actual sales & expenses as they were made</p>
+
+            <div className="space-y-2">
+              {visibleDays.map(day => {
+                const isExpanded = expandedDays.has(day.date);
+                const net = day.revenue - day.expenseTotal;
+                return (
+                  <div key={day.date} className="bg-black/30 border border-white/5 rounded-xl overflow-hidden">
+                    <button onClick={() => toggleDay(day.date)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-white/[0.03] transition-colors text-left">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <ChevronDown className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        <div className="min-w-0">
+                          <p className="text-xs font-black text-white uppercase tracking-wider truncate">
+                            {formatDayLabel(day.date)}
+                          </p>
+                          <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5">
+                            {day.sales.length} sale{day.sales.length !== 1 ? 's' : ''}
+                            {day.expenses.length > 0 && ` • ${day.expenses.length} expense${day.expenses.length !== 1 ? 's' : ''}`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <div className="text-right">
+                          <p className="text-[10px] font-bold text-zinc-500 uppercase">Net</p>
+                          <p className={`text-sm font-black font-display ${net >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>
+                            {formatCurrency(net)}
+                          </p>
+                        </div>
+                        <div className="text-right hidden sm:block">
+                          <p className="text-[10px] font-bold text-zinc-500 uppercase">Sales</p>
+                          <p className="text-sm font-black text-white">{formatCurrency(day.revenue)}</p>
+                        </div>
+                        <div className="text-right hidden sm:block">
+                          <p className="text-[10px] font-bold text-zinc-500 uppercase">Expenses</p>
+                          <p className="text-sm font-black text-rose-400">-{formatCurrency(day.expenseTotal)}</p>
+                        </div>
+                      </div>
+                    </button>
+
+                    {isExpanded && (
+                      <div className="px-4 pb-4 border-t border-white/5 pt-3 space-y-3">
+                        {day.sales.length > 0 && (
+                          <div>
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Sales</p>
+                            <div className="space-y-1.5">
+                              {day.sales.map(sale => (
+                                <div key={sale.id} className="flex items-center justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <Receipt className="w-3.5 h-3.5 text-gold-light shrink-0" />
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-bold text-white uppercase truncate">{sale.orderNumber}</p>
+                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                                        {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.paymentMethod} • {sale.items.reduce((a, i) => a + i.qty, 0)} item(s)
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <p className="text-xs font-black text-white shrink-0">{formatCurrency(sale.total)}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {day.expenses.length > 0 && (
+                          <div>
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Expenses</p>
+                            <div className="space-y-1.5">
+                              {day.expenses.map(exp => (
+                                <div key={exp.id} className="flex items-center justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <Coins className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
+                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category}</p>
+                                    </div>
+                                  </div>
+                                  <p className="text-xs font-black text-rose-400 shrink-0">-{formatCurrency(exp.amount)}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {dailyBreakdown.length === 0 && (
+                <div className="p-6 text-center text-zinc-500 text-xs font-bold uppercase">No sales or expenses in this period.</div>
+              )}
+            </div>
+
+            {dailyBreakdown.length > DAY_VIEW_LIMIT && !showAllDays && (
+              <button onClick={() => setShowAllDays(true)}
+                className="mt-3 w-full h-11 border border-zinc-800 hover:border-gold-brand/40 hover:bg-white/[0.03] text-gold-brand font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer">
+                View All Reports ({dailyBreakdown.length} days) <ChevronDown className="w-4 h-4" />
+              </button>
             )}
           </section>
 

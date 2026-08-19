@@ -112,12 +112,24 @@ function physical(prop: string, value: string): {prop: string; value: string}[] 
 }
 
 // Downlevel modern CSS features unsupported by old Android:
+//  - 4/8-digit alpha hex (lightningcss's color-mix fallback) -> rgba, because
+//    Chrome < 62 (Android 5-6 browsers) also drops those as invalid
 //  - logical properties (inset/margin/padding inline/block) -> physical
 //  - `inset` shorthand -> top/right/bottom/left
 //  - native `translate`/`scale`/`rotate` -> `transform` (pure replacement;
 //    runs AFTER lightningcss so it can't be merged or re-shortened by it)
 function downlevelModern(css: string): string {
   const root = postcss.parse(css);
+
+  // Tailwind v4 emits every opacity modifier (`text-zinc-400/80`, `bg-black/50`,
+  // `border-gold-brand/40`, ...) via color-mix. lightningcss already downlevels
+  // those to 4/8-digit alpha hex (#0003, #fcbb004d), but Chrome < 62 drops those
+  // too — i.e. every old Android this app ships to. Flatten to rgba() (supported
+  // since Chrome 49) so old phones render the same tinted design.
+  root.walkDecls(decl => {
+    decl.value = decl.value.replace(/#([0-9a-fA-F]{4}|[0-9a-fA-F]{8})(?![\w])/g, alphaHexToRgba);
+  });
+
   root.walkRules(rule => {
     const logical: {decl: Declaration; out: {prop: string; value: string}[]}[] = [];
     const natives: {decl: Declaration; prop: string; value: string}[] = [];
@@ -148,6 +160,19 @@ function downlevelModern(css: string): string {
     }
   });
   return root.toString();
+}
+
+// #RGBa / #RRGGBBAA -> rgba(), preserving the alpha exactly.
+function alphaHexToRgba(hex: string): string {
+  const h = hex.length === 5
+    ? [...hex.slice(1)].map(ch => ch + ch).join('')
+    : hex.slice(1);
+  const n = parseInt(h.slice(0, 6), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const a = Math.round((parseInt(h.slice(6, 8), 16) / 255) * 1000) / 1000;
+  return `rgba(${r},${g},${b},${a})`;
 }
 
 function deLayerCSS(): Plugin {
