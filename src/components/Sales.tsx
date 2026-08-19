@@ -28,6 +28,34 @@ const subManagerFallback = (
   </div>
 );
 
+// Short vibration + beep when a charge completes so the cashier knows it went
+// through without re-reading the screen. Works on Chrome 49+.
+function playChargeFeedback() {
+  try {
+    if (navigator.vibrate) navigator.vibrate(60);
+  } catch { /* ignore */ }
+  try {
+    const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const beep = (freq: number, at: number) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.2, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.12);
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start(ctx.currentTime + at);
+      o.stop(ctx.currentTime + at + 0.13);
+    };
+    beep(880, 0);
+    beep(1174, 0.14);
+    if (ctx.state === 'suspended') ctx.resume();
+  } catch { /* audio blocked; vibration already fired */ }
+}
+
 interface SalesProps {
   products: Product[];
   onAddSale: (sale: Sale) => void;
@@ -299,6 +327,7 @@ export default function Sales({
     setCustomerName('');
     setIsMobileCartOpen(false);
     setIsCompleting(false);
+    playChargeFeedback();
     triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
   };
   handleCompleteSaleRef.current = handleCompleteSale;
@@ -421,7 +450,7 @@ export default function Sales({
           </button>
         )}
 
-        {selectedCategory === 'Tailoring' && !showTailoringOrders && (
+        {settings?.showTailoring && selectedCategory === 'Tailoring' && !showTailoringOrders && (
           <button onClick={() => setShowTailoringOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Scissors className="w-4 h-4" />
@@ -429,7 +458,7 @@ export default function Sales({
           </button>
         )}
 
-        {selectedCategory === 'Graphics' && !showDesignOrders && (
+        {settings?.showDesign && selectedCategory === 'Graphics' && !showDesignOrders && (
           <button onClick={() => setShowDesignOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Palette className="w-4 h-4" />

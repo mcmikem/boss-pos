@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
+  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid, Scissors
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -42,6 +42,8 @@ const DEFAULT_SETTINGS: StoreSettings = {
   defaultPaymentMethod: 'Cash',
   dailyGoalNum: 10,
   usdRate: UGX_TO_USD_RATE,
+  showTailoring: false,
+  showDesign: false,
 };
 
 export default function App() {
@@ -1080,6 +1082,20 @@ export default function App() {
                   <option value="Bespoke Tailoring">Bespoke Tailoring</option>
                   <option value="General Store">General Store</option>
                 </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Extra Modules</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setSettings(prev => ({ ...prev, showTailoring: !prev.showTailoring }))}
+                    className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showTailoring ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                    <Scissors className="w-3.5 h-3.5" /> Tailoring
+                  </button>
+                  <button onClick={() => setSettings(prev => ({ ...prev, showDesign: !prev.showDesign }))}
+                    className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showDesign ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                    <Palette className="w-3.5 h-3.5" /> Design & Print
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-600">Turn on the order screens you actually use. Hidden until enabled.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">

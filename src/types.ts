@@ -215,5 +215,7 @@ export interface StoreSettings {
   categories?: string[];
   expenseCategories?: string[];
   hasPin?: boolean;
+  showTailoring?: boolean;
+  showDesign?: boolean;
 }
 
