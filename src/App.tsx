@@ -391,8 +391,8 @@ export default function App() {
     if (readyRef.current) setSettings(prev => ({ ...prev, expenseCategories }));
   }, [expenseCategories]);
 
-  // Cashier attribution: remember who is selling on this device, and ask once
-  // per day only when no name is set yet.
+  // Cashier attribution: the asking only happens ONCE per device. The name is
+  // saved in localStorage, so each phone remembers its seller between logins.
   useEffect(() => {
     localStorage.setItem('boss_pos_staff', staffName || '');
   }, [staffName]);
@@ -401,13 +401,11 @@ export default function App() {
   useEffect(() => {
     if (authState !== 'ready' || staffName || staffPromptedRef.current) return;
     staffPromptedRef.current = true;
-    if (localStorage.getItem('boss_pos_staff_prompt_day') === new Date().toDateString()) return;
+    if (localStorage.getItem('boss_pos_staff_prompted') === '1') return;
     setTimeout(() => {
-      const name = window.prompt('Who is selling today? (cashier name)');
-      if (name && name.trim()) {
-        setStaffName(name.trim());
-        localStorage.setItem('boss_pos_staff_prompt_day', new Date().toDateString());
-      }
+      const name = window.prompt('Who is selling? (cashier name — asked once for this phone)');
+      if (name && name.trim()) setStaffName(name.trim());
+      localStorage.setItem('boss_pos_staff_prompted', '1');
     }, 700);
   }, [authState, staffName]);
 
