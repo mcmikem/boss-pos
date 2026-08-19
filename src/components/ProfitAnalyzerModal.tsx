@@ -91,7 +91,7 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
                   <div><p className="text-[10px] text-zinc-500 uppercase font-bold">Cost</p><p className="text-xs font-black text-zinc-300">{formatCurrency(product.cost)}</p></div>
                   <div><p className="text-[10px] text-zinc-500 uppercase font-bold">Price</p><p className="text-xs font-black text-gold-brand">{formatCurrency(product.price)}</p></div>
                   <div><p className="text-[10px] text-zinc-500 uppercase font-bold">Profit</p><p className={`text-xs font-black ${isLoss ? 'text-rose-400' : 'text-emerald-400'}`}>{isLoss ? '-' : '+'}{formatCurrency(Math.abs(profitPerUnit))}</p></div>
-                  <div><p className="text-[10px] text-zinc-500 uppercase font-bold">Margin</p><p className={`text-xs font-black ${isLoss ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{marginPct.toFixed(0)}%</p></div>
+                  <div><p className="text-[10px] text-zinc-500 uppercase font-bold">Profit %</p><p className={`text-xs font-black ${isLoss ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{marginPct.toFixed(0)}%</p></div>
                 </div>
                 {isLoss && <p className="text-[10px] text-rose-400 font-bold mt-2 uppercase tracking-wider">Selling at a loss! Increase price or reduce ingredient cost.</p>}
                 {marginPct > 0 && marginPct < 20 && <p className="text-[10px] text-amber-400 font-bold mt-2 uppercase tracking-wider">Low margin — consider raising price or reducing costs.</p>}

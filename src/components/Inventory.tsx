@@ -470,13 +470,13 @@ export default function Inventory({
               className="w-full bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
           </div>
           <div>
-            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Overhead (UGX)</label>
+            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Extra costs (UGX)</label>
             <input type="number" min="0" value={recipe.overhead || ''}
               onChange={(e) => setRecipe(prev => prev && { ...prev, overhead: Math.max(0, parseFloat(e.target.value) || 0) })}
               className="w-full bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
           </div>
           <div>
-            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Target Margin %</label>
+            <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Target profit %</label>
             <input type="number" min="1" max="99" value={recipe.targetMarginPct || ''}
               onChange={(e) => setRecipe(prev => prev && { ...prev, targetMarginPct: Math.min(99, Math.max(1, parseFloat(e.target.value) || 60)) })}
               className="w-full bg-zinc-950 border border-zinc-800 text-amber-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
@@ -486,15 +486,15 @@ export default function Inventory({
         {calc && (
           <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3 space-y-1.5 text-xs">
             <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">Batch cost</span><span className="text-zinc-300 font-bold">{formatCurrency(calc.batchCost)}</span></div>
-            <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">+ Overhead</span><span className="text-zinc-300 font-bold">{formatCurrency(calc.totalCost - calc.batchCost)}</span></div>
-            <div className="flex justify-between border-t border-zinc-800 pt-1.5"><span className="text-zinc-500 font-bold uppercase">COGS / unit</span><span className="text-gold-light font-black">{formatCurrency(calc.cogsPerUnit)}</span></div>
+            <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">+ Extra costs</span><span className="text-zinc-300 font-bold">{formatCurrency(calc.totalCost - calc.batchCost)}</span></div>
+            <div className="flex justify-between border-t border-zinc-800 pt-1.5"><span className="text-zinc-500 font-bold uppercase">Cost per piece</span><span className="text-gold-light font-black">{formatCurrency(calc.cogsPerUnit)}</span></div>
             <div className="flex justify-between"><span className="text-zinc-500 font-bold uppercase">Sell price</span><span className="text-zinc-300 font-bold">{formatCurrency(parseFloat(price) || 0)}</span></div>
             <div className="flex justify-between">
-              <span className="text-zinc-500 font-bold uppercase">Profit / unit</span>
+              <span className="text-zinc-500 font-bold uppercase">Profit / piece</span>
               <span className={`font-black ${calc.isLoss ? 'text-rose-400' : 'text-emerald-400'}`}>{formatCurrency(calc.profitPerUnit)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-500 font-bold uppercase">Margin</span>
+              <span className="text-zinc-500 font-bold uppercase">Profit %</span>
               <span className={`font-black ${calc.marginPct <= 0 ? 'text-rose-400' : calc.marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>{calc.marginPct.toFixed(1)}%</span>
             </div>
             <div className="flex justify-between">
@@ -593,7 +593,7 @@ export default function Inventory({
                 <div className="text-right flex items-center gap-4">
                   <div>
                     <p className="text-xs font-black text-white font-display">{formatCurrency(product.price)}</p>
-                    <p className="text-xs text-zinc-500 font-bold uppercase mt-0.5">{product.category === 'Eatery' ? 'COGS' : 'Cost'}: {formatCurrency(effectiveCost(product))}</p>
+                    <p className="text-xs text-zinc-500 font-bold uppercase mt-0.5">Cost: {formatCurrency(effectiveCost(product))}</p>
                   </div>
                   <Edit className="w-4 h-4 text-zinc-600 group-hover:text-gold-brand transition-colors" />
                 </div>

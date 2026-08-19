@@ -810,7 +810,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
                           className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
                       </div>
                       <div>
-                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target Margin %</label>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target profit %</label>
                         <input type="number" min="0" max="95" value={f.targetMarginPct} onChange={e => setF(p => ({ ...p, targetMarginPct: e.target.value }))}
                           className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
                       </div>

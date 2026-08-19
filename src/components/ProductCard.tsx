@@ -96,7 +96,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
               </p>
             ) : (
               product.cost > 0 && (
-                <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">{isEatery ? 'COGS' : 'Cost'}: {formatCurrency(product.cost)}</p>
+                <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">Cost: {formatCurrency(product.cost)}</p>
               )
             )}
           </div>
