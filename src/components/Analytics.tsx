@@ -445,6 +445,19 @@ const colorsMap: { [key: string]: string } = {
     }).filter(s => s.percentage > 0);
   }, [categoryBreakdown, revenue]);
 
+  const sellerBreakdown = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; total: number }>();
+    for (const s of filteredSales) {
+      const key = (s.staffName || '').trim();
+      if (!key) continue;
+      const cur = map.get(key) || { name: key, count: 0, total: 0 };
+      cur.count += 1;
+      cur.total += s.total;
+      map.set(key, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [filteredSales]);
+
   return (
     <div className="space-y-6 animate-fade-in pb-4" id="analytics-tab-content">
       <section className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
@@ -780,13 +793,46 @@ const colorsMap: { [key: string]: string } = {
               )}
             </div>
 
-            {dailyBreakdown.length > DAY_VIEW_LIMIT && !showAllDays && (
-              <button onClick={() => setShowAllDays(true)}
+            {dailyBreakdown.length > DAY_VIEW_LIMIT && (
+              <button onClick={() => {
+                if (showAllDays) {
+                  setShowAllDays(false);
+                  setExpandedDays(new Set());
+                } else {
+                  setShowAllDays(true);
+                  setExpandedDays(new Set([dailyBreakdown[0]?.date].filter(Boolean) as string[]));
+                }
+              }}
                 className="mt-3 w-full h-11 border border-zinc-800 hover:border-gold-brand/40 hover:bg-white/[0.03] text-gold-brand font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer">
-                View All Reports ({dailyBreakdown.length} days) <ChevronDown className="w-4 h-4" />
+                {showAllDays ? 'Show Recent Reports' : `View All Reports (${dailyBreakdown.length} days)`} <ChevronDown className={`w-4 h-4 transition-transform ${showAllDays ? 'rotate-180' : ''}`} />
               </button>
             )}
           </section>
+
+          {sellerBreakdown.length > 0 && (
+            <section className="boss-card p-5">
+              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <User className="w-4 h-4 text-gold-brand" /> Sales by Seller ({timeFilter})
+              </h3>
+              <div className="space-y-1.5">
+                {sellerBreakdown.map((s, i) => (
+                  <div key={s.name} className={`flex items-center justify-between gap-2 rounded-xl px-4 py-3 ${i === 0 ? 'bg-gold-brand/5 border border-gold-brand/20' : 'bg-[#0A0A0A] border border-white/5'}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${i === 0 ? 'bg-gold-brand text-black' : 'bg-zinc-800 text-zinc-300'}`}>
+                        {i + 1}
+                      </span>
+                      <span className="text-xs font-black text-white uppercase truncate">{s.name}</span>
+                      {i === 0 && <span className="text-[9px] font-black text-gold-brand uppercase tracking-wider border border-gold-brand/30 bg-gold-brand/10 rounded-full px-2 py-0.5">Top</span>}
+                    </div>
+                    <div className="flex items-center gap-4 shrink-0">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase">{s.count} sale{s.count !== 1 ? 's' : ''}</span>
+                      <span className="text-xs font-black text-gold-brand">{formatCurrency(s.total)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="boss-card p-5 rounded-2xl flex flex-col justify-between">

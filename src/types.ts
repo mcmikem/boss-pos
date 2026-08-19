@@ -90,6 +90,7 @@ export interface Sale {
   customerName?: string;
   discount?: number;
   notes?: string;
+  staffName?: string;
   refunded?: boolean;
   refundedAt?: string;
 }

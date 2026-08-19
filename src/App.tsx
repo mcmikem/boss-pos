@@ -54,6 +54,7 @@ export default function App() {
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
+  const [staffName, setStaffName] = useState<string>(() => localStorage.getItem('boss_pos_staff') || '');
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -390,9 +391,28 @@ export default function App() {
     if (readyRef.current) setSettings(prev => ({ ...prev, expenseCategories }));
   }, [expenseCategories]);
 
+  // Cashier attribution: remember who is selling on this device, and ask once
+  // per day only when no name is set yet.
   useEffect(() => {
-    localStorage.setItem('boss_pos_cart', JSON.stringify(cart));
-  }, [cart]);
+    localStorage.setItem('boss_pos_staff', staffName || '');
+  }, [staffName]);
+
+  const staffPromptedRef = useRef(false);
+  useEffect(() => {
+    if (authState !== 'ready' || staffName || staffPromptedRef.current) return;
+    staffPromptedRef.current = true;
+    if (localStorage.getItem('boss_pos_staff_prompt_day') === new Date().toDateString()) return;
+    setTimeout(() => {
+      const name = window.prompt('Who is selling today? (cashier name)');
+      if (name && name.trim()) {
+        setStaffName(name.trim());
+        localStorage.setItem('boss_pos_staff_prompt_day', new Date().toDateString());
+      }
+    }, 700);
+  }, [authState, staffName]);
+
+  useEffect(() => {
+    localStorage.setItem('boss_pos_cart', JSON.stringify(cart));  }, [cart]);
 
   useEffect(() => {
     if (loading) return;
@@ -845,6 +865,7 @@ export default function App() {
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
             isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
             categories={categories}
+            staffName={staffName} setStaffName={setStaffName}
           />
           </ErrorBoundary>
         );
@@ -1118,6 +1139,13 @@ export default function App() {
                 <input type="range" min="5" max="30" value={settings.dailyGoalNum}
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Who is selling</label>
+                <input type="text" value={staffName} placeholder="Cashier / seller name"
+                  onChange={(e) => setStaffName(e.target.value)}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                <p className="text-[10px] text-zinc-600">Every sale is stamped with this name so Reports can show sales by seller.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>

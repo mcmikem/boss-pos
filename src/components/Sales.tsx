@@ -70,6 +70,8 @@ interface SalesProps {
   isQuickSale: boolean;
   setIsQuickSale: Dispatch<SetStateAction<boolean>>;
   categories: string[];
+  staffName?: string;
+  setStaffName: (name: string) => void;
 }
 
 const localOrderNumber = () => {
@@ -81,7 +83,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
@@ -327,6 +329,7 @@ export default function Sales({
       items: itemsToSell, subtotal: saleSubtotal, tax, total: saleTotal, paymentMethod,
       customerName: customerName.trim() || undefined,
       discount: saleDiscount > 0 ? saleDiscount : undefined,
+      staffName: staffName?.trim() || undefined,
     };
     onAddSale(newSale);
     try {
@@ -427,6 +430,15 @@ export default function Sales({
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
+          <button onClick={() => { const name = window.prompt('Who is selling now?', staffName || ''); if (name !== null) setStaffName(name.trim()); }}
+            className="shrink-0 h-12 px-3 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
+            title="Who is selling — each sale is stamped with this name" id="seller-chip">
+            {staffName ? (
+              <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-gold-brand" />{staffName}</span>
+            ) : (
+              <span className="text-zinc-500">Seller</span>
+            )}
+          </button>
           <button onClick={() => setIsCustomChargeOpen(true)}
             className="shrink-0 h-12 px-4 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
             id="open-custom-charge-btn">
