@@ -1098,7 +1098,9 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   res.json(e);
 }));
 
-// Verify the configured Sheets URL and send a single test row.
+// Verify the configured Sheets URL and send a single test row. Google serves
+// "page not found" as HTTP 200 HTML when a /exec deployment isn't valid, so we
+// require a real JSON reply, not just a 200.
 app.post('/api/sheets/test', asHandler(async (req, res) => {
   const url = await readSettingValue('sheetsUrl');
   if (!url || typeof url !== 'string' || !/^https:\/\//.test(url)) {
@@ -1114,9 +1116,16 @@ app.post('/api/sheets/test', asHandler(async (req, res) => {
       signal: controller.signal,
     });
     clearTimeout(timer);
-    const body = await r.text();
-    if (r.ok) return res.json({ success: true });
-    return res.status(502).json({ error: `Sheet script returned ${r.status}: ${body.slice(0, 200)}` });
+    const raw = await r.text().catch(() => '');
+    const ct = r.headers.get('content-type') || '';
+    if (r.ok && ct.includes('application/json')) {
+      let j = null;
+      try { j = JSON.parse(raw); } catch { /* not json */ }
+      const ok = (j && typeof j === 'object' && (j.ok === true || j.success === true));
+      if (ok) return res.json({ success: true });
+    }
+    const title = (raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || raw.replace(/<[^>]+>/g, '').slice(0, 160);
+    return res.status(502).json({ error: `Sheet URL replied: ${title || 'not a valid script reply'}` });
   } catch (err) {
     clearTimeout(timer);
     return res.status(502).json({ error: `Could not reach the sheet: ${(err && err.message) || 'network error'}` });

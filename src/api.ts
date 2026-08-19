@@ -546,8 +546,27 @@ export const settingsApi = {
   update: (s: StoreSettings) => api<{ success: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
 };
 
+// Real POST to the sheets test endpoint, bypassing api()'s offline-outbox
+// fallback so a failed or bogus sheet URL surfaces as an error instead of a
+// silent "success".
 export const sheetsApi = {
-  test: () => api<{ success: boolean }>('/api/sheets/test', { method: 'POST' }),
+  test: async () => {
+    let res: Response;
+    try {
+      res = await fetchTimeout(`${BASE}/api/sheets/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
+      }, 15000);
+    } catch (err) {
+      throw new ApiError(err instanceof Error ? err.message : 'Network error', 0);
+    }
+    let body: { success?: boolean; error?: string } = {};
+    try { body = await res.json(); } catch {}
+    if (!res.ok || !body.success) {
+      throw new ApiError(body.error || `Sheet test failed (HTTP ${res.status})`, res.status);
+    }
+    return { success: true } as const;
+  },
 };
 
 export interface BootData {
