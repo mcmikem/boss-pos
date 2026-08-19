@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid, Scissors
+  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, LayoutGrid, Scissors
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -1005,9 +1005,6 @@ export default function App() {
           <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
             <Settings className="w-4 h-4" />
           </button>
-          <div className="w-10 h-10 rounded-full border border-gold-brand overflow-hidden shrink-0 shadow-[0_0_10px_rgba(255,204,0,0.2)] flex items-center justify-center bg-gold-brand/10 text-gold-brand text-xs font-black">
-            <span className="uppercase">IM</span>
-          </div>
         </div>
       </header>
 
@@ -1026,13 +1023,6 @@ export default function App() {
             )}
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">Sell</span>
-        </button>
-        <button onClick={() => { setIsQuickSale(true); }}
-          className="flex flex-col items-center justify-center flex-1 h-full py-1 text-gold-brand transition-all active:scale-95"
-          title="Quick Sale">
-          <div className="w-10 h-10 rounded-xl bg-gold-brand text-black flex items-center justify-center shadow-[0_0_12px_rgba(255,204,0,0.3)]">
-            <Zap className="w-5 h-5" />
-          </div>
         </button>
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />

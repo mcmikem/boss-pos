@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, lazy, Suspense, type Dispatch, ty
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
-  Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette
+  Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, StoreSettings } from '../types';
 import { nextOrderNumber } from '../api';
@@ -115,6 +115,14 @@ export default function Sales({
   const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
+  const [lastSaleItems, setLastSaleItems] = useState<SaleItem[] | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('boss_pos_last_sale');
+      if (raw) setLastSaleItems(JSON.parse(raw) as SaleItem[]);
+    } catch { /* ignore */ }
+  }, []);
   const [visibleCount, setVisibleCount] = useState(30);
   const PAGE_SIZE = 30;
 
@@ -321,6 +329,10 @@ export default function Sales({
       discount: saleDiscount > 0 ? saleDiscount : undefined,
     };
     onAddSale(newSale);
+    try {
+      localStorage.setItem('boss_pos_last_sale', JSON.stringify(itemsToSell));
+      setLastSaleItems(itemsToSell);
+    } catch { /* ignore */ }
     setCart([]);
     setCustomCashReceived('');
     setDiscount('');
@@ -331,6 +343,17 @@ export default function Sales({
     triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
   };
   handleCompleteSaleRef.current = handleCompleteSale;
+
+  const repeatLastSale = () => {
+    if (!lastSaleItems || lastSaleItems.length === 0) return;
+    const live = lastSaleItems.filter(item => {
+      const p = products.find(x => x.id === item.productId);
+      return !!p && (p.isService || p.stockQty >= item.qty);
+    });
+    if (live.length === 0) { triggerToast('Last sale items are out of stock now', 'error'); return; }
+    setCart(live);
+    if (live.length < lastSaleItems.length) triggerToast('Some items out of stock — added what is available', 'info');
+  };
 
   const renderCartItem = (item: SaleItem) => {
     const lineKey = `${item.productId}::${item.variantId || ''}`;
@@ -409,7 +432,19 @@ export default function Sales({
             id="open-custom-charge-btn">
             + Custom
           </button>
+          <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
+            className="shrink-0 h-12 px-4 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            id="open-quick-sale-btn">
+            <Zap className="w-4 h-4" /> Quick Sale
+          </button>
         </div>
+
+        {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
+          <button onClick={repeatLastSale}
+            className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
+            <RotateCcw className="w-3.5 h-3.5" /> Repeat last sale
+          </button>
+        )}
 
         {/* Categories */}
         <div className="relative -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -627,6 +662,20 @@ export default function Sales({
                 {discountType === 'percent' && discount && (
                   <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">{formatCurrency(discountNum)} off</p>
                 )}
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => { const d = Math.max(0, Math.ceil(total / 100) * 100 - total); setDiscountType('fixed'); setDiscount(d > 0 ? String(d) : ''); }}
+                    className="px-3 h-8 text-[10px] font-black rounded-lg border transition-all cursor-pointer active:scale-95 bg-[#141414] text-zinc-300 border-white/10 hover:border-gold-brand">
+                    Round to 100
+                  </button>
+                  <button onClick={() => { setDiscountType('percent'); setDiscount('5'); }}
+                    className={`px-3 h-8 text-[10px] font-black rounded-lg border transition-all cursor-pointer active:scale-95 ${discountType === 'percent' && discount === '5' ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/5'}`}>5%</button>
+                  <button onClick={() => { setDiscountType('percent'); setDiscount('10'); }}
+                    className={`px-3 h-8 text-[10px] font-black rounded-lg border transition-all cursor-pointer active:scale-95 ${discountType === 'percent' && discount === '10' ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/5'}`}>10%</button>
+                  <button onClick={() => { setDiscountType('fixed'); setDiscount(''); }}
+                    className="px-3 h-8 text-[10px] font-black rounded-lg border transition-all cursor-pointer active:scale-95 bg-[#141414] text-zinc-400 border-white/5 hover:text-rose-400">
+                    Clear
+                  </button>
+                </div>
               </div>
 
               {paymentMethod === 'Cash' && (
