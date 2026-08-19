@@ -131,7 +131,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     } else if (isEatery) {
       if (expenseEateryMode === 'dish') {
         if (!dishProduct) {
-          triggerToast('Select the dish you made', 'error');
+          triggerToast('Select the snack you made', 'error');
           return;
         }
         if (!dishIngRs.some(i => i.bought > 0 && i.price > 0)) {
@@ -286,7 +286,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                 </button>
                 <button onClick={() => setExpenseEateryMode('dish')}
                   className={`h-10 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${expenseEateryMode === 'dish' ? 'bg-amber-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}>
-                  Made a Dish
+                  Made a Snack
                 </button>
               </div>
 
@@ -322,15 +322,15 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                   {recipeDishes.length === 0 ? (
                     <div className="bg-zinc-900/60 border border-dashed border-zinc-700 rounded-xl p-4 text-center">
                       <p className="text-xs font-bold text-zinc-400 uppercase">No recipes yet</p>
-                      <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">Go to <span className="text-gold-brand font-bold">Sell → Eatery Pricing &amp; Recipes</span> and add the ingredients for each dish. Then they will auto-fill here.</p>
+                      <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">Go to <span className="text-gold-brand font-bold">Sell → Eatery Pricing &amp; Recipes</span> and add the ingredients for each snack. Then they will auto-fill here.</p>
                     </div>
                   ) : (
                     <>
                       <div>
-                        <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">Which dish did you make?</label>
+                        <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">Which snack did you make?</label>
                         <select value={expenseDishId} onChange={(e) => selectDish(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-11 px-2 text-xs outline-none font-bold">
-                          <option value="">Pick a dish...</option>
+                          <option value="">Pick a snack...</option>
                           {recipeDishes.map(p => (
                             <option key={p.id} value={p.id}>{p.name} — sells {formatCurrency(p.price)}</option>
                           ))}

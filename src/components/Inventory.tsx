@@ -428,7 +428,7 @@ export default function Inventory({
           <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
             <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe Costing
           </h4>
-          <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery dish</span>
+          <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery snack</span>
         </div>
 
         <div className="space-y-2">
@@ -731,7 +731,7 @@ export default function Inventory({
                     <PlusCircle className="w-3.5 h-3.5" /> Add
                   </button>
                 </div>
-                <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this dish (e.g. Single / Couple / Big)</p>
+                <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this snack (e.g. Single / Couple / Big)</p>
                 {newVariants.length === 0 ? (
                   <p className="text-xs text-zinc-600 italic">No options yet. Tap Add to create one.</p>
                 ) : (
@@ -891,7 +891,7 @@ export default function Inventory({
                   <PlusCircle className="w-3.5 h-3.5" /> Add
                 </button>
               </div>
-              <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this dish (e.g. Single / Couple / Big)</p>
+              <p className="text-[11px] text-zinc-500 mb-2">Sellable sizes/prices for this snack (e.g. Single / Couple / Big)</p>
               {editVariants.length === 0 ? (
                 <p className="text-xs text-zinc-600 italic">No options yet. Tap Add to create one.</p>
               ) : (

@@ -120,7 +120,7 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-zinc-600 absolute left-3 top-1/2 -translate-y-1/2" />
               <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search dishes…"
+                placeholder="Search snacks…"
                 className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 pl-9 pr-3 text-sm focus:border-gold-brand focus:outline-none" />
             </div>
           </div>
@@ -128,8 +128,8 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
           {dishes.length === 0 && (
             <div className="py-16 text-center boss-card rounded-xl">
               <ChefHat className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
-              <p className="text-sm text-zinc-400 font-bold uppercase tracking-wider">No Eatery dishes found</p>
-              <p className="text-[11px] text-zinc-600 mt-1">Add dishes under the Eatery category in Stock first.</p>
+              <p className="text-sm text-zinc-400 font-bold uppercase tracking-wider">No Eatery snacks found</p>
+              <p className="text-[11px] text-zinc-600 mt-1">Add snacks under the Eatery category in Stock first.</p>
             </div>
           )}
 
@@ -171,7 +171,7 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
         <>
           <button onClick={back}
             className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer">
-            <ArrowRightLeft className="w-4 h-4" /> Back to dishes
+            <ArrowRightLeft className="w-4 h-4" /> Back to snacks
           </button>
 
           <div className="bg-zinc-900/60 rounded-xl p-3 border border-gold-brand/20 space-y-3">
@@ -179,7 +179,7 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
               <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
                 <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe Costing — {selected.name}
               </h4>
-              <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery dish</span>
+              <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery snack</span>
             </div>
 
             <div className="space-y-2">
