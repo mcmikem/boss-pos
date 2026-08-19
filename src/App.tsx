@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors
+  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -85,6 +85,7 @@ export default function App() {
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [showAudit, setShowAudit] = useState(false);
+  const [updatingApp, setUpdatingApp] = useState(false);
 
   const readyRef = useRef(false);
 
@@ -555,6 +556,37 @@ export default function App() {
     } catch (err) {
       const message = (err as { message?: string })?.message || 'Connection failed';
       triggerToast(message.replace(/^Error:\s*/i, ''), 'error');
+    }
+  };
+
+  // Force the installed PWA to check for a newer build and restart into it.
+  // Eases stale service-worker caches — the #1 cause of "the button still
+  // doesn't work" on phones that installed the app weeks ago.
+  const handleCheckUpdate = async () => {
+    if (!('serviceWorker' in navigator)) {
+      triggerToast('Update not supported here — open the website in your browser', 'info');
+      return;
+    }
+    setUpdatingApp(true);
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        triggerToast('Not installed as an app — just open the website', 'info');
+        return;
+      }
+      await reg.update();
+      const pending = reg.installing || reg.waiting;
+      if (pending) {
+        triggerToast('Update found — restarting the app…', 'success');
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        const build = typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ !== 'dev' ? __BUILD_COMMIT__.slice(0, 7) : 'dev';
+        triggerToast(`Already the newest build (${build})`, 'success');
+      }
+    } catch {
+      triggerToast('Update check failed — are you online?', 'error');
+    } finally {
+      setUpdatingApp(false);
     }
   };
 
@@ -1126,6 +1158,10 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            <button onClick={handleCheckUpdate} disabled={updatingApp}
+              className="w-full h-10 mb-4 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60">
+              <RefreshCw className={`w-4 h-4 ${updatingApp ? 'animate-spin' : ''}`} /> {updatingApp ? 'Checking…' : 'Update app to newest version'}
+            </button>
             <div className="space-y-4 flex-1 overflow-y-auto pr-1">
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Name</label>
