@@ -630,9 +630,46 @@ export default function App() {
     }
   };
 
+  // Ask for the PIN before destructive actions (refund / delete a sale). If no
+  // PIN is set yet, skip the prompt.
+  const requirePin = async (message: string): Promise<boolean> => {
+    if (!settings.hasPin) return true;
+    const hash = localStorage.getItem('boss_pos_pin');
+    if (!hash || hash.startsWith('fb_')) return true; // can't verify offline — trust this device
+    const pin = window.prompt(message);
+    if (!pin) return false;
+    if (await verifyPinAgainstHash(pin, hash)) return true;
+    triggerToast('Wrong PIN — action cancelled', 'error');
+    return false;
+  };
+
+  // Permanently delete a wrong order: PIN + confirm, stock goes back in.
+  const handleVoidSale = async (saleId: string) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale || sale.refunded) return;
+    if (!(await requirePin(`Enter PIN to delete ${sale.orderNumber}:`))) return;
+    if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)})? Stock goes back in.`)) return;
+    setSales(prev => prev.filter(s => s.id !== saleId));
+    setProducts(prev => prev.map(p => {
+      const it = sale.items.find(i => i.productId === p.id);
+      return it && !p.isService ? { ...p, stockQty: p.stockQty + it.qty } : p;
+    }));
+    try { await saleApi.remove(saleId); } catch {
+      setSales(prev => [sale, ...prev].sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
+      setProducts(prev => prev.map(p => {
+        const it = sale.items.find(i => i.productId === p.id);
+        return it && !p.isService ? { ...p, stockQty: Math.max(0, p.stockQty - it.qty) } : p;
+      }));
+      triggerToast('Failed to delete sale — order restored', 'error');
+      return;
+    }
+    triggerToast(`${sale.orderNumber} deleted`, 'info');
+  };
+
   const handleRefundSale = async (saleId: string) => {
     const saleToRefund = sales.find(s => s.id === saleId);
     if (!saleToRefund || saleToRefund.refunded) return;
+    if (!(await requirePin(`Enter PIN to refund ${saleToRefund.orderNumber}:`))) return;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
@@ -947,6 +984,7 @@ export default function App() {
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
             onNavigate={(tab) => setActiveTab(tab)}
             onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
+            onVoidSale={handleVoidSale}
             settings={settings}
           />
           </Suspense>

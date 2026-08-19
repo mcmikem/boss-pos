@@ -5,7 +5,7 @@ import {
   Settings2, Hash, Check, Edit2, ChevronDown,
   CalendarDays, Receipt, LayoutGrid
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder } from '../types';
+import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
 import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
@@ -35,6 +35,7 @@ interface AnalyticsProps {
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'registers') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
+  onVoidSale?: (saleId: string) => void;
   settings: StoreSettings;
 }
 
@@ -61,6 +62,7 @@ export default function Analytics({
   onNavigate,
   onRepeatLastSale,
   onRefundSale,
+  onVoidSale,
   settings
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
@@ -221,6 +223,24 @@ export default function Analytics({
     const d = new Date(dateKey + 'T12:00:00');
     const full = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
     return todayLocalKey() === dateKey ? `${full} • Today` : full;
+  };
+
+  // "Chapati ×2, Fresh Juice" with a truncation for long orders.
+  const itemSummary = (items: SaleItem[]): string => {
+    if (items.length === 0) return '';
+    const shown = items.slice(0, 3).map(i => i.qty > 1 ? `${i.productName} ×${i.qty}` : i.productName);
+    const rest = items.length - shown.length;
+    return shown.join(', ') + (rest > 0 ? ` +${rest} more` : '');
+  };
+
+  // Department(s) the sale came from, via the live product list.
+  const saleCategories = (sale: Sale): string => {
+    const set = new Set<string>();
+    sale.items.forEach(i => {
+      const p = products.find(x => x.id === i.productId);
+      if (p?.category) set.add(p.category);
+    });
+    return Array.from(set).join(', ');
   };
 
   const categoryBreakdown = useMemo(() => {
@@ -753,12 +773,25 @@ const colorsMap: { [key: string]: string } = {
                                     <Receipt className="w-3.5 h-3.5 text-gold-light shrink-0" />
                                     <div className="min-w-0">
                                       <p className="text-xs font-bold text-white uppercase truncate">{sale.orderNumber}</p>
+                                      <p className="text-[10px] text-gold-light font-bold truncate">{itemSummary(sale.items)}</p>
                                       <p className="text-[10px] text-zinc-500 font-bold uppercase">
-                                        {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.paymentMethod} • {sale.items.reduce((a, i) => a + i.qty, 0)} item(s)
+                                        {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {sale.paymentMethod ? ` • ${sale.paymentMethod}` : ''}
+                                        {sale.staffName ? ` • ${sale.staffName}` : ''}
+                                        {saleCategories(sale) ? ` • ${saleCategories(sale)}` : ''}
                                       </p>
                                     </div>
                                   </div>
-                                  <p className="text-xs font-black text-white shrink-0">{formatCurrency(sale.total)}</p>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <p className="text-xs font-black text-white">{formatCurrency(sale.total)}</p>
+                                    {onVoidSale && (
+                                      <button onClick={async (e) => { e.stopPropagation(); onVoidSale!(sale.id); }}
+                                        className="p-1.5 bg-rose-950/20 hover:bg-rose-950/60 rounded-lg text-rose-400 cursor-pointer transition-colors"
+                                        title="Delete this order (PIN required)">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
