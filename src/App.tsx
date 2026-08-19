@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Globe, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
+  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Zap, Wallet, Download, LayoutGrid
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -46,7 +46,6 @@ const DEFAULT_SETTINGS: StoreSettings = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
-  const [currency, setCurrency] = useState<'UGX' | 'USD'>('UGX');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -540,18 +539,10 @@ export default function App() {
   };
 
   const formatCurrency = (ugxVal: number) => {
-    if (currency === 'USD') {
-      const usdVal = ugxVal / (settings.usdRate || UGX_TO_USD_RATE);
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency', currency: 'USD',
-        minimumFractionDigits: 2, maximumFractionDigits: 2
-      }).format(usdVal);
-    } else {
-      return new Intl.NumberFormat('en-UG', {
-        style: 'currency', currency: 'UGX',
-        minimumFractionDigits: 0, maximumFractionDigits: 0
-      }).format(ugxVal);
-    }
+    return new Intl.NumberFormat('en-UG', {
+      style: 'currency', currency: 'UGX',
+      minimumFractionDigits: 0, maximumFractionDigits: 0
+    }).format(ugxVal);
   };
 
   const handleAddProduct = async (newProd: Product) => {
@@ -1009,14 +1000,6 @@ export default function App() {
           ) : null}
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2 shrink-0 min-h-[40px]">
-            <Globe className="w-4 h-4 text-zinc-500" />
-            <select value={currency} onChange={(e) => setCurrency(e.target.value as 'UGX' | 'USD')}
-              className="bg-transparent text-xs font-black text-gold-brand border-none focus:outline-none focus:ring-0 cursor-pointer uppercase tracking-wider" id="currency-selector">
-              <option value="UGX" className="bg-[#141414]">UGX</option>
-              <option value="USD" className="bg-[#141414]">USD</option>
-            </select>
-          </div>
           <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
             <Settings className="w-4 h-4" />
           </button>
@@ -1132,12 +1115,6 @@ export default function App() {
                 <input type="range" min="5" max="30" value={settings.dailyGoalNum}
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">USD Exchange Rate (UGX per $)</label>
-                <input type="number" min="1" value={settings.usdRate || UGX_TO_USD_RATE}
-                  onChange={(e) => setSettings(prev => ({ ...prev, usdRate: Math.max(1, parseFloat(e.target.value) || UGX_TO_USD_RATE) }))}
-                  className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>

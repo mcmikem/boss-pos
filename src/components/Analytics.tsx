@@ -696,7 +696,7 @@ const colorsMap: { [key: string]: string } = {
                       </div>
                       <div className="flex items-center gap-4 shrink-0">
                         <div className="text-right">
-                          <p className="text-[10px] font-bold text-zinc-500 uppercase">Net</p>
+                          <p className="text-[10px] font-bold text-zinc-500 uppercase">Balance</p>
                           <p className={`text-sm font-black font-display ${net >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>
                             {formatCurrency(net)}
                           </p>

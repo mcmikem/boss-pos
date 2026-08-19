@@ -108,7 +108,7 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
 
         <div className="mt-6 pt-4 border-t border-white/5">
           <p className="text-[10px] text-zinc-600 leading-relaxed">
-            <strong className="text-zinc-400">Tip:</strong> Use the <span className="text-emerald-400">Expense → Batch Costing</span> tool to log ingredient purchases and calculate per-unit costs.
+            <strong className="text-zinc-400">Tip:</strong> Use <span className="text-emerald-400">Expenses → Log Expense → Eatery tab</span> to log ingredient purchases and check per-unit profit.
           </p>
         </div>
       </div>
