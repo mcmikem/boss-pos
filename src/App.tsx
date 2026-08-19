@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, LayoutGrid, Scissors
+  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -902,6 +902,7 @@ export default function App() {
             onAddMomoTransfer={handleAddMomoTransfer}
             onDeleteMomoTransfer={handleDeleteMomoTransfer}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
+            onBack={() => setActiveTab('analytics')}
           />
           </Suspense>
           </ErrorBoundary>
@@ -1027,10 +1028,6 @@ export default function App() {
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Stock</span>
-        </button>
-        <button onClick={() => { setActiveTab('registers'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
-          <LayoutGrid className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Registers</span>
         </button>
         <button onClick={() => { setActiveTab('expenses'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />

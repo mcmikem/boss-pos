@@ -3,7 +3,7 @@ import {
   TrendingUp, Plus, Coins, User, Phone, Mail,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2, ChevronDown,
-  CalendarDays, Receipt
+  CalendarDays, Receipt, LayoutGrid
 } from 'lucide-react';
 import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder } from '../types';
 import CreditsLedger from './CreditsLedger';
@@ -32,7 +32,7 @@ interface AnalyticsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
   setShowSuppliers: (show: boolean) => void;
-  onNavigate: (tab: 'sales' | 'inventory' | 'analytics') => void;
+  onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'registers') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
   settings: StoreSettings;
@@ -458,7 +458,7 @@ const colorsMap: { [key: string]: string } = {
         </div>
         <div className="flex gap-2">
           {!showSuppliers && (
-            <button onClick={() => {
+            <button onClick={async () => {
               const salesCsv = [
                 ['Order', 'Date', 'Payment', 'Items', 'Total', 'Customer'].join(','),
                 ...filteredSales.map(s => `"${s.orderNumber}","${new Date(s.timestamp).toLocaleDateString()}","${s.paymentMethod}",${s.items.reduce((a,i) => a + i.qty, 0)},${s.total},"${s.customerName || ''}"`),
@@ -468,11 +468,27 @@ const colorsMap: { [key: string]: string } = {
                 ...filteredExpenses.map(e => `"${new Date(e.timestamp).toLocaleDateString()}","${e.description}","${e.category}",${e.amount}`),
               ].join('\n');
               const blob = new Blob([salesCsv + '\n\nEXPENSES\n' + expensesCsv], { type: 'text/csv' });
-              const ok = downloadBlob(blob, `reports-${new Date().toISOString().split('T')[0]}.csv`);
-              triggerToast(ok ? 'Report exported as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
+              const filename = `reports-${new Date().toISOString().split('T')[0]}.csv`;
+              const nav = navigator as any;
+              const file = new File([blob], filename, { type: 'text/csv' });
+              if (nav.canShare && nav.canShare({ files: [file] })) {
+                try {
+                  await nav.share({ title: 'Boss POS report', text: 'Sales & expenses', files: [file] });
+                  triggerToast('Report ready to share', 'success');
+                } catch { /* user cancelled share */ }
+              } else {
+                const ok = downloadBlob(blob, filename);
+                triggerToast(ok ? 'Report exported as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
+              }
             }}
               className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-emerald-500 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
               Export CSV
+            </button>
+          )}
+          {!showSuppliers && (
+            <button onClick={() => onNavigate('registers')}
+              className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-amber-500 text-amber-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5">
+              <LayoutGrid className="w-3.5 h-3.5" /> Daily Close-out
             </button>
           )}
           <button onClick={() => setShowSuppliers(!showSuppliers)}

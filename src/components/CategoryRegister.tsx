@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, ChefHat, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft
 } from 'lucide-react';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
@@ -24,6 +24,7 @@ interface CategoryRegisterProps {
   onDeleteMomoTransfer: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onBack?: () => void;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -49,7 +50,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  formatCurrency, triggerToast,
+  formatCurrency, triggerToast, onBack,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -305,6 +306,12 @@ export default function CategoryRegister({
           <p className="text-xs text-zinc-500 font-bold">Credit • Daily production • Losses</p>
         </div>
       </div>
+      {onBack && (
+        <button onClick={onBack}
+          className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
+          <ArrowRightLeft className="w-4 h-4" /> Back to Reports
+        </button>
+      )}
 
       {/* Category segment chips */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
