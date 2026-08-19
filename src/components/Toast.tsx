@@ -31,7 +31,7 @@ export default function Toast({ message, type, onClose }: ToastProps) {
   };
 
   return (
-    <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl transition-all duration-300 animate-bounce ${bgStyles[type]}`}>
+    <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[300] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl transition-all duration-300 animate-bounce ${bgStyles[type]}`}>
       {icons[type]}
       <span className="text-sm font-medium tracking-wide">{message}</span>
       <button 
