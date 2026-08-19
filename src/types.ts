@@ -218,5 +218,6 @@ export interface StoreSettings {
   hasPin?: boolean;
   showTailoring?: boolean;
   showDesign?: boolean;
+  sheetsUrl?: string;
 }
 

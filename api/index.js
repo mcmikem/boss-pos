@@ -992,6 +992,12 @@ app.post('/api/sales', asHandler(async (req, res) => {
         await logStockMovement(sql, { productId: row.id, productName: row.name, delta: -(row.qty || 0), type: 'sale', qtyAfter: row.stockqty, saleId, note: `Order ${orderNumber}` });
       }
       await audit('sale.create', `${orderNumber} (${s.paymentMethod || 'Cash'})`);
+      pushToSheet('sale', {
+        id: saleId, orderNumber, timestamp: s.timestamp || new Date().toISOString(),
+        items: s.items || [], subtotal: s.subtotal || 0, tax: s.tax || 0, total: s.total || 0,
+        paymentMethod: s.paymentMethod || 'Cash', discount: s.discount || null,
+        staffName: s.staffName || null,
+      }).catch(() => {});
       maybeAutoBackup().catch(() => {});
       return res.json({ ...s, id: saleId, orderNumber });
     } catch (err) {
@@ -1086,7 +1092,35 @@ app.post('/api/expenses', asHandler(async (req, res) => {
     return res.json(existing.length ? existing[0] : e);
   }
   await audit('expense.create', `${description} (${category || 'Miscellaneous'})`);
+  pushToSheet('expense', {
+    id: e.id, timestamp: e.timestamp, description, category, amount: num(e.amount),
+  }).catch(() => {});
   res.json(e);
+}));
+
+// Verify the configured Sheets URL and send a single test row.
+app.post('/api/sheets/test', asHandler(async (req, res) => {
+  const url = await readSettingValue('sheetsUrl');
+  if (!url || typeof url !== 'string' || !/^https:\/\//.test(url)) {
+    return res.status(400).json({ error: 'Paste your Google Apps Script web-app URL in Settings first' });
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'test', data: { message: 'Connection test from your POS' } }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const body = await r.text();
+    if (r.ok) return res.json({ success: true });
+    return res.status(502).json({ error: `Sheet script returned ${r.status}: ${body.slice(0, 200)}` });
+  } catch (err) {
+    clearTimeout(timer);
+    return res.status(502).json({ error: `Could not reach the sheet: ${(err && err.message) || 'network error'}` });
+  }
 }));
 
 app.delete('/api/expenses/:id', asHandler(async (req, res) => {
@@ -1719,6 +1753,39 @@ async function gatherExport() {
     wastageLogs: wastageLogs.map(mapWastageLog),
     momoTransfers: momoTransfers.map(mapMomoTransfer),
   };
+}
+
+// Google Sheets sync: if the store has configured a Google Apps Script web-app
+// URL (Settings → Google Sheets), every new sale/expense is forwarded there so
+// it lands in the spreadsheet. Offline-safe because this runs server-side when
+// the queued sale finally syncs. Fire-and-forget with a short timeout so a slow
+// sheet never holds up the API.
+async function readSettingValue(key) {
+  try {
+    const rows = await sql`SELECT value FROM settings WHERE key=${key}`;
+    if (!rows.length) return null;
+    const v = rows[0].value;
+    try { return JSON.parse(v); } catch { return v; }
+  } catch { return null; }
+}
+
+async function pushToSheet(type, data) {
+  try {
+    const url = await readSettingValue('sheetsUrl');
+    if (!url || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, data }),
+        signal: controller.signal,
+      }).catch(() => {});
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch { /* best effort — sheets sync must never break the API */ }
 }
 
 // Claim the 24h slot atomically (cross-instance safe via the settings row), run

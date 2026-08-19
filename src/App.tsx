@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -44,6 +44,7 @@ const DEFAULT_SETTINGS: StoreSettings = {
   usdRate: UGX_TO_USD_RATE,
   showTailoring: false,
   showDesign: false,
+  sheetsUrl: '',
 };
 
 export default function App() {
@@ -542,6 +543,20 @@ export default function App() {
     backupsApi.latest().then((b) => setLastBackupAt(b.createdAt)).catch(() => {});
     auditApi.list(30).then((entries) => setAuditEntries(entries)).catch(() => {});
   }, [isSettingsOpen]);
+
+  const handleTestSheets = async () => {
+    if (!settings.sheetsUrl || !/^https:\/\//.test(settings.sheetsUrl)) {
+      triggerToast('Paste your web-app URL first', 'error');
+      return;
+    }
+    try {
+      await sheetsApi.test();
+      triggerToast('Connected! Test row sent to your sheet', 'success');
+    } catch (err) {
+      const message = (err as { message?: string })?.message || 'Connection failed';
+      triggerToast(message.replace(/^Error:\s*/i, ''), 'error');
+    }
+  };
 
   const handleRestoreData = async (file: File | undefined) => {
     if (!file) return;
@@ -1182,6 +1197,19 @@ export default function App() {
                   onChange={(e) => setStaffName(e.target.value)}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
                 <p className="text-[10px] text-zinc-600">Every sale is stamped with this name so Reports can show sales by seller.</p>
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <Download className="w-3.5 h-3.5 text-emerald-400" /> Google Sheets
+                </label>
+                <input type="url" value={settings.sheetsUrl || ''} placeholder="Paste web-app URL (https://script.google.com/macros/s/...)"
+                  onChange={(e) => setSettings(prev => ({ ...prev, sheetsUrl: e.target.value }))}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-emerald-500 outline-none" />
+                <button onClick={handleTestSheets}
+                  className="w-full h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50 transition-all cursor-pointer">
+                  Test Connection
+                </button>
+                <p className="text-[10px] text-zinc-600 leading-relaxed">Every sale and expense is added to the sheet automatically. To set up: create a Google Sheet → Extensions → Apps Script → paste the script from the repo (scripts/appsscript-sheet.gs) → Deploy → Web app → paste the <span className="text-zinc-400">/exec</span> URL here.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>

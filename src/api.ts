@@ -546,6 +546,10 @@ export const settingsApi = {
   update: (s: StoreSettings) => api<{ success: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
 };
 
+export const sheetsApi = {
+  test: () => api<{ success: boolean }>('/api/sheets/test', { method: 'POST' }),
+};
+
 export interface BootData {
   products: Product[];
   suppliers: Supplier[];
