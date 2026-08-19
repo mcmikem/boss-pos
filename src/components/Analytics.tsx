@@ -488,6 +488,11 @@ const colorsMap: { [key: string]: string } = {
           <p className="text-sm text-zinc-400 mt-1 font-bold tracking-wider">
             {showSuppliers ? 'Manage your suppliers' : 'Sales, profit & expenses'}
           </p>
+          {!showSuppliers && (
+            <p className="text-[9px] text-zinc-600 font-mono mt-0.5">
+              Build {typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ !== 'dev' ? __BUILD_COMMIT__.slice(0, 7) : 'dev'}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           {!showSuppliers && (
@@ -831,9 +836,11 @@ const colorsMap: { [key: string]: string } = {
                 if (showAllDays) {
                   setShowAllDays(false);
                   setExpandedDays(new Set());
+                  triggerToast(`Showing recent ${Math.min(DAY_VIEW_LIMIT, dailyBreakdown.length)} day(s)`, 'info');
                 } else {
                   setShowAllDays(true);
                   setExpandedDays(new Set([dailyBreakdown[0]?.date].filter(Boolean) as string[]));
+                  triggerToast(`Showing all ${dailyBreakdown.length} days`, 'success');
                 }
               }}
                 className="mt-3 w-full h-11 border border-zinc-800 hover:border-gold-brand/40 hover:bg-white/[0.03] text-gold-brand font-black uppercase tracking-widest text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer">
