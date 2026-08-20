@@ -22,6 +22,7 @@ interface CategoryRegisterProps {
   onDeleteWastage: (id: string) => void;
   onAddMomoTransfer: (t: MomoTransfer) => void;
   onDeleteMomoTransfer: (id: string) => void;
+  staffName?: string;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBack?: () => void;
@@ -50,7 +51,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  formatCurrency, triggerToast, onBack,
+  staffName, formatCurrency, triggerToast, onBack,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -135,6 +136,16 @@ export default function CategoryRegister({
     return map;
   }, [sales, products]);
 
+  // Today's money movement across ALL departments — so the boss can see where
+  // every coin is without tapping through each category.
+  const allCollectedToday = useMemo(() =>
+    Object.values(todayCollectedByCategory).reduce((a, b) => a + b, 0), [todayCollectedByCategory]);
+  const todayStrKey = todayLocalKey();
+  const allMoneyOutToday = momoTransfers.filter(t => localDayKey(t.createdAt) === todayStrKey);
+  const allMomoOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'momo').reduce((s, t) => s + t.amount, 0);
+  const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'owner').reduce((s, t) => s + t.amount, 0);
+  const allFloatOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'float').reduce((s, t) => s + t.amount, 0);
+
   // Daily close-out: for each dish, produced - sold - lost on the chosen day.
   // A positive remainder is stock that "vanished" (shrinkage); negative means
   // sales were covered from earlier production (normal when leftover existed).
@@ -160,6 +171,8 @@ export default function CategoryRegister({
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
+  const [momoDest, setMomoDest] = useState<'momo' | 'owner' | 'float'>('momo');
+  const [momoSentBy, setMomoSentBy] = useState(staffName || '');
 
   const activeItem = (list: string[], custom: string, picked: string) =>
     picked === '__custom' ? custom.trim() : (list.find(i => i === picked) || '');
@@ -235,24 +248,36 @@ export default function CategoryRegister({
   // ---- Wastage ----
   const todayWastage = catWastage.filter(w => w.date === todayStr()).reduce((s, w) => s + w.lossAmount, 0);
 
-  // ---- Mobile Money ----
+  // ---- Money Out (Mobile Money / Owner / Float for tomorrow) ----
   const collectedToday = todayCollectedByCategory[selected] || 0;
-  const sentToday = momoTransfers
-    .filter(t => t.category === selected && localDayKey(t.createdAt) === todayStr())
-    .reduce((s, t) => s + t.amount, 0);
+  const todayMoneyOut = momoTransfers
+    .filter(t => t.category === selected && localDayKey(t.createdAt) === todayStr());
+  const sentToday = todayMoneyOut.reduce((s, t) => s + t.amount, 0);
+  const momoOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'momo').reduce((s, t) => s + t.amount, 0);
+  const ownerOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'owner').reduce((s, t) => s + t.amount, 0);
+  const floatOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'float').reduce((s, t) => s + t.amount, 0);
   const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
+
+  const MONEY_DEST = [
+    { key: 'momo' as const, label: 'Mobile Money', icon: '📲', hint: 'Sent to MTN/Airtel MoMo account' },
+    { key: 'owner' as const, label: 'Given to Owner', icon: '💰', hint: 'Handed to the business owner' },
+    { key: 'float' as const, label: 'Kept as Float', icon: '🏦', hint: 'Kept as tomorrow\'s capital (eatery daily capital)' },
+  ];
 
   const handleSubmitMomo = () => {
     const amt = Math.round(parseFloat(momoAmount) || 0);
-    if (amt <= 0) { triggerToast('Enter the amount you sent', 'error'); return; }
+    if (amt <= 0) { triggerToast('Enter the amount you moved', 'error'); return; }
     onAddMomoTransfer({
       id: `mt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       category: selected,
       amount: amt,
       comment: momoComment.trim(),
       createdAt: new Date().toISOString(),
+      to: momoDest,
+      sentBy: momoSentBy.trim() || staffName || '',
     });
-    triggerToast(`Confirmed: ${formatCurrency(amt)} sent to Mobile Money`, 'success');
+    const dest = MONEY_DEST.find(d => d.key === momoDest)?.label || 'recorded';
+    triggerToast(`Confirmed: ${formatCurrency(amt)} ${dest}`, 'success');
     setMomoAmount('');
     setMomoComment('');
     setShowMomoForm(false);
@@ -362,9 +387,39 @@ export default function CategoryRegister({
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Collected today</p>
           <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
           <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-            Sent to MoMo: <span className="text-emerald-400 font-black">{formatCurrency(sentToday)}</span>
+            MoMo: <span className="text-emerald-400 font-black">{formatCurrency(momoOutToday)}</span>
+            {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
+            {' · '}Float: <span className="text-zinc-300 font-black">{formatCurrency(floatOutToday)}</span>
           </p>
         </div>
+      </section>
+
+      {/* Where the money is today — across ALL departments */}
+      <section className="boss-card p-4 rounded-2xl border border-cyan-900/40 bg-cyan-950/10">
+        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+          <Wallet className="w-3.5 h-3.5 text-cyan-400" /> Where the money is today (all departments)
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Sold today</p>
+            <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Mobile Money</p>
+            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allMomoOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Owner</p>
+            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Kept as Float</p>
+            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allFloatOut)}</p>
+          </div>
+        </div>
+        <p className="text-[10px] text-zinc-600 mt-2">
+          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allMomoOut + allOwnerOut + allFloatOut))}</span> — still in the drawers.
+        </p>
       </section>
 
       {/* ============ DAILY BALANCE / CLOSE-OUT ============ */}
@@ -720,15 +775,15 @@ export default function CategoryRegister({
         )}
       </section>
 
-      {/* ============ 4. SENT TO MOBILE MONEY ============ */}
+      {/* ============ 4. MONEY OUT — mobile money / owner / float ============ */}
       <section className="boss-card p-5 rounded-2xl">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <Smartphone className="w-4 h-4 text-cyan-400" /> Sent to Mobile Money
+            <Smartphone className="w-4 h-4 text-cyan-400" /> Money Out (who took it & where)
           </h3>
           <button onClick={() => setShowMomoForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showMomoForm ? 'Close' : 'Confirm Sent'}
+            <Plus className="w-3.5 h-3.5" /> {showMomoForm ? 'Close' : 'Record Money Out'}
           </button>
         </div>
 
@@ -738,18 +793,41 @@ export default function CategoryRegister({
             <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(collectedToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Sent today</p>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Moved out today</p>
             <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(sentToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Mobile Money</p>
+            <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(momoOutToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Owner / Float</p>
+            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(ownerOutToday + floatOutToday)}</p>
           </div>
         </div>
 
         {showMomoForm && (
           <div className="bg-zinc-950/60 border border-cyan-600/20 rounded-xl p-4 space-y-3 mb-4">
             <p className="text-[11px] font-bold text-zinc-400 uppercase">
-              Confirm the money from <span className="text-cyan-400">{selected}</span> that you sent to Mobile Money.
+              Record money from <span className="text-cyan-400">{selected}</span>; it leaves the drawer and goes somewhere — track it so all money is accounted for.
             </p>
             <div>
-              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Amount Sent (UGX)</label>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Where did it go?</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {MONEY_DEST.map(d => (
+                  <button key={d.key} onClick={() => setMomoDest(d.key)}
+                    className={`h-16 rounded-xl border text-center px-1 cursor-pointer transition-all ${
+                      momoDest === d.key ? 'border-cyan-400 bg-cyan-600/15 text-cyan-300' : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700'
+                    }`}>
+                    <span className="block text-lg leading-none mb-1">{d.icon}</span>
+                    <span className="text-[9px] font-black uppercase tracking-wide leading-tight block">{d.label}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 mt-1">{MONEY_DEST.find(d => d.key === momoDest)?.hint}</p>
+            </div>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Amount (UGX)</label>
               <input type="number" min="0" value={momoAmount}
                 onChange={(e) => setMomoAmount(e.target.value)}
                 placeholder={String(collectedToday)}
@@ -762,14 +840,20 @@ export default function CategoryRegister({
               )}
             </div>
             <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Who did it? *</label>
+              <input type="text" value={momoSentBy} onChange={e => setMomoSentBy(e.target.value)}
+                placeholder="Staff member who sent/moved the money"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
+            </div>
+            <div>
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Comment (optional)</label>
               <input type="text" value={momoComment} onChange={e => setMomoComment(e.target.value)}
-                placeholder="e.g. Sent by MTN MoMo to 0700 000 000"
+                placeholder="e.g. Sent by MTN MoMo to 0700 000 000 / Kept 50k capital for tomorrow"
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
             </div>
             <button onClick={handleSubmitMomo}
               className="w-full h-11 bg-cyan-600 hover:bg-cyan-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5">
-              <Check className="w-4 h-4" /> Confirm Sent
+              <Check className="w-4 h-4" /> Record
             </button>
           </div>
         )}
@@ -777,23 +861,30 @@ export default function CategoryRegister({
         {catMomoTransfers.length === 0 ? (
           <div className="text-center py-6">
             <Smartphone className="w-10 h-10 text-cyan-500 mx-auto mb-2 opacity-40" />
-            <p className="text-xs text-zinc-500 font-bold uppercase">No transfers confirmed for {selected}</p>
+            <p className="text-xs text-zinc-500 font-bold uppercase">No money out recorded for {selected}</p>
           </div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {catMomoTransfers.slice(0, 100).map(t => (
-              <div key={t.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(t.amount)}</p>
-                  <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(t.createdAt)}</p>
-                  {t.comment && <p className="text-[11px] text-zinc-400 mt-0.5 truncate">{t.comment}</p>}
+            {catMomoTransfers.slice(0, 100).map(t => {
+              const d = MONEY_DEST.find(x => x.key === (t.to || 'momo'));
+              return (
+                <div key={t.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(t.amount)}
+                      <span className="ml-2 text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{d?.icon} {d?.label}</span>
+                    </p>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                      {formatDay(t.createdAt)}{t.sentBy ? ` • by ${t.sentBy}` : ''}
+                    </p>
+                    {t.comment && <p className="text-[11px] text-zinc-400 mt-0.5 truncate">{t.comment}</p>}
+                  </div>
+                  <button onClick={() => { onDeleteMomoTransfer(t.id); triggerToast('Entry deleted', 'info'); }}
+                    className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                <button onClick={() => { onDeleteMomoTransfer(t.id); triggerToast('Transfer entry deleted', 'info'); }}
-                  className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer shrink-0">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

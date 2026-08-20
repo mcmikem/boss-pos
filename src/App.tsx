@@ -622,6 +622,29 @@ export default function App() {
     }
   };
 
+  // Custom items added at the till are saved into their chosen category so the
+  // shop's library fills up and staff never re-type the same item every day.
+  // Matching name+category is reused (no duplicates); services keep no stock.
+  const handleSaveCustomProduct = async (custom: Product) => {
+    const existing = products.find(p => p.name.trim().toLowerCase() === custom.name.trim().toLowerCase() && p.category === custom.category);
+    if (existing) {
+      triggerToast(`Saved in ${custom.category || 'category'} — tap it from the list next time`, 'info');
+      return;
+    }
+    const stamped = {
+      ...custom,
+      id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      isService: true,
+      updatedAt: new Date().toISOString(),
+    };
+    const prodWithIcon = enrichProductsWithIcons([stamped])[0];
+    setProducts(prev => [prodWithIcon, ...prev]);
+    try { await productApi.create(stamped); } catch {
+      setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
+      triggerToast('Could not save item to the library right now', 'info');
+    }
+  };
+
   const handleUpdateProduct = async (updatedProd: Product) => {
     const prev = products.find(p => p.id === updatedProd.id);
     const stamped = { ...updatedProd, updatedAt: new Date().toISOString() };
@@ -948,6 +971,7 @@ export default function App() {
             isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
             categories={categories}
             staffName={staffName} setStaffName={setStaffName}
+            onSaveCustomProduct={handleSaveCustomProduct}
           />
           </ErrorBoundary>
         );
@@ -1004,6 +1028,7 @@ export default function App() {
             onDeleteWastage={handleDeleteWastage}
             onAddMomoTransfer={handleAddMomoTransfer}
             onDeleteMomoTransfer={handleDeleteMomoTransfer}
+            staffName={staffName || undefined}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
           />

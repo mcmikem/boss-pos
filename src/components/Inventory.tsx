@@ -577,9 +577,15 @@ export default function Inventory({
                     <h3 className="text-xs font-bold text-white uppercase tracking-wide">{product.name}</h3>
                     <p className="text-xs text-zinc-500 font-bold mt-1 uppercase">
                       {product.category} •{' '}
-                      <span className={isOutOfStock ? 'text-rose-400 font-black' : isLowStock ? 'text-amber-400 font-black' : 'text-gold-light'}>
-                        {isOutOfStock ? 'SOLD OUT' : isLowStock ? `${product.stockQty} LEFT` : `${product.stockQty} in stock`}
-                      </span>
+                      {product.isService ? (
+                        <span className="text-zinc-400">Service — no stock</span>
+                      ) : isOutOfStock ? (
+                        <span className="text-rose-400 font-black">SOLD OUT</span>
+                      ) : isLowStock ? (
+                        <span className="text-amber-400 font-black">{product.stockQty} LEFT</span>
+                      ) : (
+                        <span className="text-gold-light">{product.stockQty} in stock</span>
+                      )}
                     </p>
                     {!product.isService && (
                       <div className="w-32 sm:w-44 bg-[#0A0A0A] h-1.5 rounded-full mt-2 overflow-hidden border border-white/5 shrink-0">

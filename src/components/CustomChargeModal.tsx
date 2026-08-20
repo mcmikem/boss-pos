@@ -6,14 +6,16 @@ interface CustomChargeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (product: Product) => void;
+  onSave?: (product: Product) => void;
+  defaultCategory?: string;
   categories: string[];
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export default function CustomChargeModal({ isOpen, onClose, onAdd, categories, triggerToast }: CustomChargeModalProps) {
+export default function CustomChargeModal({ isOpen, onClose, onAdd, onSave, defaultCategory, categories, triggerToast }: CustomChargeModalProps) {
   const [customItemName, setCustomItemName] = useState('');
   const [customItemPrice, setCustomItemPrice] = useState('');
-  const [customItemCategory, setCustomItemCategory] = useState('Custom');
+  const [customItemCategory, setCustomItemCategory] = useState<string>(defaultCategory || 'Custom');
 
   if (!isOpen) return null;
 
@@ -24,16 +26,18 @@ export default function CustomChargeModal({ isOpen, onClose, onAdd, categories, 
       return;
     }
     const name = customItemName.trim() || 'Custom Item';
-    const fakeProduct: Product = {
+    const newProduct: Product = {
       id: `custom-${Date.now()}`,
       name: name,
       category: customItemCategory || 'Custom',
-      cost: Math.round(priceNum * 0.5),
+      cost: 0,
       price: priceNum,
-      stockQty: 9999,
+      stockQty: 0,
       lowStockThreshold: 0,
+      isService: true,
     };
-    onAdd(fakeProduct);
+    if (onSave) onSave(newProduct);
+    onAdd(newProduct);
     setCustomItemName('');
     setCustomItemPrice('');
     onClose();

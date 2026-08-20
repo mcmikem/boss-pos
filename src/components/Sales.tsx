@@ -72,6 +72,7 @@ interface SalesProps {
   categories: string[];
   staffName?: string;
   setStaffName: (name: string) => void;
+  onSaveCustomProduct?: (p: Product) => void;
 }
 
 const localOrderNumber = () => {
@@ -83,7 +84,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
@@ -853,6 +854,8 @@ export default function Sales({
         isOpen={isCustomChargeOpen}
         onClose={() => setIsCustomChargeOpen(false)}
         onAdd={handleAddToCart}
+        onSave={onSaveCustomProduct}
+        defaultCategory={selectedCategory !== 'All' ? selectedCategory : undefined}
         categories={categories}
         triggerToast={triggerToast}
       />

@@ -145,6 +145,8 @@ export interface MomoTransfer {
   amount: number;
   comment: string;
   createdAt: string;
+  to?: 'momo' | 'owner' | 'float';
+  sentBy?: string;
 }
 
 export interface Supplier {

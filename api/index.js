@@ -108,8 +108,10 @@ async function initDB() {
   await sql`CREATE TABLE IF NOT EXISTS momo_transfers (
     id TEXT PRIMARY KEY, category TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, comment TEXT DEFAULT '',
-    createdat TEXT NOT NULL
+    createdat TEXT NOT NULL, to_type TEXT DEFAULT 'momo', sentby TEXT DEFAULT ''
   )`;
+  try { await sql`ALTER TABLE momo_transfers ADD COLUMN IF NOT EXISTS to_type TEXT DEFAULT 'momo'`; } catch {}
+  try { await sql`ALTER TABLE momo_transfers ADD COLUMN IF NOT EXISTS sentby TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE credit_eats ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
@@ -1404,8 +1406,8 @@ app.post('/api/momo-transfers', asHandler(async (req, res) => {
   const t = req.body;
   const amount = Math.max(0, parseFloat(t.amount) || 0);
   if (amount <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
-  const inserted = await sql`INSERT INTO momo_transfers (id,category,amount,comment,createdat,client_write_id)
-    VALUES (${t.id},${t.category||'Eatery'},${amount},${t.comment||''},${t.createdAt||new Date().toISOString()},${t.clientWriteId||null})
+  const inserted = await sql`INSERT INTO momo_transfers (id,category,amount,comment,createdat,client_write_id,to_type,sentby)
+    VALUES (${t.id},${t.category||'Eatery'},${amount},${t.comment||''},${t.createdAt||new Date().toISOString()},${t.clientWriteId||null},${t.to||'momo'},${t.sentBy||''})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM momo_transfers WHERE client_write_id=${t.clientWriteId}`;
@@ -1720,7 +1722,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('credit_eats', 'id', ['id', 'customername', 'date', 'item', 'category', 'qty', 'unitprice', 'total', 'paidamount', 'paid', 'createdat'], creditEatRows).then(n => counts.creditEats = n),
     batchUpsert('production_register', 'id', ['id', 'date', 'item', 'category', 'product_id', 'qty', 'costeach', 'total', 'createdat'], productionRows).then(n => counts.productionRegisters = n),
     batchUpsert('wastage_log', 'id', ['id', 'date', 'item', 'category', 'product_id', 'qty', 'costeach', 'lossamount', 'reason', 'createdat'], wastageRows).then(n => counts.wastageLogs = n),
-    batchUpsert('momo_transfers', 'id', ['id', 'category', 'amount', 'comment', 'createdat'], momoRows).then(n => counts.momoTransfers = n),
+    batchUpsert('momo_transfers', 'id', ['id', 'category', 'amount', 'comment', 'createdat', 'to_type', 'sentby'], momoRows).then(n => counts.momoTransfers = n),
   ]);
 
   await audit('restore', `Restored ${Object.values(counts).reduce((a, b) => a + (b || 0), 0)} records`);
@@ -1985,6 +1987,7 @@ function mapMomoTransfer(r) {
   return {
     id: r.id, category: r.category, amount: r.amount,
     comment: r.comment || '', createdAt: r.createdat,
+    to: r.to_type || 'momo', sentBy: r.sentby || '',
   };
 }
 
