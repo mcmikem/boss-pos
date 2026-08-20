@@ -567,6 +567,7 @@ export const sheetsApi = {
     }
     return { success: true } as const;
   },
+  status: () => api<{ configured: boolean; lastError: string | null; lastOkAt: string | null }>('/api/sheets/status', { store: 60 }),
 };
 
 export interface BootData {

@@ -41,8 +41,18 @@ function doPost(e) {
 function appendSale(data) {
   const sheet = getOrCreate(SALES_SHEET, [
     'Timestamp', 'Order No', 'Payment', 'Total', 'Subtotal', 'Tax',
-    'Discount', 'Seller', 'Customer', 'Items',
+    'Discount', 'Seller', 'Customer', 'Items', 'Sale ID',
   ]);
+  const orderKey = (data.orderNumber || data.id || '').toString().trim();
+  const saleIdKey = (data.id || '').toString().trim();
+  // Idempotency: a retried push must not add the same sale twice. Prefer the
+  // unique Sale ID (column K); fall back to the Order No only when no id came
+  // through, so a reused order number can't swallow a real new sale.
+  if (saleIdKey) {
+    if (sheetHasValue(sheet, 'K', saleIdKey)) return;
+  } else if (orderKey && sheetHasValue(sheet, 'B', orderKey)) {
+    return;
+  }
   const items = (data.items || [])
     .map((i) => i.productName + (i.qty > 1 ? ' x' + i.qty : ''))
     .join(', ');
@@ -50,16 +60,28 @@ function appendSale(data) {
     data.timestamp || '', data.orderNumber || '', data.paymentMethod || '',
     data.total != null ? data.total : '', data.subtotal != null ? data.subtotal : '',
     data.tax != null ? data.tax : '', data.discount || '',
-    data.staffName || '', data.customerName || '', items,
+    data.staffName || '', data.customerName || '', items, data.id || '',
   ]);
 }
 
 function appendExpense(data) {
-  const sheet = getOrCreate(EXPENSES_SHEET, ['Timestamp', 'Category', 'Description', 'Amount']);
+  const sheet = getOrCreate(EXPENSES_SHEET, ['Timestamp', 'Category', 'Description', 'Amount', 'Expense ID']);
+  const idKey = (data.id || data.expenseId || '').toString().trim();
+  if (idKey && sheetHasValue(sheet, 'E', idKey)) {
+    return;
+  }
   sheet.appendRow([
     data.timestamp || '', data.category || '', data.description || '',
-    data.amount != null ? data.amount : '',
+    data.amount != null ? data.amount : '', idKey,
   ]);
+}
+
+// True if the given column contains the exact value anywhere below the header.
+function sheetHasValue(sheet, column, value) {
+  const lastRow = Math.min(sheet.getLastRow(), 2000);
+  if (lastRow <= 1) return false;
+  const values = sheet.getRange(column + '2:' + column + lastRow).getValues();
+  return values.some(function (row) { return String(row[0]).trim() === String(value).trim(); });
 }
 
 function appendLog(data) {

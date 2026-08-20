@@ -51,5 +51,18 @@ if ('serviceWorker' in navigator) {
     window.location.reload();
   });
 
+  // Proactively ask the network for a newer build on boot and whenever the app
+  // returns to the foreground, so phones on flaky Wi-Fi pick up deploys within
+  // minutes instead of silently running an old service-worker cache for weeks.
+  // A new SW -> controllerchange above -> one reload into the fresh build.
+  const checkForUpdate = () => {
+    navigator.serviceWorker.getRegistration().then(reg => {
+      if (reg) reg.update().catch(() => {});
+    }).catch(() => {});
+  };
   navigator.serviceWorker.register('/sw.js').catch(() => {});
+  window.addEventListener('load', () => setTimeout(checkForUpdate, 2500));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') setTimeout(checkForUpdate, 800);
+  });
 }

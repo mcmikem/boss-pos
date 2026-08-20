@@ -86,6 +86,7 @@ export default function App() {
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [showAudit, setShowAudit] = useState(false);
   const [updatingApp, setUpdatingApp] = useState(false);
+  const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
 
   const readyRef = useRef(false);
 
@@ -543,6 +544,7 @@ export default function App() {
     if (!isSettingsOpen) return;
     backupsApi.latest().then((b) => setLastBackupAt(b.createdAt)).catch(() => {});
     auditApi.list(30).then((entries) => setAuditEntries(entries)).catch(() => {});
+    sheetsApi.status().then(setSheetStatus).catch(() => setSheetStatus(null));
   }, [isSettingsOpen]);
 
   const handleTestSheets = async () => {
@@ -552,6 +554,7 @@ export default function App() {
     }
     try {
       await sheetsApi.test();
+      sheetsApi.status().then(setSheetStatus).catch(() => {});
       triggerToast('Connected! Test row sent to your sheet', 'success');
     } catch (err) {
       const message = (err as { message?: string })?.message || 'Connection failed';
@@ -1029,6 +1032,8 @@ export default function App() {
             onAddMomoTransfer={handleAddMomoTransfer}
             onDeleteMomoTransfer={handleDeleteMomoTransfer}
             staffName={staffName || undefined}
+            eodCapital={settings.eodCapital}
+            onSetEodCapital={(cat, value) => setSettings(prev => ({ ...prev, eodCapital: { ...(prev.eodCapital || {}), [cat]: value } }))}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
           />
@@ -1270,6 +1275,17 @@ export default function App() {
                   className="w-full h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50 transition-all cursor-pointer">
                   Test Connection
                 </button>
+                {sheetStatus && (
+                  <div className={`rounded-xl px-3 py-2 text-[10px] font-bold border ${sheetStatus.lastError ? 'border-rose-800/40 bg-rose-950/20 text-rose-300' : 'border-emerald-800/40 bg-emerald-950/20 text-emerald-300'}`}>
+                    {sheetStatus.lastError ? (
+                      <>Last sale/expense did NOT reach the sheet — {sheetStatus.lastError}</>
+                    ) : sheetStatus.lastOkAt ? (
+                      <>Sheet synced OK — last successful send {new Date(sheetStatus.lastOkAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</>
+                    ) : (
+                      <>Not connected yet — paste your URL and tap Test Connection.</>
+                    )}
+                  </div>
+                )}
                 <p className="text-[10px] text-zinc-600 leading-relaxed">Every sale and expense is added to the sheet automatically. To set up: create a Google Sheet → Extensions → Apps Script → paste the script from the repo (scripts/appsscript-sheet.gs) → Deploy → Web app → paste the <span className="text-zinc-400">/exec</span> URL here.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">

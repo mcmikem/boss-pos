@@ -221,5 +221,9 @@ export interface StoreSettings {
   showTailoring?: boolean;
   showDesign?: boolean;
   sheetsUrl?: string;
+  eodCapital?: Record<string, number>;
+  lastSheetOk?: boolean;
+  lastSheetAt?: string;
+  lastSheetError?: string;
 }
 

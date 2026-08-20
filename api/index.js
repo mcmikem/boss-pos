@@ -1136,6 +1136,21 @@ app.post('/api/sheets/test', asHandler(async (req, res) => {
   }
 }));
 
+// Last known Google Sheets push outcome, so Settings can show "synced OK" or
+// the exact reason the last sale/expense didn't reach the sheet.
+app.get('/api/sheets/status', asHandler(async (req, res) => {
+  const [lastErr, lastAt, url] = await Promise.all([
+    readSettingValue('sheet_last_err'),
+    readSettingValue('sheet_last_at'),
+    readSettingValue('sheetsUrl'),
+  ]);
+  res.json({
+    configured: !!(url && typeof url === 'string' && /^https:\/\//.test(url)),
+    lastError: lastErr || null,
+    lastOkAt: lastAt ? new Date(Number(lastAt)).toISOString() : null,
+  });
+}));
+
 app.delete('/api/expenses/:id', asHandler(async (req, res) => {
   await sql`DELETE FROM expenses WHERE id=${req.params.id}`;
   await audit('expense.delete', `Deleted ${req.params.id}`);
@@ -1788,15 +1803,38 @@ async function pushToSheet(type, data) {
     if (!url || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
+    let ok = false;
+    let err = '';
     try {
-      await fetch(url, {
+      const r = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, data }),
         signal: controller.signal,
-      }).catch(() => {});
+      });
+      const raw = await r.text().catch(() => '');
+      const ct = r.headers.get('content-type') || '';
+      if (r.ok && ct.includes('application/json')) {
+        let j = null;
+        try { j = JSON.parse(raw); } catch {}
+        ok = !!j && (j.ok === true || j.success === true);
+      }
+      if (!ok) err = (raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || `HTTP ${r.status}`;
+    } catch (e) {
+      err = (e && e.name === 'AbortError') ? 'timeout' : ((e && e.message) || 'network error');
     } finally {
       clearTimeout(timer);
+    }
+    // Persist the outcome so the Settings screen can show "sheet last synced OK"
+    // or surface the exact failure with a Retry. Never throws to the caller —
+    // sheets sync must never break the API.
+    if (ok) {
+      await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_ok','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
+      await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_at', ${String(Date.now())}) ON CONFLICT (key) DO UPDATE SET value=${String(Date.now())}`;
+      if (err) await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_err','') ON CONFLICT (key) DO UPDATE SET value=''`;
+    } else if (err) {
+      const msg = `${type} failed: ${err}`.slice(0, 300);
+      await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_err', ${msg}) ON CONFLICT (key) DO UPDATE SET value=${msg}`;
     }
   } catch { /* best effort — sheets sync must never break the API */ }
 }

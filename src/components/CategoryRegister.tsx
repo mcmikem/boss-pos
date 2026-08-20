@@ -23,6 +23,8 @@ interface CategoryRegisterProps {
   onAddMomoTransfer: (t: MomoTransfer) => void;
   onDeleteMomoTransfer: (id: string) => void;
   staffName?: string;
+  eodCapital?: Record<string, number>;
+  onSetEodCapital?: (category: string, value: number) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBack?: () => void;
@@ -51,7 +53,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  staffName, formatCurrency, triggerToast, onBack,
+  staffName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -258,6 +260,23 @@ export default function CategoryRegister({
   const ownerOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
   const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
 
+  // Daily capital kept for this department; profit to send = collected − capital.
+  const capForSelected = eodCapital && eodCapital[selected] ? Number(eodCapital[selected]) : 0;
+  const profitToSend = Math.max(0, collectedToday - capForSelected);
+
+  // Per-department view of today's money, for the reconciliation table.
+  const todayMoneyOutByCat = useMemo(() => {
+    const map: { [cat: string]: { float: number; cash: number; owner: number } } = {};
+    momoTransfers.forEach(t => {
+      if (localDayKey(t.createdAt) !== todayStr()) return;
+      const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0 });
+      if (t.to === 'cash') d.cash += t.amount;
+      else if (t.to === 'owner') d.owner += t.amount;
+      else d.float += t.amount;
+    });
+    return map;
+  }, [momoTransfers]);
+
   const MONEY_DEST = [
     { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
     { key: 'cash' as const, label: 'Cash', icon: '💵', hint: 'Kept as physical cash — e.g. retained capital for tomorrow / handed out' },
@@ -420,6 +439,39 @@ export default function CategoryRegister({
         <p className="text-[10px] text-zinc-600 mt-2">
           Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allFloatOut + allCashOut + allOwnerOut))}</span> — still in the drawers.
         </p>
+
+        {/* Reconciliation: who sold, moved, and where it should still be, per dept */}
+        <div className="mt-3 overflow-x-auto no-scrollbar">
+          <table className="w-full text-[10px] font-bold uppercase">
+            <thead>
+              <tr className="text-zinc-500">
+                <th className="text-left py-1.5 pr-2">Department</th>
+                <th className="text-right px-2">Sold</th>
+                <th className="text-right px-2 text-emerald-500">Float</th>
+                <th className="text-right px-2 text-zinc-300">Cash</th>
+                <th className="text-right px-2 text-amber-400">Owner</th>
+                <th className="text-right pl-2 text-gold-brand">In drawers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {segments.map(cat => {
+                const sold = todayCollectedByCategory[cat] || 0;
+                const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0 };
+                const left = sold - m.float - m.cash - m.owner;
+                return (
+                  <tr key={cat} className={`border-t border-white/5 ${cat === selected ? 'text-white' : 'text-zinc-400'}`}>
+                    <td className="py-1.5 pr-2">{cat}</td>
+                    <td className="text-right px-2">{formatCurrency(sold)}</td>
+                    <td className="text-right px-2 text-emerald-400">{formatCurrency(m.float)}</td>
+                    <td className="text-right px-2 text-zinc-300">{formatCurrency(m.cash)}</td>
+                    <td className="text-right px-2 text-amber-400">{formatCurrency(m.owner)}</td>
+                    <td className="text-right pl-2 font-black">{formatCurrency(Math.max(0, left))}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {/* ============ DAILY BALANCE / CLOSE-OUT ============ */}
@@ -805,6 +857,33 @@ export default function CategoryRegister({
             <p className="text-base font-black text-amber-400 font-display">{formatCurrency(cashOutToday + ownerOutToday)}</p>
           </div>
         </div>
+
+        {/* Daily capital for this department: eateries keep tomorrow's capital,
+            only the profit above it is sent. Other departments set 0. */}
+        {onSetEodCapital && (
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3 mb-3">
+            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
+              Daily capital to keep for tomorrow — {selected}
+            </label>
+            <div className="flex items-center gap-2">
+              <input type="number" min="0" step="1000" inputMode="numeric"
+                value={capForSelected || ''}
+                onChange={(e) => onSetEodCapital(selected, Math.max(0, parseInt(e.target.value || '0', 10) || 0))}
+                placeholder="0"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-10 px-3 text-sm outline-none focus:border-gold-brand font-bold" />
+            </div>
+            {collectedToday > 0 && capForSelected > 0 && (
+              <p className="text-[10px] text-gold-brand font-bold uppercase mt-1.5">
+                Keep {formatCurrency(capForSelected)} as capital → send profit of approx {formatCurrency(profitToSend)}
+              </p>
+            )}
+            {collectedToday > 0 && capForSelected === 0 && (
+              <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">
+                No capital set — the full {formatCurrency(collectedToday)} is treated as sendable profit.
+              </p>
+            )}
+          </div>
+        )}
 
         {showMomoForm && (
           <div className="bg-zinc-950/60 border border-cyan-600/20 rounded-xl p-4 space-y-3 mb-4">
