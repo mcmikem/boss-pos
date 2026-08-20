@@ -142,9 +142,9 @@ export default function CategoryRegister({
     Object.values(todayCollectedByCategory).reduce((a, b) => a + b, 0), [todayCollectedByCategory]);
   const todayStrKey = todayLocalKey();
   const allMoneyOutToday = momoTransfers.filter(t => localDayKey(t.createdAt) === todayStrKey);
-  const allMomoOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'momo').reduce((s, t) => s + t.amount, 0);
-  const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'owner').reduce((s, t) => s + t.amount, 0);
-  const allFloatOut = allMoneyOutToday.filter(t => (t.to || 'momo') === 'float').reduce((s, t) => s + t.amount, 0);
+  const allFloatOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'float').reduce((s, t) => s + t.amount, 0);
+  const allCashOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
+  const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
 
   // Daily close-out: for each dish, produced - sold - lost on the chosen day.
   // A positive remainder is stock that "vanished" (shrinkage); negative means
@@ -171,7 +171,7 @@ export default function CategoryRegister({
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
-  const [momoDest, setMomoDest] = useState<'momo' | 'owner' | 'float'>('momo');
+  const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner'>('float');
   const [momoSentBy, setMomoSentBy] = useState(staffName || '');
 
   const activeItem = (list: string[], custom: string, picked: string) =>
@@ -253,15 +253,15 @@ export default function CategoryRegister({
   const todayMoneyOut = momoTransfers
     .filter(t => t.category === selected && localDayKey(t.createdAt) === todayStr());
   const sentToday = todayMoneyOut.reduce((s, t) => s + t.amount, 0);
-  const momoOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'momo').reduce((s, t) => s + t.amount, 0);
-  const ownerOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'owner').reduce((s, t) => s + t.amount, 0);
-  const floatOutToday = todayMoneyOut.filter(t => (t.to || 'momo') === 'float').reduce((s, t) => s + t.amount, 0);
+  const floatOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'float').reduce((s, t) => s + t.amount, 0);
+  const cashOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
+  const ownerOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
   const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
 
   const MONEY_DEST = [
-    { key: 'momo' as const, label: 'Mobile Money', icon: '📲', hint: 'Sent to MTN/Airtel MoMo account' },
-    { key: 'owner' as const, label: 'Given to Owner', icon: '💰', hint: 'Handed to the business owner' },
-    { key: 'float' as const, label: 'Kept as Float', icon: '🏦', hint: 'Kept as tomorrow\'s capital (eatery daily capital)' },
+    { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
+    { key: 'cash' as const, label: 'Cash', icon: '💵', hint: 'Kept as physical cash — e.g. retained capital for tomorrow / handed out' },
+    { key: 'owner' as const, label: 'Given to Owner (Mike)', icon: '👑', hint: 'Handed to the business owner (McMike), or eatery profits sent' },
   ];
 
   const handleSubmitMomo = () => {
@@ -387,9 +387,9 @@ export default function CategoryRegister({
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Collected today</p>
           <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
           <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-            MoMo: <span className="text-emerald-400 font-black">{formatCurrency(momoOutToday)}</span>
+            Float: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
+            {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
             {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
-            {' · '}Float: <span className="text-zinc-300 font-black">{formatCurrency(floatOutToday)}</span>
           </p>
         </div>
       </section>
@@ -405,20 +405,20 @@ export default function CategoryRegister({
             <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Mobile Money</p>
-            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allMomoOut)}</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Float (on MoMo)</p>
+            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allFloatOut)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Owner</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash (kept)</p>
+            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allCashOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Owner (Mike)</p>
             <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Kept as Float</p>
-            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allFloatOut)}</p>
           </div>
         </div>
         <p className="text-[10px] text-zinc-600 mt-2">
-          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allMomoOut + allOwnerOut + allFloatOut))}</span> — still in the drawers.
+          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allFloatOut + allCashOut + allOwnerOut))}</span> — still in the drawers.
         </p>
       </section>
 
@@ -797,12 +797,12 @@ export default function CategoryRegister({
             <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(sentToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Mobile Money</p>
-            <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(momoOutToday)}</p>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Float (on MoMo)</p>
+            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(floatOutToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Owner / Float</p>
-            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(ownerOutToday + floatOutToday)}</p>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Cash / Owner</p>
+            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(cashOutToday + ownerOutToday)}</p>
           </div>
         </div>
 
@@ -866,7 +866,7 @@ export default function CategoryRegister({
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
             {catMomoTransfers.slice(0, 100).map(t => {
-              const d = MONEY_DEST.find(x => x.key === (t.to || 'momo'));
+              const d = MONEY_DEST.find(x => x.key === (t.to || 'float'));
               return (
                 <div key={t.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
                   <div className="min-w-0">

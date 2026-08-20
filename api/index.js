@@ -108,10 +108,12 @@ async function initDB() {
   await sql`CREATE TABLE IF NOT EXISTS momo_transfers (
     id TEXT PRIMARY KEY, category TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, comment TEXT DEFAULT '',
-    createdat TEXT NOT NULL, to_type TEXT DEFAULT 'momo', sentby TEXT DEFAULT ''
+    createdat TEXT NOT NULL, to_type TEXT DEFAULT 'float', sentby TEXT DEFAULT ''
   )`;
-  try { await sql`ALTER TABLE momo_transfers ADD COLUMN IF NOT EXISTS to_type TEXT DEFAULT 'momo'`; } catch {}
+  try { await sql`ALTER TABLE momo_transfers ADD COLUMN IF NOT EXISTS to_type TEXT DEFAULT 'float'`; } catch {}
   try { await sql`ALTER TABLE momo_transfers ADD COLUMN IF NOT EXISTS sentby TEXT DEFAULT ''`; } catch {}
+  // Older rows said 'momo' ("sent to mobile money") — that's the Float destination now.
+  try { await sql`UPDATE momo_transfers SET to_type = 'float' WHERE to_type IS NULL OR to_type = 'momo' OR to_type = ''`; } catch {}
   try { await sql`ALTER TABLE credit_eats ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
@@ -1407,7 +1409,7 @@ app.post('/api/momo-transfers', asHandler(async (req, res) => {
   const amount = Math.max(0, parseFloat(t.amount) || 0);
   if (amount <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
   const inserted = await sql`INSERT INTO momo_transfers (id,category,amount,comment,createdat,client_write_id,to_type,sentby)
-    VALUES (${t.id},${t.category||'Eatery'},${amount},${t.comment||''},${t.createdAt||new Date().toISOString()},${t.clientWriteId||null},${t.to||'momo'},${t.sentBy||''})
+    VALUES (${t.id},${t.category||'Eatery'},${amount},${t.comment||''},${t.createdAt||new Date().toISOString()},${t.clientWriteId||null},${t.to||'float'},${t.sentBy||''})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM momo_transfers WHERE client_write_id=${t.clientWriteId}`;
@@ -1987,7 +1989,7 @@ function mapMomoTransfer(r) {
   return {
     id: r.id, category: r.category, amount: r.amount,
     comment: r.comment || '', createdAt: r.createdat,
-    to: r.to_type || 'momo', sentBy: r.sentby || '',
+    to: ['float', 'cash', 'owner'].includes(r.to_type) ? r.to_type : 'float', sentBy: r.sentby || '',
   };
 }
 

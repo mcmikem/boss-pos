@@ -145,7 +145,7 @@ export interface MomoTransfer {
   amount: number;
   comment: string;
   createdAt: string;
-  to?: 'momo' | 'owner' | 'float';
+  to?: 'float' | 'cash' | 'owner';
   sentBy?: string;
 }
 
