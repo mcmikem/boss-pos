@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useMemo, type FormEvent } from 'react';
 import { 
   Coins, 
   Smartphone, 
@@ -16,6 +16,7 @@ import {
 import type { Sale, Expense, Product, StoreSettings } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import ReceiptModal from './ReceiptModal';
+import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 
 interface DashboardProps {
   sales: Sale[];
@@ -94,6 +95,22 @@ export default function Dashboard({
   });
   
   const maxHourlySale = Math.max(...hourlySales, 10);
+
+  // Top 5 products by qty sold today
+  const productSales = useMemo(() => {
+    const map: Record<string, { qty: number; total: number }> = {};
+    todaySales.forEach(sale => {
+      sale.items.forEach(item => {
+        const key = item.productId;
+        if (!map[key]) map[key] = { qty: 0, total: 0 };
+        map[key].qty += item.qty;
+        map[key].total += item.lineTotal;
+      });
+    });
+    return Object.entries(map)
+      .sort((a, b) => b[1].qty - a[1].qty)
+      .slice(0, 5);
+  }, [todaySales]);
 
   const handleQuickExpense = (e: FormEvent) => {
     e.preventDefault();
@@ -300,6 +317,40 @@ export default function Dashboard({
               </div>
             );
           })}
+        </div>
+      </section>
+
+      <section className="boss-card p-5">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Top Products Today</h3>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-gold-brand"></span>
+            <span className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Units</span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+{productSales.length > 0 ? productSales.map(([productId, { qty, total }]) => {
+            const product = products.find(p => p.id === productId) || { name: 'Unknown', category: 'Graphics' };
+            const catVis = CATEGORY_VISUALS[product.category] || DEFAULT_CATEGORY_VISUAL;
+            const Icon = catVis.icon;
+            return (
+              <div key={productId} className="flex items-center justify-between bg-black/30 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 border border-white/5 bg-[#0A0A0A] rounded-xl flex items-center justify-center text-zinc-400">
+                    <Icon className="w-5 h-5 text-gold-light" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-gold-light transition-colors">{product.name}</p>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase">{qty} × sold</p>
+                  </div>
+                  <span className="text-gold-light font-black">{formatCurrency(total)}</span>
+                </div>
+              </div>
+            );
+          }) : (
+            <p className="text-xs text-zinc-500 font-bold uppercase text-center py-4">No sales today</p>
+          )}
         </div>
       </section>
 
