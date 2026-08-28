@@ -158,7 +158,9 @@ export async function flushOutbox(): Promise<number> {
   }
   let flushed = 0;
   let conflicts = 0;
+  let dropped = 0;
   let sawAuthFailure = false;
+  let sawNetworkFailure = false;
   const remaining: OutboxEntry[] = [];
   for (let idx = 0; idx < list.length; idx++) {
     const entry = list[idx];
@@ -184,6 +186,19 @@ export async function flushOutbox(): Promise<number> {
           flushed++;
           continue;
         }
+        if (body.code === 'INSUFFICIENT_STOCK') {
+          // Stock race lost offline — retrying can't create stock. Drop and warn.
+          dropped++;
+          flushed++;
+          continue;
+        }
+      }
+      // Permanent client errors (except 401/429) never succeed on retry — drop to avoid infinite queue.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        await res.json().catch(() => ({}));
+        dropped++;
+        flushed++;
+        continue;
       }
       remaining.push(entry);
     } catch (err) {
@@ -191,6 +206,7 @@ export async function flushOutbox(): Promise<number> {
       const isNetwork = err instanceof TypeError;
       remaining.push(entry);
       if (isNetwork) {
+        sawNetworkFailure = true;
         // Keep every not-yet-tried entry too.
         for (let j = idx + 1; j < list.length; j++) remaining.push(list[j]);
         break;
@@ -202,10 +218,18 @@ export async function flushOutbox(): Promise<number> {
     setAuthToken(null);
     try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
   }
+  if (sawNetworkFailure) {
+    try { window.dispatchEvent(new Event('boss-pos-sync-offline')); } catch {}
+  }
   if (flushed > 0) clearRelatedCaches('/api');
   if (conflicts > 0) {
     try {
       window.dispatchEvent(new CustomEvent('boss-pos-sync-conflict', { detail: conflicts }));
+    } catch {}
+  }
+  if (dropped > 0) {
+    try {
+      window.dispatchEvent(new CustomEvent('boss-pos-sync-dropped', { detail: dropped }));
     } catch {}
   }
   return flushed;

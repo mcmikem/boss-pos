@@ -336,6 +336,16 @@ export default function App() {
     window.addEventListener('boss-pos-sync-conflict', onSyncConflict);
     return () => window.removeEventListener('boss-pos-sync-conflict', onSyncConflict);
   }, []);
+  const onSyncDropped = (e: Event) => {
+    const n = (e as CustomEvent).detail || 1;
+    triggerToast(`${n} offline change(s) couldn't be saved (e.g. sold out) — cleared from queue. Check stock.`, 'error');
+    fetchAllData();
+    setPendingCount(outboxCount());
+  };
+  useEffect(() => {
+    window.addEventListener('boss-pos-sync-dropped', onSyncDropped);
+    return () => window.removeEventListener('boss-pos-sync-dropped', onSyncDropped);
+  }, []);
 
   // "Log out all devices" (or an expired token) just got enforced server-side:
   // drop the session and re-lock the till.
@@ -363,11 +373,13 @@ export default function App() {
           triggerToast(`Synced ${n} offline change(s)`, 'success');
           fetchAllData();
         } else if (outboxCount() > 0 && hadToken && stillHasToken) {
-          triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
+          // Non-auth failure at this point is either network (offline event would have fired)
+          // or permanent drop. Don't spam "Re-unlock" — silent retry + badge is enough.
+          // User can Force sync in Settings for details.
         }
         setPendingCount(outboxCount());
       } catch {
-        triggerToast('Failed to sync offline changes', 'error');
+        // Swallow — transient, will retry on next interval
       }
     };
     const handleOffline = () => setIsOnline(false);
@@ -386,17 +398,14 @@ export default function App() {
     if (authState !== 'ready') return;
     (async () => {
       try {
-        const hadToken = !!getAuthToken();
         const n = await flushOutbox();
-        const stillHasToken = !!getAuthToken();
+        // Auth failures lock via boss-pos-auth-revoked; network failures are silent;
+        // permanent drops are reported via boss-pos-sync-dropped.
         if (n > 0) {
           triggerToast(`Synced ${n} offline change(s)`, 'success');
           fetchAllData();
-        } else if (outboxCount() > 0 && hadToken && stillHasToken) {
-          // Only show error if we had a token and still have it (non-auth failure).
-          // Auth failures trigger boss-pos-auth-revoked which locks the screen.
-          triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
         }
+        setPendingCount(outboxCount());
       } catch {}
     })();
   }, [authState]);
