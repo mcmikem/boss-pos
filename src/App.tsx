@@ -88,6 +88,7 @@ export default function App() {
   const [updatingApp, setUpdatingApp] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
+  const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
 
   const readyRef = useRef(false);
 
@@ -315,6 +316,46 @@ export default function App() {
     };
   }, [authState, applyBootData]);
 
+  // SSE instant sync — other tills push 'change' via /api/events broadcast
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    const token = getAuthToken();
+    if (!token || typeof EventSource === 'undefined') return;
+    let es: EventSource | null = null;
+    let closed = false;
+    const connect = () => {
+      if (closed) return;
+      try {
+        es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+        es.onmessage = () => {
+          // Debounce burst writes (multiple SSE in quick succession)
+          setTimeout(async () => {
+            try {
+              const d = await bootApi.get();
+              applyBootData(d);
+            } catch {}
+          }, 300);
+        };
+        es.onerror = () => {
+          try { es?.close(); } catch {}
+          // Reconnect after 5s (Vercel closes after 25s anyway)
+          setTimeout(() => { if (!closed) connect(); }, 5000);
+        };
+      } catch {
+        // Fallback stays on 30s poll above
+      }
+    };
+    connect();
+    return () => { closed = true; try { es?.close(); } catch {} };
+  }, [authState, applyBootData]);
+
+  // PWA install prompt capture
+  useEffect(() => {
+    const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
+    window.addEventListener('beforeinstallprompt', h);
+    return () => window.removeEventListener('beforeinstallprompt', h);
+  }, []);
+
   // Refresh the offline-pending badge + "Synced" pill every 30s.
   useEffect(() => {
     const iv = setInterval(() => setPendingCount(outboxCount()), 30_000);
@@ -326,6 +367,34 @@ export default function App() {
       window.removeEventListener('boss-pos-outbox-updated', onStorage);
     };
   }, []);
+
+  // Low-stock push notification — fires once per product when it drops at/below threshold
+  const lowNotifiedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (authState !== 'ready' || products.length === 0) return;
+    if (typeof Notification === 'undefined') return;
+    const low = products.filter(p => !p.isService && p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty >= 0);
+    if (low.length === 0) { lowNotifiedRef.current.clear(); return; }
+    const newlyLow = low.filter(p => !lowNotifiedRef.current.has(p.id));
+    if (newlyLow.length === 0) return;
+    newlyLow.forEach(p => lowNotifiedRef.current.add(p.id));
+    const fire = () => {
+      if (Notification.permission === 'granted') {
+        low.slice(0, 3).forEach(p => {
+          try { new Notification(`Low stock: ${p.name}`, { body: `${p.stockQty} left (threshold ${p.lowStockThreshold || 5})`, icon: '/pwa-192x192.png' }); } catch {}
+        });
+        if (low.length > 3) triggerToast(`${low.length} items low on stock — check Inventory`, 'error');
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(perm => {
+          if (perm === 'granted') fire();
+        });
+      } else {
+        if (newlyLow.length > 0) triggerToast(`${newlyLow.length} items low on stock`, 'error');
+      }
+    };
+    // Don't spam on first boot — only after user has interacted
+    if (document.visibilityState === 'visible') fire();
+  }, [products, authState]);
 
   // Outbox inspector data for Settings
   useEffect(() => {
@@ -1256,6 +1325,14 @@ export default function App() {
           ) : null}
         </div>
         <div className="flex items-center gap-3">
+          {installPrompt && (
+            <button onClick={async () => {
+              try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {}
+              setInstallPrompt(null);
+            }} className="hidden sm:flex h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90">
+              Install
+            </button>
+          )}
           <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
             <Settings className="w-4 h-4" />
           </button>

@@ -15,6 +15,7 @@ import ConfirmSaleModal from './ConfirmSaleModal';
 import CashTransferModal from './CashTransferModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
+import Fuse from 'fuse.js';
 import { unitLabel } from '../utils/units';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
@@ -140,13 +141,27 @@ export default function Sales({
   }, [selectedCategory, searchQuery]);
 
   const filteredProducts = useMemo(() => {
-    return products
-      .filter(p => {
-        const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                              p.category.toLowerCase().includes(searchQuery.toLowerCase());
-        return matchesCategory && matchesSearch;
-      });
+    const byCategory = products.filter(p => selectedCategory === 'All' || p.category === selectedCategory);
+    if (!searchQuery.trim()) return byCategory;
+    // Fuse fuzzy search on name/category/barcode/imei — forgiving for typos on small phone keyboards
+    const fuse = new Fuse(byCategory, {
+      keys: [
+        { name: 'name', weight: 0.6 },
+        { name: 'category', weight: 0.2 },
+        { name: 'barcode', weight: 0.1 },
+        { name: 'imei', weight: 0.1 },
+      ],
+      threshold: 0.38,
+      distance: 80,
+      includeScore: true,
+    });
+    const res = fuse.search(searchQuery.trim());
+    // Fallback to simple includes if fuse finds nothing (very short queries)
+    if (res.length === 0) {
+      const q = searchQuery.toLowerCase();
+      return byCategory.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
+    }
+    return res.map(r => r.item);
   }, [products, selectedCategory, searchQuery]);
 
   const handleAddToCart = (product: Product) => {
@@ -879,14 +894,19 @@ export default function Sales({
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             <div className="space-y-1">
               {(() => {
-                const searchLower = quickSearchQuery.toLowerCase();
-                const matched = quickSearchQuery
-                  ? products.filter(p =>
-                      p.name.toLowerCase().includes(searchLower) ||
-                      p.category.toLowerCase().includes(searchLower) ||
-                      (p.barcode && p.barcode.toLowerCase().includes(searchLower))
-                    )
-                  : products;
+                let matched: Product[] = products;
+                if (quickSearchQuery.trim()) {
+                  const fuse = new Fuse(products, {
+                    keys: ['name', 'category', 'barcode', 'imei'],
+                    threshold: 0.38,
+                    distance: 80,
+                  });
+                  const r = fuse.search(quickSearchQuery.trim());
+                  matched = r.length ? r.map(x => x.item) : products.filter(p => {
+                    const q = quickSearchQuery.toLowerCase();
+                    return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q));
+                  });
+                }
                 return matched.slice(0, 20).map(product => (
                   <ProductCard
                     key={product.id}
@@ -898,14 +918,19 @@ export default function Sales({
                   />
                 ));
               })()}
-              {quickSearchQuery && products.filter(p => {
+              {(() => {
                 const q = quickSearchQuery.toLowerCase();
-                return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q));
-              }).length === 0 && (
+                const count = quickSearchQuery ? (() => {
+                  const fuse = new Fuse(products, { keys: ['name','category','barcode'], threshold: 0.38 });
+                  const r = fuse.search(quickSearchQuery.trim());
+                  return r.length ? r.length : products.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q))).length;
+                })() : 0;
+                return count === 0 && quickSearchQuery ? (
                 <div className="p-6 text-center">
                   <p className="text-xs text-zinc-500 font-bold uppercase">No products match "{quickSearchQuery}"</p>
                 </div>
-              )}
+                ) : null;
+              })()}
             </div>
           </div>
           {cart.length > 0 && (

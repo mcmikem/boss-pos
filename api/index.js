@@ -643,7 +643,9 @@ async function verifyToken(token) {
 
 async function requireAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
+  let token = header.startsWith('Bearer ') ? header.slice(7) : (req.headers['x-auth-token'] || '');
+  // EventSource can't set headers — allow ?token= for /api/events
+  if (!token && req.path === '/api/events' && req.query && req.query.token) token = String(req.query.token);
   if (!await verifyToken(token)) return res.status(401).json({ error: 'Unauthorized', code: 'AUTH_REQUIRED' });
   next();
 }
@@ -769,11 +771,23 @@ app.use((req, res, next) => {
   next();
 });
 
+// Server-Sent Events broadcast for multi-till instant sync (replaces 30s poll).
+// Vercel serverless has 30s maxDuration, so we hold 25s then client reconnects.
+const sseClients = new Set();
+function sseBroadcast(type, detail = '') {
+  const payload = `event: ${type}\ndata: ${detail || Date.now()}\n\n`;
+  for (const c of sseClients) {
+    try { c.write(payload); } catch { sseClients.delete(c); }
+  }
+}
+
 // Revalidate cheaply on 3G: attach an ETag + short Cache-Control to every JSON
 // GET so the browser/SW can turn full downloads into 304s. (Not shared-cache
 // `public` — this is financial data.)
 app.use((req, res, next) => {
   if (req.method !== 'GET') return next();
+  // SSE must bypass ETag wrapping
+  if (req.path === '/api/events') return next();
   const send = res.json.bind(res);
   res.json = (body) => {
     const etag = '"' + createHash('sha1').update(JSON.stringify(body)).digest('hex') + '"';
@@ -784,6 +798,37 @@ app.use((req, res, next) => {
       return res;
     }
     return send(body);
+  };
+  next();
+});
+
+// SSE subscription — authenticated via same Bearer token as other /api routes
+app.get('/api/events', asHandler(async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  });
+  res.write(`: connected\n\n`);
+  sseClients.add(res);
+  const keep = setInterval(() => { try { res.write(`: ping\n\n`); } catch {} }, 15000);
+  const timeout = setTimeout(() => {
+    clearInterval(keep);
+    sseClients.delete(res);
+    try { res.end(); } catch {}
+  }, 25000);
+  req.on('close', () => { clearInterval(keep); clearTimeout(timeout); sseClients.delete(res); });
+}));
+
+// Broadcast any successful write to SSE listeners so other tills refresh instantly
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
+  if (req.path === '/api/events' || req.path === '/api/auth/verify' || req.path === '/api/auth/status') return next();
+  const orig = res.json.bind(res);
+  res.json = (body) => {
+    // Only broadcast on 2xx (res.statusCode defaults to 200 if not set)
+    if (res.statusCode < 400) sseBroadcast('change', req.path);
+    return orig(body);
   };
   next();
 });

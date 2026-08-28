@@ -313,12 +313,35 @@ export async function authMigratePin(hash: string): Promise<boolean> {
 // never has to load a photo into memory and OOM the whole page). Uses
 // XMLHttpRequest (not fetch): XHR uploading a large File is the battle-tested
 // path on old WebViews, where fetch() with a Blob body has known crashers.
+async function compressImageIfNeeded(file: File | Blob): Promise<Blob> {
+  try {
+    if (!file.type?.startsWith('image/') || file.size < 300_000) return file;
+    const bitmap = await createImageBitmap(file as Blob).catch(() => null);
+    if (!bitmap) return file;
+    const max = 1024;
+    let { width, height } = bitmap;
+    if (width <= max && height <= max && file.size < 800_000) { bitmap.close?.(); return file; }
+    const scale = Math.min(max / width, max / height, 1);
+    const w = Math.round(width * scale);
+    const h = Math.round(height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { bitmap.close?.(); return file; }
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob: Blob | null = await new Promise(res => canvas.toBlob(r => res(r), 'image/jpeg', 0.72));
+    return blob && blob.size < file.size ? blob : file;
+  } catch { return file; }
+}
+
 export function uploadImage(file: File | Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    const toSend = await compressImageIfNeeded(file);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${BASE}/api/uploads`);
     xhr.setRequestHeader('Authorization', getAuthHeader());
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('Content-Type', (toSend as File).type || file.type || 'application/octet-stream');
     const timer = window.setTimeout(() => {
       try { xhr.abort(); } catch {}
       reject(new ApiError('Upload timed out — try a smaller photo', 0));
@@ -346,7 +369,7 @@ export function uploadImage(file: File | Blob): Promise<string> {
       reject(new ApiError('Upload failed — check your connection', 0));
     };
     try {
-      xhr.send(file);
+      xhr.send(toSend);
     } catch (err) {
       window.clearTimeout(timer);
       reject(new ApiError('Upload failed — check your connection', 0));
