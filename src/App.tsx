@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -317,7 +317,13 @@ export default function App() {
   // Refresh the offline-pending badge + "Synced" pill every 30s.
   useEffect(() => {
     const iv = setInterval(() => setPendingCount(outboxCount()), 30_000);
-    return () => clearInterval(iv);
+    // Keep badge honest after any flush that mutates the queue
+    const onStorage = () => setPendingCount(outboxCount());
+    window.addEventListener('boss-pos-outbox-updated', onStorage);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('boss-pos-outbox-updated', onStorage);
+    };
   }, []);
 
   // A replay lost the race against another device (server 409 CONFLICT).
@@ -350,13 +356,16 @@ export default function App() {
     const handleOnline = async () => {
       setIsOnline(true);
       try {
+        const hadToken = !!getAuthToken();
         const n = await flushOutbox();
+        const stillHasToken = !!getAuthToken();
         if (n > 0) {
           triggerToast(`Synced ${n} offline change(s)`, 'success');
           fetchAllData();
-        } else if (outboxCount() > 0) {
+        } else if (outboxCount() > 0 && hadToken && stillHasToken) {
           triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
         }
+        setPendingCount(outboxCount());
       } catch {
         triggerToast('Failed to sync offline changes', 'error');
       }
@@ -377,11 +386,15 @@ export default function App() {
     if (authState !== 'ready') return;
     (async () => {
       try {
+        const hadToken = !!getAuthToken();
         const n = await flushOutbox();
+        const stillHasToken = !!getAuthToken();
         if (n > 0) {
           triggerToast(`Synced ${n} offline change(s)`, 'success');
           fetchAllData();
-        } else if (outboxCount() > 0) {
+        } else if (outboxCount() > 0 && hadToken && stillHasToken) {
+          // Only show error if we had a token and still have it (non-auth failure).
+          // Auth failures trigger boss-pos-auth-revoked which locks the screen.
           triggerToast('Some offline changes could not sync. Re-unlock to refresh your login, then retry.', 'error');
         }
       } catch {}
@@ -510,9 +523,14 @@ export default function App() {
     const cachedSettings = readCached<StoreSettings>('/api/settings');
     if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
     if (local && !local.startsWith('fb_') && await verifyPinAgainstHash(pin, local)) {
-      // Local hash matches: unlock instantly from cache, refresh in background.
+      // Local hash matches: unlock instantly from cache. If we have no token
+      // (idle-lock expired, or 7-day TTL), mint a fresh one in background so
+      // the outbox flush that runs on authState=ready doesn't 401-loop.
       setAuthState('ready');
       fetchAllData().catch(() => {});
+      if (!getAuthToken() && navigator.onLine) {
+        authVerify(pin).catch(() => {});
+      }
       return;
     }
     try {
@@ -530,6 +548,8 @@ export default function App() {
         if (await verifyPinAgainstHash(pin, localHash)) {
           setAuthState('ready');
           fetchAllData().catch(() => {});
+          // Even on offline fallback, try to refresh token if we later come online
+          if (!getAuthToken() && navigator.onLine) authVerify(pin).catch(() => {});
           return;
         }
       }
@@ -1393,6 +1413,31 @@ export default function App() {
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
                   Back up to server now
                 </button>
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    const before = outboxCount();
+                    const n = await flushOutbox();
+                    setPendingCount(outboxCount());
+                    if (n > 0) triggerToast(`Force-synced ${n} change(s)`, 'success');
+                    else if (outboxCount() > 0) {
+                      const sample = peekOutbox().slice(0,3).map(e=>e.path).join(', ');
+                      triggerToast(`Still ${outboxCount()}/${before} queued (${sample || 'retry'}) — re-enter PIN if needed`, 'error');
+                    } else triggerToast(before>0 ? 'Queue now empty' : 'Nothing pending', 'info');
+                    if (n>0) fetchAllData();
+                  }}
+                    className="flex-1 h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50 transition-all cursor-pointer">
+                    Force sync now
+                  </button>
+                  <button onClick={async () => {
+                    if (!confirm(`Clear ALL ${outboxCount()} unsynced changes? This discards offline edits that failed to reach the server.`)) return;
+                    clearOutbox();
+                    setPendingCount(0);
+                    triggerToast('Queue cleared — refresh to pull latest', 'info');
+                  }}
+                    className="flex-1 h-10 bg-rose-950/30 border border-rose-800/40 text-rose-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-rose-950/50 transition-all cursor-pointer">
+                    Clear queue
+                  </button>
+                </div>
                 <button onClick={handleExportData}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup

@@ -110,6 +110,7 @@ function getOutbox(): OutboxEntry[] {
 function saveOutbox(entries: OutboxEntry[]): void {
   try {
     localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries));
+    try { window.dispatchEvent(new Event('boss-pos-outbox-updated')); } catch {}
   } catch {}
 }
 
@@ -140,6 +141,14 @@ export function outboxCount(): number {
 // A 409 CONFLICT (a product edit that lost the race to a newer edit on another
 // device) is also dropped — retrying forever can't change the outcome, and the
 // newest version already won on the server. The caller is told so it can warn.
+export function peekOutbox(): OutboxEntry[] {
+  return getOutbox();
+}
+
+export function clearOutbox(): void {
+  saveOutbox([]);
+}
+
 export async function flushOutbox(): Promise<number> {
   const list = getOutbox();
   if (list.length === 0) return 0;
@@ -151,7 +160,8 @@ export async function flushOutbox(): Promise<number> {
   let conflicts = 0;
   let sawAuthFailure = false;
   const remaining: OutboxEntry[] = [];
-  for (const entry of list) {
+  for (let idx = 0; idx < list.length; idx++) {
+    const entry = list[idx];
     try {
       const res = await fetchTimeout(`${BASE}${entry.path}`, {
         method: entry.method,
@@ -176,8 +186,15 @@ export async function flushOutbox(): Promise<number> {
         }
       }
       remaining.push(entry);
-    } catch {
+    } catch (err) {
+      // Network timeout / offline: don't burn 30s per remaining entry — keep the rest as-is.
+      const isNetwork = err instanceof TypeError;
       remaining.push(entry);
+      if (isNetwork) {
+        // Keep every not-yet-tried entry too.
+        for (let j = idx + 1; j < list.length; j++) remaining.push(list[j]);
+        break;
+      }
     }
   }
   saveOutbox(remaining);
