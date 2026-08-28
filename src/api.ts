@@ -421,43 +421,73 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     }
   }
 
+  // Writes get 2 quick retries for transient 503/cold-start before queuing,
+  // so a brief DB wake doesn't become an "unsynced" queue entry when the
+  // server would have succeeded on the next try.
   try {
-    const res = await fetchTimeout(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
-      ...options,
-    }, isRead ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
-    if (!res.ok) {
-      let message = `API error: ${res.status}`;
-      let code: string | undefined;
-      try {
-        const body = await res.json().catch(() => ({}));
-        if (body.error) message = body.error;
-        if (body.code) code = body.code;
-      } catch {}
-      if (res.status === 401 && path.startsWith('/api/') && getAuthToken()) {
-        // Revoked/expired token: drop it and re-lock the till (outbox is kept —
-        // it replays after the next online unlock mints a fresh token). Only
-        // fires when a token was actually present — a wrong PIN on the lock
-        // screen is also a 401 and must NOT be treated as a global revoke.
-        setAuthToken(null);
-        try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+    const maxAttempts = isRead ? 1 : 3;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetchTimeout(`${BASE}${path}`, {
+        headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
+        ...options,
+      }, isRead ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
+      if (!res.ok) {
+        let message = `API error: ${res.status}`;
+        let code: string | undefined;
+        try {
+          const body = await res.json().catch(() => ({}));
+          if (body.error) message = body.error;
+          if (body.code) code = body.code;
+        } catch {}
+        if (res.status === 401 && path.startsWith('/api/') && getAuthToken()) {
+          // Revoked/expired token: drop it and re-lock the till (outbox is kept —
+          // it replays after the next online unlock mints a fresh token). Only
+          // fires when a token was actually present — a wrong PIN on the lock
+          // screen is also a 401 and must NOT be treated as a global revoke.
+          setAuthToken(null);
+          try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+        }
+        const transientStatus =
+          res.status === 502 || res.status === 503 || res.status === 504 ||
+          (res.status === 500 && /temporarily unavailable|Database temporarily/i.test(message));
+        if (transientStatus && attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+          continue;
+        }
+        throw new ApiError(message, res.status, code);
       }
-      throw new ApiError(message, res.status, code);
-    }
-    const data = await res.json();
+      const data = await res.json();
 
-    if (isRead) {
-      if (!options || !options.fresh || options.store) {
-        const ttl = typeof options?.store === 'number' ? options.store : undefined;
-        setCache(path, data, ttl);
+      if (isRead) {
+        if (!options || !options.fresh || options.store) {
+          const ttl = typeof options?.store === 'number' ? options.store : undefined;
+          setCache(path, data, ttl);
+        }
       }
-    }
 
-    if (!isRead) {
-      clearRelatedCaches(path);
-    }
+      if (!isRead) {
+        clearRelatedCaches(path);
+      }
 
-    return data;
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const isTransient =
+        err instanceof TypeError ||
+        (err instanceof ApiError &&
+          (err.status === 502 || err.status === 503 || err.status === 504 ||
+            (err.status === 500 && /temporarily unavailable|Database temporarily/i.test(err.message))));
+      if (isTransient && attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
+        continue;
+      }
+      // Not retryable or out of attempts — fall through to outer catch handling
+      throw err;
+    }
+  }
+  throw lastErr;
   } catch (err) {
     if (isRead) {
       // Any network/server failure (flaky 3G, dropped WiFi, expired token)

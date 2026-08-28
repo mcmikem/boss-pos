@@ -283,18 +283,35 @@ export default function App() {
   useEffect(() => {
     if (authState !== 'ready') return;
     let busy = false;
-    const iv = setInterval(async () => {
+    const syncNow = async () => {
       if (!navigator.onLine || busy) return;
       busy = true;
       try {
+        // Flush any queued offline writes first so they land before we pull.
+        const pending = outboxCount();
+        if (pending > 0) {
+          const n = await flushOutbox();
+          if (n > 0) triggerToast(`Synced ${n} offline change(s)`, 'success');
+        }
         const d = await bootApi.get();
         applyBootData(d);
         setPendingCount(outboxCount());
       } catch {} finally {
         busy = false;
       }
-    }, 3 * 60 * 1000);
-    return () => clearInterval(iv);
+    };
+    const iv = setInterval(syncNow, 30 * 1000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') syncNow();
+    };
+    const onFocus = () => syncNow();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [authState, applyBootData]);
 
   // Refresh the offline-pending badge + "Synced" pill every 30s.
@@ -701,9 +718,10 @@ export default function App() {
         return prod;
       });
     });
-    try { await saleApi.create(newSale); } catch {
-      // Real server failure (not offline — offline writes are queued). Roll the
-      // sale and its stock effect back so the UI never shows an unsaved sale.
+    try { await saleApi.create(newSale); } catch (err) {
+      // Real server failure (not offline — offline writes are queued and would
+      // have returned optimistic success). Roll the sale and its stock effect
+      // back so the UI never shows an unsaved sale.
       setSales(prev => prev.filter(s => s.id !== newSale.id));
       setProducts(prevProducts => {
         return prevProducts.map(prod => {
@@ -714,7 +732,16 @@ export default function App() {
           return prod;
         });
       });
-      triggerToast('Failed to save sale — not recorded. Refresh stock and retry.', 'error');
+      if (err instanceof ApiError && err.code === 'INSUFFICIENT_STOCK') {
+        triggerToast('Not enough stock — another till just sold the last one. Stock refreshed, try again.', 'error');
+        fetchAllData();
+      } else if (err instanceof ApiError && err.status === 401) {
+        triggerToast('Not logged in — re-enter PIN and retry.', 'error');
+      } else if (err instanceof ApiError && err.message) {
+        triggerToast(err.message.slice(0, 120), 'error');
+      } else {
+        triggerToast('Failed to save sale — not recorded. Refresh stock and retry.', 'error');
+      }
     }
   };
 

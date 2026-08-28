@@ -408,6 +408,13 @@ export default defineConfig(() => {
                 expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
               },
             },
+            // API must never be served from SW cache — the app already has a
+            // localStorage cache + 30s polling. SW caching would hide fresh
+            // sales from other tills and cause "unsynced".
+            {
+              urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+              handler: 'NetworkOnly',
+            },
             {
               urlPattern: /^https?:\/\/.*/,
               handler: 'NetworkFirst',
