@@ -800,6 +800,11 @@ export const backupsApi = {
   run: () => api<{ success: boolean }>('/api/backups/run', { method: 'POST' }),
 };
 
+export const reconcileApi = {
+  check: () => api<{ salesChecked: number; totalMismatches: number; negativeStock: { id: string; name: string; qty: number }[]; dupOrderNumbers: { ordernumber: string; c: number }[] }>('/api/reconcile', { fresh: true }),
+  fix: () => api<{ salesChecked: number; totalMismatches: number; totalFixes: number; negativeStock: { id: string; name: string; qty: number }[]; negativeFixed: number; dupOrderNumbers: { ordernumber: string; c: number }[] }>('/api/reconcile?fix=1', { method: 'POST' }),
+};
+
 export const exportApi = {
   download: () => api<Record<string, unknown>>('/api/export', { fresh: true }),
 };

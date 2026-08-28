@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -89,6 +89,7 @@ export default function App() {
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
+  const [reconcileResult, setReconcileResult] = useState<{ salesChecked: number; totalMismatches: number; negativeStock: { id: string; name: string; qty: number }[] } | null>(null);
 
   const readyRef = useRef(false);
 
@@ -368,10 +369,16 @@ export default function App() {
     };
   }, []);
 
-  // Low-stock push notification — fires once per product when it drops at/below threshold
+  // Low-stock / negative-stock alerts
   const lowNotifiedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (authState !== 'ready' || products.length === 0) return;
+    const neg = products.filter(p => !p.isService && p.stockQty < 0);
+    if (neg.length > 0) {
+      triggerToast(`${neg.length} items have NEGATIVE stock — tap to reconcile`, 'error');
+      // Auto-clamp negative stock locally until server reconcile runs
+      // (server POST /api/reconcile?fix=1 does authoritative clamp)
+    }
     if (typeof Notification === 'undefined') return;
     const low = products.filter(p => !p.isService && p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty >= 0);
     if (low.length === 0) { lowNotifiedRef.current.clear(); return; }
@@ -392,7 +399,6 @@ export default function App() {
         if (newlyLow.length > 0) triggerToast(`${newlyLow.length} items low on stock`, 'error');
       }
     };
-    // Don't spam on first boot — only after user has interacted
     if (document.visibilityState === 'visible') fire();
   }, [products, authState]);
 
@@ -1564,6 +1570,32 @@ export default function App() {
                       setPendingCount(kept.length);
                       triggerToast('Dropped oldest queued change', 'info');
                     }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Drop oldest</button>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    try {
+                      const r = await reconcileApi.check();
+                      setReconcileResult(r);
+                      if (r.totalMismatches===0 && r.negativeStock.length===0 && r.dupOrderNumbers.length===0) triggerToast(`Reconcile OK: ${r.salesChecked} sales checked`, 'success');
+                      else triggerToast(`Found ${r.totalMismatches} total mismatches, ${r.negativeStock.length} negative stock`, 'error');
+                    } catch { triggerToast('Reconcile check failed', 'error'); }
+                  }} className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40">Check gaps</button>
+                  <button onClick={async () => {
+                    if (!confirm('Fix totals & clamp negative stock? This writes to server.')) return;
+                    try {
+                      const r = await reconcileApi.fix();
+                      setReconcileResult({ salesChecked: r.salesChecked, totalMismatches: r.totalMismatches, negativeStock: r.negativeStock });
+                      triggerToast(`Fixed ${r.totalFixes} totals, ${r.negativeFixed} stock`, 'success');
+                      fetchAllData();
+                    } catch { triggerToast('Reconcile fix failed', 'error'); }
+                  }} className="flex-1 h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50">Fix gaps</button>
+                </div>
+                {reconcileResult && (
+                  <div className="rounded-xl border border-white/5 bg-[#0A0A0A] p-3 text-[10px] font-bold">
+                    <div className="text-zinc-300">{reconcileResult.salesChecked} sales checked — {reconcileResult.totalMismatches} total mismatches</div>
+                    {reconcileResult.negativeStock.length > 0 && <div className="text-rose-300">{reconcileResult.negativeStock.slice(0,3).map(s=>`${s.name} (${s.qty})`).join(', ')}</div>}
+                    {reconcileResult.negativeStock.length===0 && reconcileResult.totalMismatches===0 && <div className="text-emerald-300">No gaps</div>}
                   </div>
                 )}
                 <button onClick={handleExportData}

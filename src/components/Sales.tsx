@@ -81,7 +81,8 @@ const localOrderNumber = () => {
   const current = parseInt(localStorage.getItem(key) || '8492', 10);
   const next = current + 1;
   localStorage.setItem(key, String(next));
-  return `Order #${next}`;
+  // Offline temp number — server renumbers to canonical Order # on sync (api/index.js:1050)
+  return `Temp #${next}`;
 };
 
 export default function Sales({

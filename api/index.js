@@ -1042,12 +1042,21 @@ app.post('/api/sales', asHandler(async (req, res) => {
   const itemsJson = JSON.stringify(s.items);
   const customerName = text(s.customerName, 120) || null;
   const notes = text(s.notes, 500) || null;
+  // Server timestamp is canonical (device clocks skew → reports out of order).
+  // We keep device timestamp as notes suffix for audit if supplied, but DB timestamp is server now.
+  const serverNow = new Date().toISOString();
+  const clientTs = s.timestamp && typeof s.timestamp === 'string' ? s.timestamp.slice(0, 30) : null;
+  const effectiveNotes = clientTs && clientTs !== serverNow ? `${notes || ''}${notes ? ' | ' : ''}clientTime:${clientTs}`.slice(0, 500) : notes;
   // The client picks an order number (server counter when online, per-device
-  // fallback when offline). The unique ordernumber index guarantees the number
-  // used at the till is respected; if a queued/replayed sale collides with a
-  // number another device already used, we transparently renumber to the next
-  // free one and return it so the UI converges after the next refetch.
-  let orderNumber = s.orderNumber || `Order #${await nextOrderNumberValue()}`;
+  // fallback when offline). Offline sales use Temp# to avoid collisions until server renumbers.
+  let orderNumber = s.orderNumber;
+  if (!orderNumber || String(orderNumber).startsWith('Temp #')) {
+    orderNumber = String(orderNumber || '').startsWith('Temp #') ? orderNumber : `Order #${await nextOrderNumberValue()}`;
+  }
+  // If client sent Temp#, always renumber to server sequence now
+  if (String(orderNumber).startsWith('Temp #')) {
+    orderNumber = `Order #${await nextOrderNumberValue()}`;
+  }
 
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
@@ -1063,7 +1072,7 @@ app.post('/api/sales', asHandler(async (req, res) => {
         ),
         ins AS (
           INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,client_write_id)
-          SELECT ${saleId},${orderNumber},${s.timestamp || new Date().toISOString()},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${notes},${cwid}
+          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${cwid}
           WHERE NOT EXISTS (SELECT 1 FROM checkstock WHERE oversold)
           ON CONFLICT (id) DO NOTHING
           RETURNING id, items
@@ -1171,6 +1180,53 @@ app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
   }
   await audit('sale.refund', `Refunded ${req.params.id}`);
   res.json({ success: true });
+}));
+
+// === RECONCILE API — checks for sales/sync discrepancies ===
+app.post('/api/reconcile', asHandler(async (req, res) => {
+  const { fix } = req.query;
+  const shouldFix = fix === '1' || fix === 'true';
+  const salesRows = await sql`SELECT id, total, items FROM sales`;
+  let totalMismatches = 0;
+  let totalFixes = 0;
+  for (const r of salesRows) {
+    let items = [];
+    try { items = JSON.parse(r.items); } catch {}
+    const calc = items.reduce((a, it) => a + (it.lineTotal || it.qty * it.unitPrice || 0), 0);
+    if (Math.abs((r.total || 0) - calc) > 0.01) {
+      totalMismatches++;
+      if (shouldFix) {
+        await sql`UPDATE sales SET total=${calc} WHERE id=${r.id}`;
+        totalFixes++;
+      }
+    }
+  }
+  const negStock = await sql`SELECT id, name, stockqty FROM products WHERE stockqty < 0 AND deleted = false`;
+  let negFixed = 0;
+  if (shouldFix && negStock.length) {
+    for (const p of negStock) {
+      await sql`UPDATE products SET stockqty=0 WHERE id=${p.id}`;
+      await logStockMovement(sql, { productId: p.id, productName: p.name, delta: -(p.stockqty), type: 'adjust', qtyAfter: 0, note: 'Reconcile: clamped negative stock' });
+      negFixed++;
+    }
+  }
+  const dupOrderNumbers = await sql`SELECT ordernumber, count(*)::int AS c FROM sales GROUP BY ordernumber HAVING count(*) > 1`;
+  await audit('reconcile', `Checked ${salesRows.length} sales: ${totalMismatches} total mismatches${shouldFix ? ` (${totalFixes} fixed)` : ''}, ${negStock.length} negative stock${shouldFix ? ` (${negFixed} fixed)` : ''}, ${dupOrderNumbers.length} dup orderNumbers`);
+  res.json({ salesChecked: salesRows.length, totalMismatches, totalFixes, negativeStock: negStock.map(p => ({ id: p.id, name: p.name, qty: p.stockqty })), negativeFixed: negFixed, dupOrderNumbers });
+}));
+
+app.get('/api/reconcile', asHandler(async (req, res) => {
+  const salesRows = await sql`SELECT id, total, items FROM sales`;
+  let mismatches = 0;
+  for (const r of salesRows) {
+    let items = [];
+    try { items = JSON.parse(r.items); } catch {}
+    const calc = items.reduce((a, it) => a + (it.lineTotal || 0), 0);
+    if (Math.abs((r.total || 0) - calc) > 0.01) mismatches++;
+  }
+  const negStock = await sql`SELECT id, name, stockqty FROM products WHERE stockqty < 0 AND deleted = false`;
+  const dupOrderNumbers = await sql`SELECT ordernumber, count(*)::int AS c FROM sales GROUP BY ordernumber HAVING count(*) > 1`;
+  res.json({ salesChecked: salesRows.length, totalMismatches: mismatches, negativeStock: negStock.map(p => ({ id: p.id, name: p.name, qty: p.stockqty })), dupOrderNumbers });
 }));
 
 // === EXPENSES API ===
