@@ -87,6 +87,7 @@ export default function App() {
   const [showAudit, setShowAudit] = useState(false);
   const [updatingApp, setUpdatingApp] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
+  const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
 
   const readyRef = useRef(false);
 
@@ -325,6 +326,25 @@ export default function App() {
       window.removeEventListener('boss-pos-outbox-updated', onStorage);
     };
   }, []);
+
+  // Outbox inspector data for Settings
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    const load = async () => {
+      try {
+        const list = peekOutbox();
+        const fmt = (queuedAt: number) => {
+          const m = Math.round((Date.now() - queuedAt)/60000);
+          return m < 1 ? 'now' : m < 60 ? `${m}m` : `${Math.round(m/60)}h`;
+        };
+        setOutboxPreview(list.slice(0, 8).map(e => ({ path: e.path, method: e.method, age: fmt(e.queuedAt) })));
+      } catch {}
+    };
+    load();
+    const h = () => load();
+    window.addEventListener('boss-pos-outbox-updated', h);
+    return () => window.removeEventListener('boss-pos-outbox-updated', h);
+  }, [isSettingsOpen, pendingCount]);
 
   // A replay lost the race against another device (server 409 CONFLICT).
   const onSyncConflict = (e: Event) => {
@@ -1447,6 +1467,28 @@ export default function App() {
                     Clear queue
                   </button>
                 </div>
+                {pendingCount > 0 && outboxPreview.length > 0 && (
+                  <div className="rounded-xl border border-amber-800/30 bg-amber-950/20 overflow-hidden">
+                    <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 border-b border-amber-800/20">Queue — {pendingCount} pending</div>
+                    <div className="divide-y divide-white/5 max-h-32 overflow-y-auto">
+                      {outboxPreview.map((e, i) => (
+                        <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[10px] font-bold">
+                          <span className="text-zinc-300 truncate pr-2">{e.method} {e.path}</span>
+                          <span className="text-zinc-500 shrink-0">{e.age} ago</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => {
+                      const list = peekOutbox();
+                      if (!list.length) return;
+                      const kept = list.slice(1);
+                      try { localStorage.setItem('boss_pos_outbox', JSON.stringify(kept)); } catch {}
+                      try { window.dispatchEvent(new Event('boss-pos-outbox-updated')); } catch {}
+                      setPendingCount(kept.length);
+                      triggerToast('Dropped oldest queued change', 'info');
+                    }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Drop oldest</button>
+                  </div>
+                )}
                 <button onClick={handleExportData}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup

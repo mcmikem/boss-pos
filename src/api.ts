@@ -112,6 +112,8 @@ function saveOutbox(entries: OutboxEntry[]): void {
     localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries));
     try { window.dispatchEvent(new Event('boss-pos-outbox-updated')); } catch {}
   } catch {}
+  // Mirror to IndexedDB async (bypasses 5MB quota) — fire-and-forget
+  import('./utils/outboxIdb').then(m => m.idbOutboxSet(JSON.stringify(entries)).catch(()=>{})).catch(()=>{});
 }
 
 function enqueue(path: string, method: string, body: string): void {
@@ -133,6 +135,13 @@ export function outboxCount(): number {
   return getOutbox().length;
 }
 
+export async function outboxCountAsync(): Promise<number> {
+  try {
+    const m = await import('./utils/outboxIdb');
+    return await m.idbOutboxCount();
+  } catch { return outboxCount(); }
+}
+
 // Replay queued offline writes. Returns how many were flushed. On auth errors
 // the entry is kept so offline work is never silently lost — an expired token
 // is re-issued on the next online unlock, and the flush will then succeed.
@@ -145,12 +154,29 @@ export function peekOutbox(): OutboxEntry[] {
   return getOutbox();
 }
 
+export async function peekOutboxAsync(): Promise<OutboxEntry[]> {
+  try {
+    const m = await import('./utils/outboxIdb');
+    const j = await m.idbOutboxGet();
+    return JSON.parse(j);
+  } catch { return getOutbox(); }
+}
+
 export function clearOutbox(): void {
   saveOutbox([]);
+  import('./utils/outboxIdb').then(m => m.idbOutboxSet('[]').catch(()=>{})).catch(()=>{});
 }
 
 export async function flushOutbox(): Promise<number> {
-  const list = getOutbox();
+  // Prefer IndexedDB (quota-free) if available, else LS
+  let list: OutboxEntry[] = getOutbox();
+  try {
+    const m = await import('./utils/outboxIdb');
+    const j = await m.idbOutboxGet();
+    const idbList = JSON.parse(j) as OutboxEntry[];
+    if (idbList.length > list.length) list = idbList;
+    else if (idbList.length === list.length && idbList.length > 0) list = idbList;
+  } catch {}
   if (list.length === 0) return 0;
   // If there's no token (expired/cleared), don't burn through the queue with 401s — let the UI re-lock first.
   if (!getAuthToken()) {
