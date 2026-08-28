@@ -7,7 +7,47 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 const DATABASE_URL = process.env.DATABASE_URL;
-const sql = neon(DATABASE_URL, { connectionTimeoutMillis: 30000 });
+// Neon cold starts (free tier pauses after idle) can take 10-12s. The default
+// undici connect timeout is 10s, so the first query after idle would always
+// throw ConnectTimeoutError and the UI shows "Failed to save" for everything.
+// Use a 30s fetch timeout + 2 retries so cold starts succeed without the
+// client ever seeing a 500. The fetchFunction is per-request, so the
+// AbortSignal is fresh each time (not a stale signal from startup).
+const sql = neon(DATABASE_URL, {
+  fetchFunction: async (url, init) => {
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 30000);
+      try {
+        let signal = controller.signal;
+        if (init?.signal) {
+          try {
+            signal = AbortSignal.any
+              ? AbortSignal.any([init.signal, controller.signal])
+              : controller.signal;
+          } catch { signal = controller.signal; }
+        }
+        const res = await fetch(url, { ...init, signal });
+        clearTimeout(t);
+        return res;
+      } catch (err) {
+        clearTimeout(t);
+        const msg = String(err?.message || err);
+        const isTransient =
+          err?.name === 'AbortError' ||
+          /timeout|ConnectTimeout|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg);
+        if (isTransient && attempt < MAX_RETRIES) {
+          const delay = 900 * (attempt + 1) + Math.random() * 400;
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('unreachable fetch retry');
+  },
+});
 
 function asHandler(fn) {
   return (req, res, next) => fn(req, res, next).catch(next);
@@ -470,7 +510,25 @@ async function seedDatabase() {
     sales.map(s => ({ id: s.id, ordernumber: s.orderNumber, timestamp: s.timestamp, items: JSON.stringify(s.items), subtotal: s.subtotal, tax: s.tax, total: s.total, paymentmethod: s.paymentMethod, customername: s.customerName || null, discount: s.discount || null, notes: s.notes || null })));
 }
 
-let initPromise = initDB().then(() => ensureDefaultSettings()).then(() => seedDatabase()).catch(err => {
+async function initDBWithRetry() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await initDB();
+      return;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const transient = /timeout|ConnectTimeout|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg);
+      if (transient && attempt < 2) {
+        console.error(`DB init attempt ${attempt + 1} failed (${msg.slice(0, 120)}), retrying...`);
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+let initPromise = initDBWithRetry().then(() => ensureDefaultSettings()).then(() => seedDatabase()).catch(err => {
   console.error('Database initialization failed:', err);
 });
 
@@ -2030,5 +2088,16 @@ function mapMomoTransfer(r) {
     to: ['float', 'cash', 'owner'].includes(r.to_type) ? r.to_type : 'float', sentBy: r.sentby || '',
   };
 }
+
+// Ensure every uncaught API error is JSON (not Express' HTML), so the
+// till can surface "Database timeout, retry" instead of a generic wall of HTML.
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled API error:', err?.message || err);
+  if (res.headersSent) return;
+  const msg = String(err?.message || 'Server error');
+  // Connect timeouts are transient — tell the client to retry.
+  const transient = /timeout|ConnectTimeout|fetch failed/i.test(msg);
+  res.status(transient ? 503 : 500).json({ error: transient ? 'Database temporarily unavailable — please retry' : msg.slice(0, 300) });
+});
 
 export default app;

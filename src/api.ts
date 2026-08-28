@@ -9,6 +9,8 @@ const OUTBOX_KEY = 'boss_pos_outbox';
 // Bounded fetch: dead WiFi / no-internet Android WebViews can hang a plain
 // fetch() for minutes (navigator.onLine lies on old devices). Reject after
 // `ms` so callers fall through to cached data / offline mode quickly.
+// Cold Neon DBs need 10-12s to wake, so writes use 30s — otherwise the first
+// save after idle always timed out and showed "Failed to save" on every till.
 function fetchTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new TypeError('Network timeout')), ms);
@@ -18,6 +20,8 @@ function fetchTimeout(url: string, options: RequestInit, ms: number): Promise<Re
     );
   });
 }
+const WRITE_TIMEOUT_MS = 30000;
+const READ_TIMEOUT_MS = 15000;
 
 // Error that carries the HTTP status + server error code so callers can react
 // to specific failures (e.g. 409 CONFLICT from multi-device product edits).
@@ -148,7 +152,7 @@ export async function flushOutbox(): Promise<number> {
         method: entry.method,
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
         body: entry.body,
-      }, 15000);
+      }, WRITE_TIMEOUT_MS);
       if (res.ok || res.status === 404) {
         flushed++;
         continue;
@@ -182,7 +186,7 @@ export async function authVerify(pin: string): Promise<{ token: string; hasPin: 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pin }),
-  }, 12000);
+  }, WRITE_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Auth failed');
   setAuthToken(data.token);
@@ -196,7 +200,7 @@ export async function authVerify(pin: string): Promise<{ token: string; hasPin: 
 // Public pre-auth status: shop name + whether a PIN is set. Safe to call
 // before unlock because it exposes no financial data.
 export async function authStatus(): Promise<{ shopName: string; hasPin: boolean }> {
-  const res = await fetchTimeout(`${BASE}/api/auth/status`, {}, 12000);
+  const res = await fetchTimeout(`${BASE}/api/auth/status`, {}, READ_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Status failed');
   return { shopName: data.shopName || '', hasPin: !!data.hasPin };
@@ -207,7 +211,7 @@ export async function authSetPin(pin: string): Promise<{ hasPin: boolean; hash: 
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
     body: JSON.stringify({ pin }),
-  }, 12000);
+  }, WRITE_TIMEOUT_MS);
   if (!res.ok) throw new Error('Failed to save PIN');
   return res.json();
 }
@@ -218,7 +222,7 @@ export async function authMigratePin(hash: string): Promise<boolean> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
     body: JSON.stringify({ hash }),
-  }, 12000);
+  }, WRITE_TIMEOUT_MS);
   if (!res.ok) throw new Error('Failed to migrate PIN');
   return true;
 }
@@ -274,7 +278,7 @@ export async function revokeAllSessions(): Promise<boolean> {
   const res = await fetchTimeout(`${BASE}/api/auth/revoke-all`, {
     method: 'POST',
     headers: { Authorization: getAuthHeader() },
-  }, 12000);
+  }, WRITE_TIMEOUT_MS);
   if (!res.ok) throw new Error('Failed to log out all devices');
   setAuthToken(null);
   return true;
@@ -285,7 +289,7 @@ export async function nextOrderNumber(): Promise<string | null> {
     const res = await fetchTimeout(`${BASE}/api/orders/next`, {
       method: 'POST',
       headers: { Authorization: getAuthHeader() },
-    }, 12000);
+    }, WRITE_TIMEOUT_MS);
     if (res.ok) {
       const data = await res.json();
       // Keep the local offline fallback counter in sync so a later offline
@@ -341,7 +345,7 @@ const inFlightRefresh = new Set<string>();
 function refreshInBackground(path: string, ttlMs?: number): void {
   if (inFlightRefresh.has(path)) return;
   inFlightRefresh.add(path);
-  fetchTimeout(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } }, 12000)
+  fetchTimeout(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } }, READ_TIMEOUT_MS)
     .then(res => {
       if (!res.ok) return;
       return res.json().then(data => setCache(path, data, ttlMs)).catch(() => {});
@@ -405,11 +409,23 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     options = { ...options, body: JSON.stringify(parsed) };
   }
 
+  // Offline-first: if the device knows it's offline, queue immediately instead
+  // of burning 30s on a fetch that will timeout and then queue anyway.
+  if (!isRead && !navigator.onLine) {
+    const body = (options && (options.body as string)) || '';
+    enqueue(path, options?.method || 'POST', body);
+    try {
+      return JSON.parse(body) as T;
+    } catch {
+      return { success: true } as T;
+    }
+  }
+
   try {
     const res = await fetchTimeout(`${BASE}${path}`, {
       headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
       ...options,
-    }, 15000);
+    }, isRead ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
     if (!res.ok) {
       let message = `API error: ${res.status}`;
       let code: string | undefined;
@@ -452,8 +468,16 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     }
     // Offline / network failure: queue the write and treat it as done so the
     // optimistic UI state is kept. It replays when we're back online.
+    // 503/502/504 (and our 500 transient) from a cold Neon DB are also
+    // transient — queue them instead of showing "Failed to save" on every till.
     const body = (options && (options.body as string)) || '';
-    if (!navigator.onLine || err instanceof TypeError) {
+    const isTransientApiError =
+      err instanceof ApiError &&
+      (err.status === 502 ||
+        err.status === 503 ||
+        err.status === 504 ||
+        (err.status === 500 && /temporarily unavailable|Database temporarily/i.test(err.message)));
+    if (!navigator.onLine || err instanceof TypeError || isTransientApiError) {
       enqueue(path, options?.method || 'POST', body);
       try {
         return JSON.parse(body) as T;
@@ -556,7 +580,7 @@ export const sheetsApi = {
       res = await fetchTimeout(`${BASE}/api/sheets/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
-      }, 15000);
+      }, WRITE_TIMEOUT_MS);
     } catch (err) {
       throw new ApiError(err instanceof Error ? err.message : 'Network error', 0);
     }

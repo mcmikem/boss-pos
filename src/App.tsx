@@ -619,7 +619,12 @@ export default function App() {
     const stamped = { ...newProd, updatedAt: new Date().toISOString() };
     const prodWithIcon = enrichProductsWithIcons([stamped])[0];
     setProducts(prev => [prodWithIcon, ...prev]);
-    try { await productApi.create(stamped); } catch {
+    try {
+      const saved = await productApi.create(stamped);
+      if (saved?.updatedAt) {
+        setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, updatedAt: saved.updatedAt } : p));
+      }
+    } catch {
       setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
       triggerToast('Failed to save product — not added', 'error');
     }
@@ -642,7 +647,12 @@ export default function App() {
     };
     const prodWithIcon = enrichProductsWithIcons([stamped])[0];
     setProducts(prev => [prodWithIcon, ...prev]);
-    try { await productApi.create(stamped); } catch {
+    try {
+      const saved = await productApi.create(stamped);
+      if (saved?.updatedAt) {
+        setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, updatedAt: saved.updatedAt } : p));
+      }
+    } catch {
       setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
       triggerToast('Could not save item to the library right now', 'info');
     }
@@ -652,7 +662,12 @@ export default function App() {
     const prev = products.find(p => p.id === updatedProd.id);
     const stamped = { ...updatedProd, updatedAt: new Date().toISOString() };
     setProducts(list => list.map(p => p.id === stamped.id ? stamped : p));
-    try { await productApi.update(stamped); } catch (err) {
+    try {
+      const saved = await productApi.update(stamped);
+      if (saved?.updatedAt) {
+        setProducts(list => list.map(p => p.id === saved.id ? { ...p, updatedAt: saved.updatedAt } : p));
+      }
+    } catch (err) {
       if (err instanceof ApiError && err.code === 'CONFLICT') {
         // Another device saved a newer version. Pull the server copy so the
         // winner's row wins cleanly instead of silently keeping stale data.
