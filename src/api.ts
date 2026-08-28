@@ -143,8 +143,13 @@ export function outboxCount(): number {
 export async function flushOutbox(): Promise<number> {
   const list = getOutbox();
   if (list.length === 0) return 0;
+  // If there's no token (expired/cleared), don't burn through the queue with 401s — let the UI re-lock first.
+  if (!getAuthToken()) {
+    return 0;
+  }
   let flushed = 0;
   let conflicts = 0;
+  let sawAuthFailure = false;
   const remaining: OutboxEntry[] = [];
   for (const entry of list) {
     try {
@@ -155,6 +160,11 @@ export async function flushOutbox(): Promise<number> {
       }, WRITE_TIMEOUT_MS);
       if (res.ok || res.status === 404) {
         flushed++;
+        continue;
+      }
+      if (res.status === 401) {
+        sawAuthFailure = true;
+        remaining.push(entry);
         continue;
       }
       if (res.status === 409) {
@@ -171,6 +181,10 @@ export async function flushOutbox(): Promise<number> {
     }
   }
   saveOutbox(remaining);
+  if (sawAuthFailure) {
+    setAuthToken(null);
+    try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+  }
   if (flushed > 0) clearRelatedCaches('/api');
   if (conflicts > 0) {
     try {
