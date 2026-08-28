@@ -797,6 +797,7 @@ export const auditApi = {
 
 export const backupsApi = {
   latest: () => api<{ createdAt: string | null }>('/api/backups/latest', { fresh: true }),
+  data: () => api<{ data: Record<string, unknown> | null }>('/api/backups/data', { fresh: true }),
   run: () => api<{ success: boolean }>('/api/backups/run', { method: 'POST' }),
 };
 

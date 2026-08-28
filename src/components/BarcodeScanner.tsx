@@ -48,7 +48,53 @@ export default function BarcodeScanner({ onScan, isOpen, onClose }: BarcodeScann
       }
     } catch {}
 
+    // Prefer native BarcodeDetector (fast, no wasm) if available
+    if ('BarcodeDetector' in window) {
+      try {
+        const formats = await (window as unknown as { BarcodeDetector: { getSupportedFormats: () => Promise<string[]> } }).BarcodeDetector.getSupportedFormats().catch(() => ['ean_13','ean_8','code_128','qr_code']);
+        if (formats.length) {
+          startNativeDetector();
+          return;
+        }
+      } catch {}
+    }
     startQuagga();
+  };
+
+  const startNativeDetector = async () => {
+    if (!scannerRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.style.width = '100%';
+      video.style.height = '100%';
+      video.style.objectFit = 'cover';
+      scannerRef.current.innerHTML = '';
+      scannerRef.current.appendChild(video);
+      await video.play();
+      const Detector = (window as unknown as { BarcodeDetector: new (opts: unknown) => { detect: (v: HTMLVideoElement) => Promise<{ rawValue: string }[]> } }).BarcodeDetector;
+      const detector = new Detector({ formats: ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','codabar'] });
+      const tick = async () => {
+        if (!isOpen || showManual || !video.srcObject) return;
+        try {
+          const codes = await detector.detect(video);
+          if (codes[0]?.rawValue) {
+            stream.getTracks().forEach(t => t.stop());
+            onScan(codes[0].rawValue);
+            return;
+          }
+        } catch {}
+        requestAnimationFrame(tick);
+      };
+      tick();
+      // Store for stop
+      (scannerRef.current as unknown as { _stream: MediaStream })._stream = stream;
+    } catch (e) {
+      startQuagga();
+    }
   };
 
   const startQuagga = () => {
@@ -110,6 +156,12 @@ export default function BarcodeScanner({ onScan, isOpen, onClose }: BarcodeScann
       detectedHandlerRef.current = null;
     }
     try { Quagga.stop(); } catch {}
+    try {
+      const el = scannerRef.current as unknown as { _stream?: MediaStream };
+      if (el?._stream) { el._stream.getTracks().forEach(t => t.stop()); delete el._stream; }
+      const v = scannerRef.current?.querySelector('video') as HTMLVideoElement | null;
+      if (v?.srcObject) (v.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+    } catch {}
   };
 
   const toggleTorch = async () => {

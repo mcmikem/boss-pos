@@ -1981,34 +1981,40 @@ async function readSettingValue(key) {
   } catch { return null; }
 }
 
+const sheetRetryQueue = [];
+let sheetRetryTimer = null;
 async function pushToSheet(type, data) {
   try {
     const url = await readSettingValue('sheetsUrl');
     if (!url || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    let ok = false;
-    let err = '';
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, data }),
-        signal: controller.signal,
-      });
-      const raw = await r.text().catch(() => '');
-      const ct = r.headers.get('content-type') || '';
-      if (r.ok && ct.includes('application/json')) {
-        let j = null;
-        try { j = JSON.parse(raw); } catch {}
-        ok = !!j && (j.ok === true || j.success === true);
+    const sendOne = async (t, d) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      let ok = false;
+      let err = '';
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: t, data: d }),
+          signal: controller.signal,
+        });
+        const raw = await r.text().catch(() => '');
+        const ct = r.headers.get('content-type') || '';
+        if (r.ok && ct.includes('application/json')) {
+          let j = null;
+          try { j = JSON.parse(raw); } catch {}
+          ok = !!j && (j.ok === true || j.success === true);
+        }
+        if (!ok) err = (raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || `HTTP ${r.status}`;
+      } catch (e) {
+        err = (e && e.name === 'AbortError') ? 'timeout' : ((e && e.message) || 'network error');
+      } finally {
+        clearTimeout(timer);
       }
-      if (!ok) err = (raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || `HTTP ${r.status}`;
-    } catch (e) {
-      err = (e && e.name === 'AbortError') ? 'timeout' : ((e && e.message) || 'network error');
-    } finally {
-      clearTimeout(timer);
-    }
+      return { ok, err };
+    };
+    const { ok, err } = await sendOne(type, data);
     // Persist the outcome so the Settings screen can show "sheet last synced OK"
     // or surface the exact failure with a Retry. Never throws to the caller —
     // sheets sync must never break the API.
@@ -2016,9 +2022,39 @@ async function pushToSheet(type, data) {
       await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_ok','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
       await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_at', ${String(Date.now())}) ON CONFLICT (key) DO UPDATE SET value=${String(Date.now())}`;
       if (err) await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_err','') ON CONFLICT (key) DO UPDATE SET value=''`;
+      // Retry spool on success (best-effort, memory + DB queue)
+      if (sheetRetryQueue.length) {
+        const q = [...sheetRetryQueue];
+        sheetRetryQueue.length = 0;
+        for (const it of q) {
+          const r2 = await sendOne(it.type, it.data);
+          if (!r2.ok) sheetRetryQueue.push(it);
+        }
+        if (sheetRetryQueue.length) {
+          const msg = `sheet retry: ${sheetRetryQueue.length} pending`;
+          await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_err', ${msg}) ON CONFLICT (key) DO UPDATE SET value=${msg}`;
+        }
+      }
     } else if (err) {
       const msg = `${type} failed: ${err}`.slice(0, 300);
       await sql`INSERT INTO settings (key,value) VALUES ('sheet_last_err', ${msg}) ON CONFLICT (key) DO UPDATE SET value=${msg}`;
+      // Spool for retry (keep last 20)
+      sheetRetryQueue.push({ type, data, at: Date.now() });
+      if (sheetRetryQueue.length > 20) sheetRetryQueue.shift();
+      if (!sheetRetryTimer) {
+        sheetRetryTimer = setTimeout(async () => {
+          sheetRetryTimer = null;
+          if (!sheetRetryQueue.length) return;
+          const url2 = await readSettingValue('sheetsUrl');
+          if (!url2) return;
+          const q = [...sheetRetryQueue];
+          sheetRetryQueue.length = 0;
+          for (const it of q) {
+            const r2 = await sendOne(it.type, it.data);
+            if (!r2.ok) sheetRetryQueue.push(it);
+          }
+        }, 60000);
+      }
     }
   } catch { /* best effort — sheets sync must never break the API */ }
 }
@@ -2059,6 +2095,12 @@ async function maybeAutoBackup(force = false) {
 app.get('/api/backups/latest', asHandler(async (req, res) => {
   const rows = await sql`SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1`;
   res.json({ createdAt: rows.length ? rows[0].created_at : null });
+}));
+
+app.get('/api/backups/data', asHandler(async (req, res) => {
+  const rows = await sql`SELECT data FROM backups ORDER BY created_at DESC LIMIT 1`;
+  if (!rows.length) return res.json({ data: null });
+  res.json({ data: rows[0].data });
 }));
 
 // Manual trigger — safe to hit with a browser; guarded so it only fires once/day.

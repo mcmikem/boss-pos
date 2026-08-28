@@ -9,6 +9,9 @@ import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { verifyPinAgainstHash } from './utils/crypto';
 import { downloadBlob } from './utils/download';
+import { printDailyClose } from './utils/dailyClose';
+import { initSentry } from './utils/sentry';
+import { logPriceChange } from './utils/priceHistory';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import Sales from './components/Sales';
@@ -85,6 +88,7 @@ export default function App() {
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [showAudit, setShowAudit] = useState(false);
+  const [auditFilter, setAuditFilter] = useState('');
   const [updatingApp, setUpdatingApp] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
@@ -181,6 +185,7 @@ export default function App() {
     }
   };
 
+  useEffect(() => { initSentry(); }, []);
   // Boot: try open-mode auth, migrate an existing client PIN, then load data.
   // Offline-first: old Androids report navigator.onLine=true on dead WiFi, so we
   // NEVER trust it to decide the offline path. If this device has been used
@@ -829,6 +834,7 @@ export default function App() {
 
   const handleUpdateProduct = async (updatedProd: Product) => {
     const prev = products.find(p => p.id === updatedProd.id);
+    if (prev && prev.price !== updatedProd.price) logPriceChange(prev.id, prev.name, prev.price, updatedProd.price);
     const stamped = { ...updatedProd, updatedAt: new Date().toISOString() };
     setProducts(list => list.map(p => p.id === stamped.id ? stamped : p));
     try {
@@ -1598,6 +1604,20 @@ export default function App() {
                     {reconcileResult.negativeStock.length===0 && reconcileResult.totalMismatches===0 && <div className="text-emerald-300">No gaps</div>}
                   </div>
                 )}
+                <button onClick={() => printDailyClose(new Date().toISOString().slice(0,10), sales, expenses, products)}
+                  className="w-full h-10 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20">
+                  Print Daily Close (PDF)
+                </button>
+                <button onClick={async () => {
+                  try {
+                    const b = await backupsApi.data();
+                    const curProds = products.length;
+                    const backupProds = (b.data as unknown as { products?: unknown[] })?.products?.length ?? 0;
+                    const curSales = sales.length;
+                    const backupSales = (b.data as unknown as { sales?: unknown[] })?.sales?.length ?? 0;
+                    triggerToast(`Backup diff — Products: ${curProds} now vs ${backupProds} backup, Sales: ${curSales} vs ${backupSales}`, 'info');
+                  } catch { triggerToast('Backup diff failed', 'error'); }
+                }} className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40">Compare with last backup</button>
                 <button onClick={handleExportData}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup
@@ -1638,21 +1658,24 @@ export default function App() {
                   {showAudit ? 'Hide' : 'View'} recent activity ({auditEntries.length})
                 </button>
                 {showAudit && (
-                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                    {auditEntries.map(entry => (
-                      <div key={entry.id} className="flex items-start justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
-                        <div className="min-w-0">
-                          <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider truncate">{entry.action}</p>
-                          <p className="text-[9px] text-zinc-500 font-bold truncate">{entry.detail}</p>
+                  <div className="space-y-2">
+                    <input type="text" value={auditFilter} onChange={e=>setAuditFilter(e.target.value)} placeholder="Filter by action or detail..." className="w-full h-9 bg-[#0A0A0A] border border-white/5 text-xs px-3 rounded-xl text-white placeholder-zinc-600 focus:border-gold-brand outline-none" />
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                      {auditEntries.filter(e=> !auditFilter || e.action.toLowerCase().includes(auditFilter.toLowerCase()) || e.detail.toLowerCase().includes(auditFilter.toLowerCase())).map(entry => (
+                        <div key={entry.id} className="flex items-start justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider truncate">{entry.action}</p>
+                            <p className="text-[9px] text-zinc-500 font-bold truncate">{entry.detail}</p>
+                          </div>
+                          <span className="text-[9px] text-zinc-600 font-bold shrink-0">
+                            {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                        <span className="text-[9px] text-zinc-600 font-bold shrink-0">
-                          {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    ))}
-                    {auditEntries.length === 0 && (
-                      <p className="text-[10px] text-zinc-600 font-bold uppercase text-center py-2">No activity recorded yet.</p>
-                    )}
+                      ))}
+                      {auditEntries.filter(e=> !auditFilter || e.action.toLowerCase().includes(auditFilter.toLowerCase()) || e.detail.toLowerCase().includes(auditFilter.toLowerCase())).length === 0 && (
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase text-center py-2">No matching activity</p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
