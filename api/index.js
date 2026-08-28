@@ -1219,18 +1219,38 @@ app.delete('/api/expenses/:id', asHandler(async (req, res) => {
 app.get('/api/settings', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM settings`;
   const obj = {};
+  const BLOCKED_GET = new Set([
+    'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
+    'clientWriteId', 'deviceId',
+  ]);
   for (const r of rows) {
+    if (BLOCKED_GET.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
     try { obj[r.key] = JSON.parse(r.value); } catch { obj[r.key] = r.value; }
   }
-  const hasPin = !!obj.pinHash;
-  delete obj.pinHash;
+  // hasPin is derived, not stored as a settings key in the response
+  const pinRows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
+  const hasPin = !!(pinRows.length && pinRows[0].value);
   obj.hasPin = hasPin;
   res.json(obj);
 }));
 
 app.put('/api/settings', asHandler(async (req, res) => {
-  for (const [k, v] of Object.entries(req.body)) {
-    await sql`INSERT INTO settings (key,value) VALUES (${k},${typeof v === 'string' ? v : JSON.stringify(v)}) ON CONFLICT (key) DO UPDATE SET value = ${typeof v === 'string' ? v : JSON.stringify(v)}`;
+  // Allowlist so internal keys (orderCounter, authSecret, migration flags,
+  // and the client's injected clientWriteId/deviceId) never get clobbered
+  // by a stale boot payload echo. Sequential inserts were also slow enough
+  // on cold DBs to hit Vercel's 30s maxDuration.
+  const BLOCKED = new Set([
+    'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
+    'clientWriteId', 'deviceId', 'hasPin',
+  ]);
+  const rows = Object.entries(req.body || {})
+    .filter(([k, v]) => !BLOCKED.has(k) && !k.startsWith('sheet_last_') && !k.endsWith('Migrated') && k !== 'catalogSynced' && v !== undefined)
+    .map(([k, v]) => ({
+      key: String(k).slice(0, 100),
+      value: typeof v === 'string' ? v.slice(0, 10000) : (JSON.stringify(v) ?? 'null').slice(0, 10000),
+    }));
+  if (rows.length > 0) {
+    await batchUpsert('settings', 'key', ['key', 'value'], rows);
   }
   // Deliberately NOT audited: the settings sheet debounces a PUT on every
   // pause, which would drown the activity log. Security-relevant changes (PIN,
@@ -1496,11 +1516,16 @@ app.post('/api/momo-transfers', asHandler(async (req, res) => {
 app.get('/api/boot', asHandler(async (req, res) => {
   const settingsRows = await sql`SELECT * FROM settings`;
   const obj = {};
+  const BLOCKED_BOOT = new Set([
+    'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
+    'clientWriteId', 'deviceId',
+  ]);
   for (const r of settingsRows) {
+    if (BLOCKED_BOOT.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
     try { obj[r.key] = JSON.parse(r.value); } catch { obj[r.key] = r.value; }
   }
-  const hasPin = !!obj.pinHash;
-  delete obj.pinHash;
+  const pinRows = await sql`SELECT 1 FROM settings WHERE key='pinHash' AND value <> ''`;
+  const hasPin = pinRows.length > 0;
   obj.hasPin = hasPin;
 
   const BOOT_SALE_CAP = 2000;

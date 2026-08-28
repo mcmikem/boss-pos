@@ -391,12 +391,40 @@ export default function App() {
   // Persist settings (skip the very first render so we never clobber server
   // values with defaults before the real settings finish loading). Debounced so
   // typing in the shop-name field doesn't fire a PUT (DB write + cache clear)
-  // on every keystroke.
+  // on every keystroke. Also diff so boot-pull doesn't echo back the same
+  // payload and create a constant PUT loop (the source of "constantly failed
+  // to save settings").
+  const lastSentSettingsRef = useRef<string>('');
   useEffect(() => {
     if (!readyRef.current) return;
-    const { hasPin: _hp, ...toSend } = settings;
+    const ALLOWED = new Set([
+      'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate',
+      'categories','expenseCategories','showTailoring','showDesign','sheetsUrl','eodCapital',
+    ]);
+    const filtered: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
+      if (k === 'hasPin' || k === 'clientWriteId' || k === 'deviceId') continue;
+      if (!ALLOWED.has(k)) continue;
+      filtered[k] = v;
+    }
+    const serialized = JSON.stringify(filtered);
+    if (serialized === lastSentSettingsRef.current) return;
+    // Don't echo the just-booted value back immediately — wait for a user edit
+    if (lastSentSettingsRef.current === '' ) {
+      lastSentSettingsRef.current = serialized;
+      return;
+    }
     const t = setTimeout(() => {
-      settingsApi.update(toSend).catch(() => triggerToast('Failed to save settings', 'error'));
+      lastSentSettingsRef.current = serialized;
+      settingsApi.update(filtered as unknown as StoreSettings).catch((err) => {
+        const msg = err instanceof ApiError ? err.message : String(err?.message || err);
+        // 401 means token expired — prompt re-login, don't spam toast
+        if (err instanceof ApiError && err.status === 401) {
+          triggerToast('Session expired — re-enter PIN to save settings', 'error');
+        } else {
+          triggerToast(`Failed to save settings: ${msg.slice(0, 80)}`, 'error');
+        }
+      });
     }, 600);
     return () => clearTimeout(t);
   }, [settings]);
