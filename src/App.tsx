@@ -528,42 +528,42 @@ export default function App() {
   }, [authState]);
 
   const handleUnlock = async (pin: string) => {
-    const local = localStorage.getItem('boss_pos_pin');
     const cachedSettings = readCached<StoreSettings>('/api/settings');
     if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
-    if (local && !local.startsWith('fb_') && await verifyPinAgainstHash(pin, local)) {
-      // Local hash matches: unlock instantly from cache. If we have no token
-      // (idle-lock expired, or 7-day TTL), mint a fresh one in background so
-      // the outbox flush that runs on authState=ready doesn't 401-loop.
-      setAuthState('ready');
-      fetchAllData().catch(() => {});
-      if (!getAuthToken() && navigator.onLine) {
-        authVerify(pin).catch(() => {});
-      }
-      return;
-    }
-    try {
-      const data = await authVerify(pin);
-      localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
-      setAuthState('ready');
-      fetchAllData().catch(() => {});
-    } catch (err) {
-      // Offline / flaky network (navigator.onLine is unreliable on some Androids,
-      // so we can't gate on it): fall back to the locally-stored hash so sales
-      // can still run. Only possible once this device has unlocked online before
-      // (authVerify caches the hash to boss_pos_pin).
-      const localHash = localStorage.getItem('boss_pos_pin');
-      if (localHash && !localHash.startsWith('fb_')) {
-        if (await verifyPinAgainstHash(pin, localHash)) {
-          setAuthState('ready');
-          fetchAllData().catch(() => {});
-          // Even on offline fallback, try to refresh token if we later come online
-          if (!getAuthToken() && navigator.onLine) authVerify(pin).catch(() => {});
-          return;
+    // Online: always try server first so we mint a fresh token (fixes 7-day TTL
+    // and revoke-all invalid token → every sale 401 → immediate re-lock loop).
+    // Only fall back to local hash if server is unreachable.
+    if (navigator.onLine) {
+      try {
+        const data = await authVerify(pin);
+        localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+        setAuthState('ready');
+        fetchAllData().catch(() => {});
+        return;
+      } catch (err) {
+        // Network failure — fall through to local hash fallback so sales still work offline.
+        const msg = String((err as Error)?.message || '');
+        const isNetwork = /Network timeout|fetch failed|Failed to fetch/i.test(msg);
+        if (!isNetwork) {
+          // Wrong PIN or server rejected — don't fall back to stale local hash.
+          throw err;
         }
       }
-      throw err;
     }
+    // Offline or server unreachable: verify against local hash.
+    const local = localStorage.getItem('boss_pos_pin');
+    if (local && !local.startsWith('fb_') && await verifyPinAgainstHash(pin, local)) {
+      setAuthState('ready');
+      fetchAllData().catch(() => {});
+      // If we unlocked offline, try to mint token in background once back online.
+      if (navigator.onLine) authVerify(pin).catch(() => {});
+      return;
+    }
+    // No local hash or mismatch — try server one last time (will throw Wrong PIN).
+    const data = await authVerify(pin);
+    localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+    setAuthState('ready');
+    fetchAllData().catch(() => {});
   };
 
   const handleSetPin = async (pin: string) => {
