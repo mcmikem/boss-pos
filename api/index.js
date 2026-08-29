@@ -5,6 +5,11 @@ import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafe
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+app.use((req, res, next) => {
+  req.id = randomUUID().slice(0, 8);
+  res.setHeader('X-Request-Id', req.id);
+  next();
+});
 
 const DATABASE_URL = process.env.DATABASE_URL;
 // Neon cold starts (free tier pauses after idle) can take 10-12s. The default
@@ -183,6 +188,9 @@ async function initDB() {
   )`;
   await sql`CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY, at TEXT NOT NULL, action TEXT NOT NULL, detail TEXT DEFAULT ''
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS migrations (
+    id TEXT PRIMARY KEY, applied_at TEXT NOT NULL
   )`;
   // updated_at enables multi-device conflict detection (last-write-wins + warn),
   // deleted is a tombstone so offline deletes/updates can't resurrect rows.
@@ -2280,13 +2288,14 @@ function mapMomoTransfer(r) {
 
 // Ensure every uncaught API error is JSON (not Express' HTML), so the
 // till can surface "Database timeout, retry" instead of a generic wall of HTML.
-app.use((err, _req, res, _next) => {
-  console.error('Unhandled API error:', err?.message || err);
+app.use((err, req, res, _next) => {
+  const id = req.id || '-';
+  console.error(`[${id}] Unhandled API error:`, err?.message || err);
   if (res.headersSent) return;
   const msg = String(err?.message || 'Server error');
-  // Connect timeouts are transient — tell the client to retry.
   const transient = /timeout|ConnectTimeout|fetch failed/i.test(msg);
-  res.status(transient ? 503 : 500).json({ error: transient ? 'Database temporarily unavailable — please retry' : msg.slice(0, 300) });
+  res.setHeader('X-Request-Id', id);
+  res.status(transient ? 503 : 500).json({ error: transient ? 'Database temporarily unavailable — please retry' : msg.slice(0, 300), traceId: id });
 });
 
 export default app;

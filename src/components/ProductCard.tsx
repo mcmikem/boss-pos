@@ -74,6 +74,8 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         )}
         {isOutOfStock ? (
           <div className="absolute top-2 right-2 bg-rose-950/90 backdrop-blur-sm text-rose-300 text-[10px] font-black px-2.5 py-1 rounded-lg border border-rose-800/50 uppercase tracking-wider">SOLD OUT</div>
+        ) : cartItem && !product.isService ? (
+          <div className="absolute top-2 right-2 bg-gold-brand/90 backdrop-blur-sm text-black text-[10px] font-black px-2.5 py-1 rounded-lg border border-gold-brand uppercase tracking-wider">RESERVED {cartItem.qty}/{product.stockQty}</div>
         ) : isLowStock ? (
           <div className="absolute top-2 right-2 bg-amber-950/90 backdrop-blur-sm text-amber-300 text-[10px] font-black px-2.5 py-1 rounded-lg border border-amber-800/50 uppercase tracking-wider animate-pulse">LOW ({product.stockQty})</div>
         ) : (
