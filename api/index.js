@@ -1344,7 +1344,28 @@ app.put('/api/settings', asHandler(async (req, res) => {
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
     'clientWriteId', 'deviceId', 'hasPin',
   ]);
-  const rows = Object.entries(req.body || {})
+  let body = req.body || {};
+  // Guard: never allow a stale till to truncate categories/expenseCategories to 1-2 items.
+  // Merge with existing + product categories if incoming is suspiciously small.
+  if (Array.isArray(body.categories) && body.categories.length < 4) {
+    try {
+      const existing = await sql`SELECT value FROM settings WHERE key='categories'`;
+      const prodCats = await sql`SELECT DISTINCT category FROM products WHERE deleted = false`;
+      const existingCats = existing.length ? JSON.parse(existing[0].value) : [];
+      const prodCatList = prodCats.map(r => r.category).filter(Boolean);
+      const merged = Array.from(new Set([...(Array.isArray(existingCats) ? existingCats : []), ...prodCatList, ...body.categories])).filter(Boolean);
+      if (merged.length > body.categories.length) body = { ...body, categories: merged };
+    } catch {}
+  }
+  if (Array.isArray(body.expenseCategories) && body.expenseCategories.length < 2) {
+    try {
+      const existing = await sql`SELECT value FROM settings WHERE key='expenseCategories'`;
+      const existingExp = existing.length ? JSON.parse(existing[0].value) : [];
+      const mergedExp = Array.from(new Set([...(Array.isArray(existingExp) ? existingExp : []), ...body.expenseCategories])).filter(Boolean);
+      if (mergedExp.length > body.expenseCategories.length) body = { ...body, expenseCategories: mergedExp };
+    } catch {}
+  }
+  const rows = Object.entries(body)
     .filter(([k, v]) => !BLOCKED.has(k) && !k.startsWith('sheet_last_') && !k.endsWith('Migrated') && k !== 'catalogSynced' && v !== undefined)
     .map(([k, v]) => ({
       key: String(k).slice(0, 100),

@@ -322,37 +322,49 @@ export default function App() {
     };
   }, [authState, applyBootData]);
 
-  // SSE instant sync — other tills push 'change' via /api/events broadcast
+  // SSE instant sync — fetch streaming with Authorization header (no ?token= leak)
   useEffect(() => {
     if (authState !== 'ready') return;
     const token = getAuthToken();
-    if (!token || typeof EventSource === 'undefined') return;
-    let es: EventSource | null = null;
+    if (!token) return;
     let closed = false;
-    const connect = () => {
+    let controller: AbortController | null = null;
+    const connect = async () => {
       if (closed) return;
+      controller = new AbortController();
       try {
-        es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
-        es.onmessage = () => {
-          // Debounce burst writes (multiple SSE in quick succession)
-          setTimeout(async () => {
-            try {
-              const d = await bootApi.get();
-              applyBootData(d);
-            } catch {}
-          }, 300);
-        };
-        es.onerror = () => {
-          try { es?.close(); } catch {}
-          // Reconnect after 5s (Vercel closes after 25s anyway)
-          setTimeout(() => { if (!closed) connect(); }, 5000);
-        };
+        const res = await fetch('/api/events', {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error('sse failed');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (!closed) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          for (const part of parts) {
+            if (part.includes('data:')) {
+              // Debounce burst
+              setTimeout(async () => {
+                try { const d = await bootApi.get(); applyBootData(d); } catch {}
+              }, 300);
+            }
+          }
+        }
       } catch {
-        // Fallback stays on 30s poll above
+        // Fallback stays on 30s poll above; reconnect after 5s
+        if (!closed) setTimeout(connect, 5000);
+        return;
       }
+      if (!closed) setTimeout(connect, 1000);
     };
     connect();
-    return () => { closed = true; try { es?.close(); } catch {} };
+    return () => { closed = true; try { controller?.abort(); } catch {} };
   }, [authState, applyBootData]);
 
   // PWA install prompt capture

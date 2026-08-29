@@ -141,29 +141,27 @@ export default function Sales({
     setVisibleCount(30);
   }, [selectedCategory, searchQuery]);
 
+  const byCategory = useMemo(() => products.filter(p => selectedCategory === 'All' || p.category === selectedCategory), [products, selectedCategory]);
+  const fuse = useMemo(() => new Fuse(byCategory, {
+    keys: [
+      { name: 'name', weight: 0.6 },
+      { name: 'category', weight: 0.2 },
+      { name: 'barcode', weight: 0.1 },
+      { name: 'imei', weight: 0.1 },
+    ],
+    threshold: 0.38,
+    distance: 80,
+    includeScore: true,
+  }), [byCategory]);
   const filteredProducts = useMemo(() => {
-    const byCategory = products.filter(p => selectedCategory === 'All' || p.category === selectedCategory);
     if (!searchQuery.trim()) return byCategory;
-    // Fuse fuzzy search on name/category/barcode/imei — forgiving for typos on small phone keyboards
-    const fuse = new Fuse(byCategory, {
-      keys: [
-        { name: 'name', weight: 0.6 },
-        { name: 'category', weight: 0.2 },
-        { name: 'barcode', weight: 0.1 },
-        { name: 'imei', weight: 0.1 },
-      ],
-      threshold: 0.38,
-      distance: 80,
-      includeScore: true,
-    });
     const res = fuse.search(searchQuery.trim());
-    // Fallback to simple includes if fuse finds nothing (very short queries)
     if (res.length === 0) {
       const q = searchQuery.toLowerCase();
       return byCategory.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
     }
     return res.map(r => r.item);
-  }, [products, selectedCategory, searchQuery]);
+  }, [byCategory, fuse, searchQuery]);
 
   const handleAddToCart = (product: Product) => {
     if (product.stockQty <= 0 && !product.isService) {
