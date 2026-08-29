@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
+import { daysOverdue, ageingBucket } from '../utils/creditAge';
 
 interface CategoryRegisterProps {
   segments: string[];
@@ -614,13 +615,16 @@ export default function CategoryRegister({
           </div>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {openCredits.map(c => (
+            {openCredits.map(c => {
+              const d = daysOverdue(c.date);
+              const buck = ageingBucket(d);
+              return (
               <div key={c.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-sm font-black text-white truncate">{c.customerName}</p>
+                    <p className="text-sm font-black text-white truncate flex items-center gap-1.5">{c.customerName} {d>7 && <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${buck==='overdue' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>{d}d overdue</span>}</p>
                     <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">
-                      {formatDay(c.date)} • {c.qty}× {c.item}
+                      {formatDay(c.date)} • {c.qty}× {c.item} • {d}d ago
                     </p>
                   </div>
                   <div className="text-right shrink-0">
@@ -633,7 +637,7 @@ export default function CategoryRegister({
                   Record Payment
                 </button>
               </div>
-            ))}
+            )})}
           </div>
         )}
       </section>

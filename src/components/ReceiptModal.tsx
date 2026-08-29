@@ -1,7 +1,8 @@
-import { X, Printer, Share2, Copy, Check } from 'lucide-react';
+import { X, Printer, Share2, Copy, Check, Bluetooth } from 'lucide-react';
 import { useState } from 'react';
 import type { Sale, StoreSettings } from '../types';
 import { unitLabel } from '../utils/units';
+import { printViaBluetooth } from '../utils/bluetoothPrint';
 
 interface ReceiptModalProps {
   sale: Sale;
@@ -145,6 +146,16 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     }
   };
 
+  const handleBluetooth = async () => {
+    try {
+      const ok = await printViaBluetooth(text);
+      if (ok) triggerToast('Sent to Bluetooth printer', 'success');
+      else triggerToast('Bluetooth printer not found', 'error');
+    } catch (e) {
+      triggerToast((e as Error).message || 'Bluetooth print failed', 'error');
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[110] flex items-center justify-center p-4">
       <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] flex flex-col">
@@ -188,14 +199,18 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           <div className="text-center text-[10px] text-zinc-600">Thank you for your business!</div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 mt-4">
+        <div className="grid grid-cols-4 gap-2 mt-4">
           <button onClick={handlePrint}
             className="h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
             <Printer className="w-3.5 h-3.5" /> Print
           </button>
+          <button onClick={handleBluetooth}
+            className="h-11 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
+            <Bluetooth className="w-3.5 h-3.5" /> BT
+          </button>
           <button onClick={handleWhatsApp}
             className="h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
-            <Share2 className="w-3.5 h-3.5" /> WhatsApp
+            <Share2 className="w-3.5 h-3.5" /> WA
           </button>
           <button onClick={handleCopy}
             className="h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">

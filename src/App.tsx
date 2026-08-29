@@ -917,10 +917,21 @@ export default function App() {
 
   // Ask for the PIN before destructive actions (refund / delete a sale). If no
   // PIN is set yet, skip the prompt.
-  const requirePin = async (message: string): Promise<boolean> => {
+  const requirePin = async (message: string, managerOnly = false): Promise<boolean> => {
     if (!settings.hasPin) return true;
+    const managerPin = localStorage.getItem('boss_pos_manager_pin');
+    if (managerOnly && managerPin && /^\d{4}$/.test(managerPin)) {
+      const pin = window.prompt(message);
+      if (!pin) return false;
+      if (pin === managerPin) return true;
+      // Allow main PIN as fallback if manager not set correctly
+      const mainHash = localStorage.getItem('boss_pos_pin');
+      if (mainHash && !mainHash.startsWith('fb_') && await verifyPinAgainstHash(pin, mainHash)) return true;
+      triggerToast('Wrong manager PIN — action cancelled', 'error');
+      return false;
+    }
     const hash = localStorage.getItem('boss_pos_pin');
-    if (!hash || hash.startsWith('fb_')) return true; // can't verify offline — trust this device
+    if (!hash || hash.startsWith('fb_')) return true;
     const pin = window.prompt(message);
     if (!pin) return false;
     if (await verifyPinAgainstHash(pin, hash)) return true;
@@ -928,11 +939,11 @@ export default function App() {
     return false;
   };
 
-  // Permanently delete a wrong order: PIN + confirm, stock goes back in.
+  // Permanently delete a wrong order: manager PIN + confirm, stock goes back in.
   const handleVoidSale = async (saleId: string) => {
     const sale = sales.find(s => s.id === saleId);
     if (!sale || sale.refunded) return;
-    if (!(await requirePin(`Enter PIN to delete ${sale.orderNumber}:`))) return;
+    if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
     if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)})? Stock goes back in.`)) return;
     setSales(prev => prev.filter(s => s.id !== saleId));
     setProducts(prev => prev.map(p => {
@@ -954,7 +965,7 @@ export default function App() {
   const handleRefundSale = async (saleId: string) => {
     const saleToRefund = sales.find(s => s.id === saleId);
     if (!saleToRefund || saleToRefund.refunded) return;
-    if (!(await requirePin(`Enter PIN to refund ${saleToRefund.orderNumber}:`))) return;
+    if (!(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
@@ -1527,6 +1538,18 @@ export default function App() {
                   )}
                 </div>
                 <p className="text-[10px] text-zinc-600">App locks automatically after 10 minutes idle. PIN is required on load.</p>
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    const m = prompt(localStorage.getItem('boss_pos_manager_pin') ? 'Enter new MANAGER 4-digit PIN:' : 'Set MANAGER 4-digit PIN (for voids/refunds):');
+                    if (m && /^\d{4}$/.test(m)) {
+                      try { localStorage.setItem('boss_pos_manager_pin', m); } catch {}
+                      try { await fetch('/api/settings', { method:'PUT', headers:{'Content-Type':'application/json', Authorization: `Bearer ${getAuthToken()}`}, body: JSON.stringify({ managerPin: m }) }); } catch {}
+                      triggerToast('Manager PIN set', 'success');
+                    } else if (m) triggerToast('PIN must be 4 digits', 'error');
+                  }} className="flex-1 h-10 bg-amber-950/30 border border-amber-800/40 text-amber-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-amber-950/50">Set Manager PIN</button>
+                  {localStorage.getItem('boss_pos_manager_pin') && <button onClick={()=>{ localStorage.removeItem('boss_pos_manager_pin'); triggerToast('Manager PIN removed — staff PIN now used for voids', 'info'); }} className="h-10 px-3 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-xl text-[10px] font-bold uppercase">Clear</button>}
+                </div>
+                <p className="text-[10px] text-zinc-600">Voids/refunds need manager PIN if set, else staff PIN. Set a different 4-digit for managers.</p>
                 <button onClick={handleRevokeAll}
                   className="w-full h-10 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
                   Log out all devices
