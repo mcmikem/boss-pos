@@ -38,6 +38,12 @@ const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Ren
 
 const IDLE_LOCK_MS = 10 * 60 * 1000; // re-lock after 10 minutes of inactivity
 
+const THEME_KEY = 'boss_pos_theme';
+const prefersDark = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+const storedTheme = localStorage.getItem(THEME_KEY);
+const systemTheme = storedTheme ? storedTheme : (prefersDark ? 'dark' : 'light');
+const [theme, setTheme] = useState<'light' | 'dark'>(systemTheme === 'dark' ? 'dark' : 'light');
+
 const DEFAULT_SETTINGS: StoreSettings = {
   shopName: 'My Shop',
   themeId: 'gold',
@@ -93,6 +99,7 @@ export default function App() {
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [reconcileResult, setReconcileResult] = useState<{ salesChecked: number; totalMismatches: number; negativeStock: { id: string; name: string; qty: number }[] } | null>(null);
 
   const readyRef = useRef(false);
@@ -369,7 +376,7 @@ export default function App() {
 
   // PWA install prompt capture
   useEffect(() => {
-    const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
+    const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); setShowInstallBanner(true); };
     window.addEventListener('beforeinstallprompt', h);
     return () => window.removeEventListener('beforeinstallprompt', h);
   }, []);
@@ -1328,7 +1335,7 @@ export default function App() {
 
   return (
     <div 
-      className="flex flex-col min-h-screen pb-24 text-zinc-100 bg-[#0A0A0A] relative"
+      className={`flex flex-col min-h-screen pb-24 text-zinc-100 bg-[#0A0A0A] relative ${theme === 'dark' ? 'dark-theme' : ''}`}
       style={{
         '--color-gold-brand': THEME_MAP.get(settings.themeId)?.brand ?? '#ffcc00',
         '--color-gold-medium': THEME_MAP.get(settings.themeId)?.medium ?? '#f1c100',
@@ -1360,7 +1367,19 @@ export default function App() {
           ) : null}
         </div>
         <div className="flex items-center gap-3">
-          {installPrompt && (
+          {showInstallBanner && (
+            <div className="sm:flex h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all">
+              <span>Install app for offline access & faster sync</span>
+              <button onClick={async () => {
+                try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {}
+                setInstallPrompt(null);
+                setShowInstallBanner(false);
+              }} className="ml-2 opacity-50 cursor-not-allowed">
+                Install
+              </button>
+            </div>
+          )}
+          {installPrompt && !showInstallBanner && (
             <button onClick={async () => {
               try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {}
               setInstallPrompt(null);
@@ -1379,7 +1398,7 @@ export default function App() {
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-16 bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
-        <button onClick={() => setActiveTab('sales')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
+        <button onClick={() => setActiveTab('sales')} aria-label="Sell" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />
             {cart.length > 0 && (
@@ -1390,15 +1409,15 @@ export default function App() {
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">Sell</span>
         </button>
-        <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
+        <button onClick={() => setActiveTab('inventory')} aria-label="Stock" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Stock</span>
         </button>
-        <button onClick={() => { setActiveTab('expenses'); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
+        <button onClick={() => { setActiveTab('expenses'); }} aria-label="Spend" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Spend</span>
         </button>
-        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
+        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label="Reports" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Reports</span>
         </button>
@@ -1555,9 +1574,24 @@ export default function App() {
                   Log out all devices
                 </button>
                 <p className="text-[10px] text-zinc-600">Use if a till is lost/stolen or shared. Ends the session everywhere instantly.</p>
-              </div>
-              <div className="border-t border-white/5 pt-3 space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
+</div>
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    const newTheme = theme === 'light' ? 'dark' : 'light';
+                    setTheme(newTheme);
+                    localStorage.setItem(THEME_KEY, newTheme);
+                    if (newTheme === 'dark') {
+                      document.documentElement.classList.add('dark');
+                    } else {
+                      document.documentElement.classList.remove('dark');
+                    }
+                  }}
+                    className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-gold-brand/40 transition-all cursor-pointer">
+                    {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
+                  </button>
+                </div>
+                <div className="border-t border-white/5 pt-3 space-y-2">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
                 <div className="flex items-center justify-between text-[10px] text-zinc-500 font-bold">
                   <span>Server backup</span>
                   <span>{lastBackupAt ? `Last: ${new Date(lastBackupAt).toLocaleString()}` : 'Checking…'}</span>
