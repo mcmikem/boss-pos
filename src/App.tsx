@@ -76,7 +76,9 @@ export default function App() {
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
-  const [staffName, setStaffName] = useState<string>(() => localStorage.getItem('boss_pos_staff') || '');
+  const [staffName, setStaffName] = useState<string>(() => {
+    try { return localStorage.getItem('boss_pos_staff') || ''; } catch { return ''; }
+  });
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -87,12 +89,16 @@ export default function App() {
   const [wastageLogs, setWastageLogs] = useState<WastageLog[]>([]);
   const [momoTransfers, setMomoTransfers] = useState<MomoTransfer[]>([]);
   const [categories, setCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('boss_pos_categories');
-    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+    try {
+      const saved = localStorage.getItem('boss_pos_categories');
+      return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+    } catch { return DEFAULT_CATEGORIES; }
   });
   const [expenseCategories, setExpenseCategories] = useState<string[]>(() => {
-    const saved = localStorage.getItem('boss_pos_expense_categories');
-    return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATEGORIES;
+    try {
+      const saved = localStorage.getItem('boss_pos_expense_categories');
+      return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATEGORIES;
+    } catch { return DEFAULT_EXPENSE_CATEGORIES; }
   });
   const [cart, setCart] = useState<SaleItem[]>([]);
 
@@ -100,7 +106,9 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
   const [apiError, setApiError] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(() => {
+    try { return typeof navigator !== 'undefined' ? navigator.onLine : true; } catch { return true; }
+  });
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
@@ -1309,6 +1317,22 @@ export default function App() {
           </Suspense>
           </ErrorBoundary>
         );
+      default:
+        return (
+          <ErrorBoundary key="sales-fallback">
+          <Sales 
+            products={products} onAddSale={handleAddSale}
+            onUpdateProduct={handleUpdateProduct}
+            formatCurrency={formatCurrency} cart={cart} setCart={setCart}
+            triggerToast={triggerToast} settings={settings}
+            onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
+            isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
+            categories={categories}
+            staffName={staffName} setStaffName={setStaffName}
+            onSaveCustomProduct={handleSaveCustomProduct}
+          />
+          </ErrorBoundary>
+        );
     }
   };
 
@@ -1722,15 +1746,17 @@ export default function App() {
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();
                 const apiCacheKey = `boss_api_cache_/api/products`;
-                localStorage.removeItem(apiCacheKey);
-                const keys = JSON.parse(localStorage.getItem('boss_api_cache_keys') || '[]');
-                const filtered = keys.filter((k: string) => k !== apiCacheKey);
-                localStorage.setItem('boss_api_cache_keys', JSON.stringify(filtered));
+                try { localStorage.removeItem(apiCacheKey); } catch {}
+                try {
+                  const keys = JSON.parse(localStorage.getItem('boss_api_cache_keys') || '[]');
+                  const filtered = keys.filter((k: string) => k !== apiCacheKey);
+                  localStorage.setItem('boss_api_cache_keys', JSON.stringify(filtered));
+                } catch {}
                 fetch('/api/products').then(r => r.json()).then((p: Product[]) => {
                   const enriched = enrichProductsWithIcons(p);
                   setProducts(enriched);
                   saveProducts(enriched);
-                });
+                }).catch(()=>{});
               }} />
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Activity Log</label>
