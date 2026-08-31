@@ -39,10 +39,6 @@ const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Ren
 const IDLE_LOCK_MS = 10 * 60 * 1000; // re-lock after 10 minutes of inactivity
 
 const THEME_KEY = 'boss_pos_theme';
-const prefersDark = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
-const storedTheme = localStorage.getItem(THEME_KEY);
-const systemTheme = storedTheme ? storedTheme : (prefersDark ? 'dark' : 'light');
-const [theme, setTheme] = useState<'light' | 'dark'>(systemTheme === 'dark' ? 'dark' : 'light');
 
 const DEFAULT_SETTINGS: StoreSettings = {
   shopName: 'My Shop',
@@ -57,6 +53,22 @@ const DEFAULT_SETTINGS: StoreSettings = {
 };
 
 export default function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const stored = localStorage.getItem(THEME_KEY);
+      if (stored) return stored === 'dark' ? 'dark' : 'light';
+      const prefersDark = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      return prefersDark ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+  useEffect(() => {
+    try {
+      if (theme === 'dark') document.documentElement.classList.add('dark');
+      else document.documentElement.classList.remove('dark');
+    } catch {}
+  }, [theme]);
   const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
