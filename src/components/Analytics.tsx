@@ -3,7 +3,7 @@ import {
   TrendingUp, Plus, Coins, User, Phone, Mail,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2, ChevronDown,
-  CalendarDays, Receipt, LayoutGrid
+  CalendarDays, Receipt, LayoutGrid, Info
 } from 'lucide-react';
 import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
 import CreditsLedger from './CreditsLedger';
@@ -66,6 +66,9 @@ export default function Analytics({
   settings
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
+  const [showHelp, setShowHelp] = useState(() => {
+    try { return localStorage.getItem('boss_reports_help_seen') !== '1'; } catch { return true; }
+  });
 
   // Design & print orders contribute realized revenue when delivered. Fetched
   // here (not via props) so Reports always shows fresh numbers.
@@ -96,7 +99,7 @@ export default function Analytics({
   const [supEmail, setSupEmail] = useState('');
   const [confirmDeleteSupplier, setConfirmDeleteSupplier] = useState<string | null>(null);
 
-  const DAY_VIEW_LIMIT = 6;
+  const DAY_VIEW_LIMIT = 10;
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [showAllDays, setShowAllDays] = useState(false);
   useEffect(() => {
@@ -209,6 +212,13 @@ export default function Analytics({
   const visibleDays = useMemo(() => {
     return showAllDays ? dailyBreakdown : dailyBreakdown.slice(0, DAY_VIEW_LIMIT);
   }, [dailyBreakdown, showAllDays]);
+
+  // Auto-open the most recent day so first-time users see how to tap
+  useEffect(() => {
+    if (dailyBreakdown.length > 0 && expandedDays.size === 0) {
+      setExpandedDays(new Set([dailyBreakdown[0].date]));
+    }
+  }, [dailyBreakdown]);
 
   const toggleDay = (date: string) => {
     setExpandedDays(prev => {
@@ -602,6 +612,16 @@ const colorsMap: { [key: string]: string } = {
             expenseCategories={expenseCategories}
             triggerToast={triggerToast}
           />
+          {showHelp && !showSuppliers && (
+            <div className="boss-card bg-gold-brand/5 border border-gold-brand/20 p-4 flex items-start gap-3">
+              <Info className="w-5 h-5 text-gold-brand mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <p className="text-xs font-black text-white uppercase tracking-wider">How to read this</p>
+                <p className="text-xs text-zinc-400 mt-1 leading-relaxed font-bold">Money In = all sales. Profit Left = after stock costs + expenses. Tap Daily / Weekly / Monthly above, then tap a day below to see its sales & expenses. Green = you kept money.</p>
+              </div>
+              <button onClick={() => { try { localStorage.setItem('boss_reports_help_seen','1'); } catch {}; setShowHelp(false); }} className="text-zinc-500 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition-colors" aria-label="Dismiss help"><X className="w-4 h-4" /></button>
+            </div>
+          )}
           <nav className="flex gap-2 pb-2 overflow-x-auto no-scrollbar">
             {['Daily', 'Weekly', 'Monthly'].map(filter => (
               <button key={filter} onClick={() => setTimeFilter(filter as any)}
@@ -644,25 +664,25 @@ const colorsMap: { [key: string]: string } = {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="md:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between h-32">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Best Selling ({timeFilter})</span>
+            <div className="md:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between h-32" title="Category that sold the most money in this period">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Top Category ({timeFilter}) <Info className="w-3 h-3 text-zinc-600" /></span>
               <div className="flex items-center justify-between mt-1">
                 <h3 className="text-2xl font-black text-gold-brand uppercase font-display">{topCategory.name}</h3>
                 <TrendingUp className="w-6 h-6 text-gold-brand" />
               </div>
               <p className="text-xs text-zinc-400 font-bold uppercase">Sales: {formatCurrency(topCategory.amount)}</p>
             </div>
-            <div className="boss-card p-5 flex flex-col justify-between h-32">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Total Sales</span>
-              <h3 className="text-2xl font-black text-white font-display mt-2">{formatCurrency(displayIncome)}</h3>
+            <div className="boss-card p-5 flex flex-col justify-between h-32" title="All money from sales in this period (before costs). Swipe Daily/Weekly/Monthly to change period.">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Money In <Info className="w-3 h-3 text-zinc-600" /></span>
+              <h3 className="text-2xl font-black text-white font-display mt-1">{formatCurrency(displayIncome)}</h3>
               <p className="text-xs text-zinc-500 font-bold uppercase">
-                Money in{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''}
+                Total sales{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''} • Tap Daily/Weekly/Monthly above
               </p>
             </div>
-            <div className="boss-card p-5 flex flex-col justify-between h-32">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Profit</span>
-              <h3 className={`text-2xl font-black font-display mt-2 ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(displayNetProfit)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase">After all costs</p>
+            <div className="boss-card p-5 flex flex-col justify-between h-32" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
+              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Profit Left <Info className="w-3 h-3 text-zinc-600" /></span>
+              <h3 className={`text-2xl font-black font-display mt-1 ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(displayNetProfit)}</h3>
+              <p className="text-xs text-zinc-500 font-bold uppercase">{displayNetProfit >= 0 ? 'You kept this' : 'You lost this'} • after all costs</p>
             </div>
           </div>
 
@@ -723,10 +743,10 @@ const colorsMap: { [key: string]: string } = {
                 <CalendarDays className="w-4 h-4 text-gold-brand" /> Daily Breakdown ({timeFilter})
               </h3>
               <span className="text-[10px] font-bold text-zinc-600 uppercase tracking-wider">
-                {dailyBreakdown.length} {dailyBreakdown.length === 1 ? 'day' : 'days'}
+                {dailyBreakdown.length} {dailyBreakdown.length === 1 ? 'day' : 'days'} • Tap a day to open
               </span>
             </div>
-            <p className="text-xs text-zinc-500 font-bold uppercase mb-4">Actual sales & expenses as they were made</p>
+            <p className="text-xs text-zinc-500 font-bold uppercase mb-4 flex items-center gap-1"><Info className="w-3 h-3" /> Tap any day row to see its sales & expenses — Balance green = you kept money, red = you lost</p>
 
             <div className="space-y-2">
               {visibleDays.map(day => {
