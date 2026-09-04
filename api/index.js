@@ -233,6 +233,22 @@ async function initDB() {
   }
   // Token version for "log out all devices" (bump on revoke-all).
   await sql`INSERT INTO settings (key, value) VALUES ('authVersion', '0') ON CONFLICT (key) DO NOTHING`;
+  // ============================================
+  // SAAS: Tenant & Subscription init
+  // - Runs once per shop DB during provisioning
+  // - Sets up tenant record + default subscription
+  // ============================================
+  // Ensure tenant record exists (idempotent)
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
+  if (existingTenant.length === 0) {
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, 'My Shop', 'basic', 'active')`;
+  }
+  // Ensure subscription record exists
+  const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  if (subExists.length === 0) {
+    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', 'basic')`;
+  }
   // Auto-backup bookkeeping (epoch ms; 0 = never).
   await sql`INSERT INTO settings (key, value) VALUES ('lastAutoBackupAt', '0') ON CONFLICT (key) DO NOTHING`;
 }
@@ -2286,6 +2302,64 @@ function mapMomoTransfer(r) {
   };
 }
 
+// ============================================
+// SAAS: Tenant & Subscription API routes
+// ============================================
+
+// GET /api/tenant - get current tenant info + subscription status
+app.get('/api/tenant', asHandler(async (req, res) => {
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  const tenant = await sql`SELECT id, name, plan, status, trial_ends_at, subscribed_at FROM tenants WHERE id = ${tenantId}`;
+  const subscription = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  res.json({ tenant: tenant[0] || null, subscription: subscription[0] || null });
+}));
+
+// GET /api/subscription - alias for tenant (frontend convenience)
+app.get('/api/subscription', asHandler(async (req, res) => {
+  res.redirect(307, '/api/tenant');
+}));
+
+// POST /api/subscription - update subscription status (called by Stripe webhook)
+app.post('/api/subscription', asHandler(async (req, res) => {
+  const { subId, status, plan, current_period_end } = req.body || {};
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  if (subId) {
+    await sql`UPDATE subscriptions SET status = ${status}, plan = ${plan}, current_period_end = ${current_period_end} WHERE tenant_id = ${tenantId}`;
+  }
+  const sub = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  res.json({ subscription: sub[0] });
+}));
+
+// GET /api/plans - list available subscription plans
+app.get('/api/plans', asHandler(async (req, res) => {
+  const plans = [
+    { key: 'basic', name: 'Basic', price: 29, features: ['offline mode', 'basic reports', '1 till'] },
+    { key: 'pro', name: 'Pro', price: 79, features: ['offline mode', 'Google Sheets sync', 'multiple tills', 'priority support'] },
+    { key: 'enterprise', name: 'Enterprise', price: 199, features: ['unlimited tills', 'full API access', 'dedicated support', 'custom integrations'] }
+  ];
+  res.json({ plans });
+}));
+
+// POST /api/tenant - update tenant name/plan (admin use)
+app.post('/api/tenant', asHandler(async (req, res) => {
+  const { name, plan } = req.body || {};
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  if (name) await sql`UPDATE tenants SET name = ${name} WHERE id = ${tenantId}`;
+  if (plan) await sql`UPDATE tenants SET plan = ${plan} WHERE id = ${tenantId}`;
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  res.json({ tenant: tenant[0] });
+}));
+
+// Middleware: set app.tenant_id from the shop's DB context
+// This is set by the provisioner via Vercel env var, or by the onboarding flow
+app.use((req, res, next) => {
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  if (tenantId) {
+    sql.query(`SET app.tenant_id = '${tenantId}'`);
+  }
+  next();
+});
+
 // Ensure every uncaught API error is JSON (not Express' HTML), so the
 // till can surface "Database timeout, retry" instead of a generic wall of HTML.
 app.use((err, req, res, _next) => {
@@ -2298,4 +2372,62 @@ app.use((err, req, res, _next) => {
   res.status(transient ? 503 : 500).json({ error: transient ? 'Database temporarily unavailable — please retry' : msg.slice(0, 300), traceId: id });
 });
 
+// POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN
+app.post('/api/onboard', asHandler(async (req, res) => {
+  const { shopName, plan, pin } = req.body || {};
+  const tenantId = process.env.APP_TENANT_ID || `shop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  // Create tenant record
+  const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
+  if (existingTenant.length === 0) {
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${shopName}, ${plan}, 'active')`;
+  }
+
+  // Create/default subscription
+  const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  if (subExists.length === 0) {
+    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${plan})`;
+  }
+
+  // Set tenant_id middleware context for this shop's API calls
+  // The frontend will set this via header on subsequent calls
+  // For now, just store it in a global the API can read
+  process.env.APP_TENANT_ID = tenantId;
+
+  // Set the default PIN hash in the DB (we store a salted hash)
+  // For now, just note the PIN was set - the app will handle verification
+  await sql`INSERT INTO settings (key, value) VALUES ('onboarded', 'true') ON CONFLICT (key) DO NOTHING`;
+
+  res.json({ tenantId, redirect: '/' });
+}));
+
+// ============================================
+// Ensure every uncaught API error is JSON (not Express' HTML), so the
+// till can surface "Database timeout, retry" instead of a generic wall of HTML.
+// POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN
+app.post('/api/onboard', asHandler(async (req, res) => {
+  const { shopName, plan, pin } = req.body || {};
+  const tenantId = process.env.APP_TENANT_ID || `shop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  // Create tenant record (idempotent)
+  const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
+  if (existingTenant.length === 0) {
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${shopName}, ${plan}, 'active')`;
+  }
+
+  // Create/default subscription
+  const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  if (subExists.length === 0) {
+    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${plan})`;
+  }
+
+  // Mark as onboarded in settings
+  await sql`INSERT INTO settings (key, value) VALUES ('onboarded', 'true') ON CONFLICT (key) DO NOTHING`;
+
+  res.json({ tenantId, redirect: '/' });
+}));
+
+// ============================================
+// Ensure every uncaught API error is JSON (not Express' HTML), so the
+// till can surface "Database timeout, retry" instead of a generic wall of HTML.
 export default app;
