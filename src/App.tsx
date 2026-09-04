@@ -172,6 +172,12 @@ export default function App() {
     if (cached) {
       setProducts(enrichProductsWithIcons(cached));
       setLoading(false);
+      return;
+    }
+
+    if (!navigator.onLine) {
+      setLoading(false);
+      return;
     }
 
     // 3G-friendly: one /api/boot round-trip. Fall back to individual endpoints
