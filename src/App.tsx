@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -9,6 +9,7 @@ import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { verifyPinAgainstHash } from './utils/crypto';
 import { downloadBlob } from './utils/download';
+import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose } from './utils/dailyClose';
 import { initSentry } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
@@ -638,15 +639,10 @@ export default function App() {
     if (cached) {
       try {
         const restored: SaleItem[] = JSON.parse(cached);
-        const validated = restored.map(item => {
-          const live = products.find(p => p.id === item.productId);
-          if (live && live.price !== item.unitPrice) {
-            return { ...item, unitPrice: live.price, lineTotal: item.qty * live.price };
-          }
-          return item;
-        });
+        // Variant-aware: a line priced from a variant keeps the variant price;
+        // only genuine catalog price changes rewrite the cart.
+        const { cart: validated, changed } = reconcileCartPrices(restored, products);
         setCart(validated);
-        const changed = restored.some((item, i) => item.unitPrice !== validated[i]?.unitPrice);
         if (changed) {
           triggerToast('Cart prices updated to match current product pricing', 'info');
         }
@@ -1434,6 +1430,13 @@ export default function App() {
               Install
             </button>
           )}
+          <button onClick={() => {
+            const next = theme === 'light' ? 'dark' : 'light';
+            setTheme(next);
+            try { localStorage.setItem(THEME_KEY, next); } catch {}
+          }} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} aria-label="Toggle dark mode">
+            {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
           <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
             <Settings className="w-4 h-4" />
           </button>
@@ -1444,7 +1447,7 @@ export default function App() {
         {renderContent()}
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
+      <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
         <button onClick={() => setActiveTab('sales')} aria-label="Sell" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />

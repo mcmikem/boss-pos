@@ -46,10 +46,22 @@ html.light-theme [class~="text-white"],
 html.light-theme [class~="text-zinc-100"],
 html.light-theme [class~="text-zinc-200"],
 html.light-theme [class~="text-zinc-300"] { color: #18181b !important; }
-html.light-theme [class~="text-zinc-400"] { color: #52525b !important; }
-html.light-theme [class~="text-zinc-500"] { color: #71717a !important; }
-html.light-theme [class~="text-zinc-600"] { color: #a1a1aa !important; }
+/* Mid-grays must go DARKER on paper, not lighter — the old mapping washed out. */
+html.light-theme [class~="text-zinc-400"] { color: #3f3f46 !important; }
+html.light-theme [class~="text-zinc-500"] { color: #52525b !important; }
+html.light-theme [class~="text-zinc-600"] { color: #52525b !important; }
 html.light-theme [class*="border-white"] { border-color: rgba(24, 24, 27, 0.12) !important; }
+/* Brand + status accents are designed for coal — give them daylight versions. */
+html.light-theme [class~="text-gold-brand"],
+html.light-theme [class~="text-gold-medium"],
+html.light-theme [class~="text-gold-light"] { color: #7a5f00 !important; }
+html.light-theme [class~="text-emerald-400"] { color: #047857 !important; }
+html.light-theme [class~="text-rose-400"] { color: #be123c !important; }
+html.light-theme [class~="text-amber-400"] { color: #b45309 !important; }
+html.light-theme [class~="text-cyan-400"] { color: #0e7490 !important; }
+/* Dark cards would keep coal backgrounds with remapped-dark text — unreadable. */
+html.light-theme .boss-card { background-color: #ffffff; border-color: rgba(24, 24, 27, 0.1); box-shadow: 0 4px 20px rgba(24, 24, 27, 0.08); }
+html.light-theme .boss-card:hover { background-color: #fafaf9; border-color: rgba(24, 24, 27, 0.2); transform: translateY(-2px); }
 
 /* Mistake 6 fix: tiny caps labels need breathing room to scan fast.
    Use for badges / eyebrows instead of bare `uppercase tracking-wider`. */
@@ -118,6 +130,17 @@ html {
 
 .custom-glow {
   box-shadow: 0 0 15px rgba(255, 204, 0, 0.15);
+}
+
+/* Old WebViews (Chrome < 79) don't know env(): a calc() containing it is
+   dropped entirely, which used to leave the cart FAB and bottom nav
+   mispositioned on exactly the small old phones shops use. Plain fallback
+   first, notch-aware value only where env() parses. */
+#mobile-cart-fab { bottom: 5rem; }
+#bottom-nav { height: 4rem; }
+@supports (bottom: env(safe-area-inset-bottom)) {
+  #mobile-cart-fab { bottom: calc(5rem + env(safe-area-inset-bottom)); }
+  #bottom-nav { height: calc(4rem + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
 }
 
 /* Firefox scrollbar */

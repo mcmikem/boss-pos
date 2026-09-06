@@ -179,6 +179,9 @@ export default function Sales({
       return;
     }
     addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService, product.saleUnit);
+    // Plain taps had zero feedback: on phones the cart lives behind the gold
+    // FAB, so without this toast an add looked like nothing happened.
+    triggerToast(`Added: ${product.name}`, 'success');
   };
 
   const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean, saleUnit?: string) => {
@@ -782,7 +785,7 @@ export default function Sales({
       {/* MOBILE CART SHEET */}
       <div className="lg:hidden">
         {cart.length > 0 && !isMobileCartOpen && !isQuickSale && (
-          <button onClick={() => setIsMobileCartOpen(true)}
+          <button onClick={() => setIsMobileCartOpen(true)} id="mobile-cart-fab"
             className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-[55] bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer">
             <ShoppingCart className="w-5 h-5" />
             <span className="text-sm uppercase font-display font-black">Cart ({cart.reduce((sum, item) => sum + item.qty, 0)}) • {formatCurrency(total)}</span>
