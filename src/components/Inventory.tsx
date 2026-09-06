@@ -573,18 +573,18 @@ export default function Inventory({
                   }`}>
                     <Package className={`w-5 h-5 ${isLowStock ? 'text-amber-400' : 'text-zinc-400'}`} />
                   </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white uppercase tracking-wide">{product.name}</h3>
-                    <p className="text-xs text-zinc-500 font-bold mt-1 uppercase">
+                  <div className="min-w-0">
+                    <h3 className="text-[13px] font-semibold text-zinc-100 leading-snug truncate">{product.name}</h3>
+                    <p className="text-xs text-zinc-500 font-medium mt-0.5 truncate">
                       {product.category} •{' '}
                       {product.isService ? (
                         <span className="text-zinc-400">Service — no stock</span>
                       ) : isOutOfStock ? (
-                        <span className="text-rose-400 font-black">SOLD OUT</span>
+                        <span className="text-rose-400 font-semibold">Sold out</span>
                       ) : isLowStock ? (
-                        <span className="text-amber-400 font-black">{product.stockQty} LEFT</span>
+                        <span className="text-amber-400 font-semibold">{product.stockQty} left</span>
                       ) : (
-                        <span className="text-gold-light">{product.stockQty} in stock</span>
+                        <span className="text-zinc-400">{product.stockQty} in stock</span>
                       )}
                     </p>
                     {!product.isService && (
@@ -598,8 +598,8 @@ export default function Inventory({
                 </div>
                 <div className="text-right flex items-center gap-4">
                   <div>
-                    <p className="text-xs font-black text-white font-display">{formatCurrency(product.price)}</p>
-                    <p className="text-xs text-zinc-500 font-bold uppercase mt-0.5">Cost: {formatCurrency(effectiveCost(product))}</p>
+                    <p className="text-[13px] font-bold text-zinc-100 font-display tabular-nums">{formatCurrency(product.price)}</p>
+                    <p className="text-[11px] text-zinc-500 font-medium mt-0.5 tabular-nums">{formatCurrency(effectiveCost(product))}</p>
                   </div>
                   <Edit className="w-4 h-4 text-zinc-600 group-hover:text-gold-brand transition-colors" />
                 </div>

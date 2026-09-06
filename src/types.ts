@@ -93,6 +93,14 @@ export interface Sale {
   staffName?: string;
   refunded?: boolean;
   refundedAt?: string;
+  // EFRIS fiscalisation (server-filled; see api/efris.js)
+  efrisStatus?: 'none' | 'pending' | 'issued' | 'failed';
+  efrisInvoiceNo?: string;
+  efrisFdn?: string;
+  efrisVerify?: string;
+  efrisQr?: string;
+  efrisError?: string;
+  efrisAt?: string;
 }
 
 export interface Expense {
@@ -206,6 +214,19 @@ export interface AppTheme {
   light: string;
 }
 
+export interface EfrisConfig {
+  enabled: boolean;
+  mode: 'off' | 'sandbox' | 'provider';
+  tin: string;
+  deviceNo: string;
+  branchCode: string;
+  vatRate: number;
+  pricesIncludeVat: boolean;
+  autoIssue: boolean;
+  goodsPrefix: string;
+  providerBase: string;
+}
+
 export interface StoreSettings {
   shopName: string;
   themeId: string;
@@ -221,6 +242,7 @@ export interface StoreSettings {
   showTailoring?: boolean;
   showDesign?: boolean;
   sheetsUrl?: string;
+  efris?: EfrisConfig;
   eodCapital?: Record<string, number>;
   lastSheetOk?: boolean;
   lastSheetAt?: string;

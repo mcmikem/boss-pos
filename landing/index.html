@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BOSS POS helps Ugandan shop owners know every sale, every item, every shilling — and run the shop like the boss they are. Works offline.">
+  <meta name="theme-color" content="#0e0e0c">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23ffcc00'/%3E%3Ctext x='32' y='45' font-family='Arial Black,sans-serif' font-size='36' font-weight='900' text-anchor='middle' fill='%230e0e0c'%3EB%3C/text%3E%3C/svg%3E">
+  <title>BOSS POS — Know your shop. You're the boss.</title>
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="BOSS POS — Know your shop. You're the boss.">
+  <meta property="og:description" content="Offline-first till for Ugandan shops. Cash, MoMo, Airtel, credit. Start on WhatsApp.">
+  <meta property="og:image" content="https://boss-pos-landing.vercel.app/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="BOSS POS — Know your shop. You're the boss.">
+  <meta name="twitter:description" content="Offline-first till for Ugandan shops. Start on WhatsApp.">
+  <meta name="twitter:image" content="https://boss-pos-landing.vercel.app/og.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=DM+Mono:wght@400;500&family=Montserrat:wght@700;800;900&display=swap">
+  <style>
+    :root{
+      --ink:#0e0e0c; --paper:#f2eee1; --paper2:#e9e3d0; --gold:#ffcc00; --gold-deep:#e0a800;
+      --green:#0d5c45; --rust:#c8501e; --white:#fffdf6; --muted:#453f32;
+      --hard:6px 6px 0 var(--ink); --hard-sm:4px 4px 0 var(--ink);
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{margin:0;color:var(--ink);background:var(--paper);font-family:'Archivo',sans-serif;line-height:1.5;overflow-x:hidden}
+    body::after{content:'';position:fixed;inset:0;z-index:60;pointer-events:none;opacity:.5;mix-blend-mode:multiply;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E")}
+    ::selection{background:var(--gold);color:var(--ink)}
+    a{color:inherit;text-decoration:none} button,input,select{font:inherit} button{border:0;cursor:pointer}
+    .wrap{width:min(1200px,calc(100% - 40px));margin:auto}
+    .mono{font-family:'DM Mono',monospace}
+    /* ---------- ticker ---------- */
+    .ticker{background:var(--ink);color:var(--gold);overflow:hidden;white-space:nowrap;border-bottom:3px solid var(--ink)}
+    .ticker-track{display:inline-block;padding:9px 0;animation:tick 20s linear infinite;font-family:'DM Mono',monospace;font-size:.78rem;letter-spacing:.12em}
+    .ticker-track span{margin:0 18px}
+    @keyframes tick{to{transform:translateX(-50%)}}
+    @media(prefers-reduced-motion:reduce){.ticker-track{animation:none}}
+    /* ---------- nav ---------- */
+    .nav{position:sticky;top:0;z-index:50;background:var(--paper);border-bottom:3px solid var(--ink)}
+    .nav-inner{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .brand{display:flex;align-items:center;gap:10px;font-family:'Montserrat',sans-serif;font-weight:900;letter-spacing:-.03em;font-size:1.3rem}
+    .brand-mark{display:grid;place-items:center;width:34px;height:34px;color:var(--ink);background:var(--gold);border:3px solid var(--ink);border-radius:9px;box-shadow:3px 3px 0 var(--ink);font-family:'DM Mono',monospace;font-size:15px}
+    .nav-links{display:flex;gap:26px;font-size:.86rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+    .nav-links a{border-bottom:3px solid transparent}
+    .nav-links a:hover{border-color:var(--gold);background:linear-gradient(transparent 62%,var(--gold) 62%)}
+    .nav-actions{display:flex;align-items:center;gap:14px}
+    .login{font-size:.82rem;font-weight:700;text-decoration:underline;text-decoration-color:var(--gold-deep);text-decoration-thickness:3px;text-underline-offset:4px}
+    .button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 22px;border:3px solid var(--ink);border-radius:10px;font-weight:900;box-shadow:var(--hard-sm);transition:transform .12s,box-shadow .12s;text-transform:uppercase;letter-spacing:.03em;font-size:.92rem}
+    .button:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+    .button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+    .button-primary{color:var(--ink);background:var(--gold)}
+    .button-ink{color:var(--paper);background:var(--ink);box-shadow:4px 4px 0 var(--gold-deep)}
+    .button-ink:hover{box-shadow:6px 6px 0 var(--gold-deep)}
+    .button-paper{background:var(--paper)}
+    /* ---------- hero ---------- */
+    .hero{position:relative;padding:70px 0 90px;overflow:clip;
+      background:
+        radial-gradient(circle at 88% 12%,var(--gold) 0 110px,transparent 111px),
+        repeating-linear-gradient(-45deg,transparent 0 26px,rgba(14,14,12,.05) 26px 28px),
+        var(--paper)}
+    .hero-kicker{display:inline-block;padding:7px 14px;margin-bottom:22px;background:var(--ink);color:var(--gold);border-radius:100px;font-family:'DM Mono',monospace;font-size:.74rem;letter-spacing:.14em;transform:rotate(-2deg)}
+    h1{font-family:'Montserrat',sans-serif;font-weight:900;letter-spacing:-.045em;line-height:.94;margin:0;text-transform:uppercase}
+    h2{font-family:'Montserrat',sans-serif;font-weight:900;letter-spacing:-.03em;line-height:1.04;margin:0}
+    h1{font-size:clamp(3rem,9vw,7.5rem);max-width:12ch}
+    h1 .marker{background:linear-gradient(transparent 58%,var(--gold) 58% 96%,transparent 96%);padding:0 .06em}
+    h1 .slab{display:inline-block;background:var(--gold);border:3px solid var(--ink);border-radius:14px;padding:0 .18em;box-shadow:var(--hard-sm);transform:rotate(-1deg)}
+    .hero-sub{max-width:52ch;margin:26px 0 32px;font-size:1.12rem;font-weight:500}
+    .hero-sub strong{background:var(--ink);color:var(--gold);padding:1px 8px;border-radius:5px;white-space:nowrap}
+    .hero-actions{display:flex;flex-wrap:wrap;gap:14px}
+    .hero-proof{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+    .chip{padding:9px 14px;border:2.5px solid var(--ink);border-radius:100px;background:var(--white);font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.04em;box-shadow:3px 3px 0 var(--ink)}
+    .chip b{background:var(--gold);padding:1px 7px;border-radius:20px;margin-right:6px}
+    .sticker{position:absolute;top:64px;right:max(20px,calc(50% - 600px + 20px));width:132px;height:132px;display:grid;place-items:center;text-align:center;
+      background:var(--rust);color:var(--white);border:3px solid var(--ink);border-radius:50%;box-shadow:var(--hard);
+      font-family:'DM Mono',monospace;font-size:.68rem;line-height:1.35;letter-spacing:.08em;transform:rotate(10deg);animation:bob 4s ease-in-out infinite}
+    @keyframes bob{50%{transform:rotate(4deg) translateY(-8px)}}
+    @media(prefers-reduced-motion:reduce){.sticker{animation:none}}
+    /* ---------- till preview ---------- */
+    .till-zone{padding:0 0 90px}
+    .till-frame{position:relative;border:3px solid var(--ink);border-radius:18px;background:var(--ink);box-shadow:10px 10px 0 var(--gold),10px 10px 0 3px var(--ink);overflow:hidden;transform:rotate(-.6deg)}
+    .till-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;color:#f2eee1;font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.1em}
+    .till-dots{display:flex;gap:6px}.till-dots i{width:9px;height:9px;border-radius:50%;background:#5b564a}.till-dots i:first-child{background:var(--gold)}
+    .till-live{background:var(--gold);color:var(--ink);padding:3px 10px;border-radius:20px;font-weight:500}
+    .till-body{display:grid;grid-template-columns:1fr 230px;background:#f4f6f0}
+    .till-catalog{padding:20px}
+    .till-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
+    .till-search{padding:8px 12px;border:2.5px solid var(--ink);border-radius:8px;background:#fff;font-size:.68rem;font-weight:400}
+    .till-cats{display:flex;gap:7px;margin-bottom:14px}
+    .till-cat{padding:6px 11px;border:2px solid var(--ink);border-radius:20px;font-size:.64rem;font-weight:700;background:#fff}
+    .till-cat.on{background:var(--ink);color:var(--gold)}
+    .till-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+    .till-item{padding:11px;border:2.5px solid var(--ink);border-radius:10px;background:#fff;box-shadow:3px 3px 0 var(--ink)}
+    .till-art{height:48px;margin-bottom:8px;border:2px solid var(--ink);border-radius:7px}
+    .till-item small{display:block;font-size:.6rem;font-weight:800}
+    .till-item em{font-style:normal;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--green)}
+    .till-cart{padding:18px 14px;color:#eaf4e9;background:#182620}
+    .till-cart h3{margin:0 0 16px;font-family:'Archivo',sans-serif;font-size:.74rem;letter-spacing:.06em;text-transform:uppercase}
+    .till-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1.5px dashed rgba(255,255,255,.25);font-size:.64rem}
+    .till-row span:last-child{font-family:'DM Mono',monospace;color:var(--gold)}
+    .till-total{display:flex;justify-content:space-between;margin-top:20px;font-size:.72rem}
+    .till-total strong{font-family:'DM Mono',monospace;color:var(--gold);font-size:1rem}
+    .till-charge{width:100%;margin-top:12px;padding:12px;border:0;border-radius:8px;background:var(--gold);color:var(--ink);font-size:.7rem;font-weight:900;text-transform:uppercase}
+    .till-caption{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:22px;font-family:'DM Mono',monospace;font-size:.74rem;color:var(--muted)}
+    .livebar{display:flex;gap:12px;align-items:flex-start;margin-top:24px;padding:16px 20px;border:3px solid var(--ink);border-radius:12px;background:var(--ink);color:var(--paper);box-shadow:var(--hard-sm);font-size:.94rem}
+    .livebar strong{color:var(--gold)}
+    .pulse{color:var(--gold);font-size:.8rem;line-height:1.7;animation:blink 1.6s infinite}
+    @keyframes blink{50%{opacity:.2}}
+    @media(prefers-reduced-motion:reduce){.pulse{animation:none}}
+    /* ---------- marquee divider ---------- */
+    .divider{background:var(--gold);border-top:3px solid var(--ink);border-bottom:3px solid var(--ink);overflow:hidden;white-space:nowrap}
+    .divider-track{display:inline-block;padding:12px 0;animation:tick 30s linear infinite;font-family:'Montserrat',sans-serif;font-weight:900;font-size:1.15rem;letter-spacing:.02em;text-transform:uppercase}
+    .divider-track span{margin:0 16px}
+    /* ---------- sections ---------- */
+    section.block{padding:96px 0}
+    .sec-tag{display:inline-block;padding:6px 13px;margin-bottom:18px;border:2.5px solid var(--ink);border-radius:8px;background:var(--white);box-shadow:var(--hard-sm);font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.14em;transform:rotate(-1.2deg)}
+    .sec-head h2{font-size:clamp(2.2rem,5.4vw,4.4rem);max-width:16ch}
+    .sec-head h2 .marker{background:linear-gradient(transparent 58%,var(--gold) 58% 96%,transparent 96%);padding:0 .06em}
+    .sec-head p{max-width:46ch;color:var(--muted);font-size:1.02rem}
+    .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}
+    .card{position:relative;padding:28px 24px 26px;border:3px solid var(--ink);border-radius:14px;background:var(--white);box-shadow:var(--hard-sm)}
+    .card:nth-child(2){background:var(--ink);color:var(--paper)}
+    .card:nth-child(2) p{color:#c9c2ab}
+    .card-num{font-family:'DM Mono',monospace;font-size:.74rem;letter-spacing:.1em;color:var(--rust)}
+    .card:nth-child(2) .card-num{color:var(--gold)}
+    .card h3{margin:40px 0 10px;font-family:'Montserrat',sans-serif;font-size:1.42rem;letter-spacing:-.02em}
+    .card p{margin:0;color:var(--muted);font-size:.94rem}
+    .card-cta{display:inline-block;margin-top:22px;font-family:'DM Mono',monospace;font-size:.74rem;font-weight:500;border-bottom:3px solid var(--gold)}
+    /* ---------- business types ---------- */
+    .biz{background:var(--ink);color:var(--paper);border-top:3px solid var(--ink);border-bottom:3px solid var(--ink)}
+    .biz .sec-tag{background:var(--gold);color:var(--ink)}
+    .biz .sec-head p{color:#b7b09a}
+    .biz-grid{display:none}
+    .gal-wrap{margin-top:44px}
+    .gal{display:grid;grid-auto-flow:column;grid-auto-columns:min(76vw,290px);gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;padding:8px 4px 20px;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--gold) #161613}
+    .gal::-webkit-scrollbar{height:12px}
+    .gal::-webkit-scrollbar-track{background:#161613;border-radius:8px}
+    .gal::-webkit-scrollbar-thumb{background:var(--gold);border:2.5px solid #161613;border-radius:8px}
+    .g-card{scroll-snap-align:start;border:3px solid var(--paper);border-radius:14px;overflow:hidden;background:#161613;display:flex;flex-direction:column}
+    .g-card img{width:100%;height:205px;object-fit:cover;display:block;background:var(--gold);border-bottom:3px solid var(--paper)}
+    .g-body{padding:16px 16px 18px;display:flex;flex-direction:column;flex:1}
+    .g-tag{align-self:flex-start;padding:3px 10px;margin-bottom:10px;background:var(--gold);color:var(--ink);border-radius:20px;font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:.1em}
+    .g-card h3{margin:0 0 6px;font-family:'Montserrat',sans-serif;font-size:1.12rem;letter-spacing:-.02em;color:#fff}
+    .g-card p{margin:0 0 14px;color:#d8d2bd;font-size:.82rem;flex:1}
+    .g-link{color:var(--gold);font-family:'DM Mono',monospace;font-size:.7rem}
+    .gal-hint{margin-top:2px;font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.12em;color:var(--gold)}
+    /* ---------- proof ---------- */
+    .proof-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start;margin-top:8px}
+    .proof-list{margin-top:34px;border:3px solid var(--ink);border-radius:14px;overflow:hidden;box-shadow:var(--hard);background:var(--white)}
+    .proof-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:17px 20px;border-bottom:3px solid var(--ink);font-weight:800;font-size:.95rem}
+    .proof-row:last-child{border-bottom:0}
+    .proof-row strong{background:var(--ink);color:var(--gold);padding:4px 12px;border-radius:7px;font-family:'DM Mono',monospace;font-weight:500;font-size:.74rem;letter-spacing:.06em}
+    .quote{margin-top:70px;border:3px solid var(--ink);border-radius:16px;background:var(--gold);box-shadow:var(--hard);padding:clamp(28px,5vw,56px)}
+    .quote blockquote{margin:0;font-family:'Montserrat',sans-serif;font-weight:900;font-size:clamp(1.4rem,3vw,2.2rem);letter-spacing:-.02em;line-height:1.12}
+    .quote cite{display:block;margin-top:18px;font-family:'DM Mono',monospace;font-style:normal;font-size:.76rem;letter-spacing:.06em}
+    .quote-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:36px;margin-top:26px}
+    .quote-grid p{margin:0 0 14px;font-size:.98rem}
+    /* ---------- pricing ---------- */
+    .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:stretch;margin-top:48px}
+    .price-card{display:flex;flex-direction:column;padding:30px 26px;border:3px solid var(--ink);border-radius:16px;background:var(--white);box-shadow:var(--hard)}
+    .price-card.hot{background:var(--ink);color:var(--paper);transform:rotate(1deg) translateY(-10px);box-shadow:8px 8px 0 var(--gold-deep),8px 8px 0 3px var(--ink)}
+    .price-card h3{margin:0;font-family:'Montserrat',sans-serif;font-size:1.6rem;letter-spacing:-.03em;text-transform:uppercase}
+    .price-card>p{margin:6px 0 0;color:var(--muted);font-size:.9rem}
+    .price-card.hot>p{color:#b7b09a}
+    .flag{align-self:flex-start;margin-bottom:14px;padding:5px 12px;background:var(--rust);color:#fff;border-radius:7px;font-family:'DM Mono',monospace;font-size:.68rem;letter-spacing:.12em;transform:rotate(-2deg)}
+    .amount{margin:22px 0 4px;font-family:'Montserrat',sans-serif;font-weight:900;font-size:2.1rem;letter-spacing:-.04em}
+    .amount small{font-family:'DM Mono',monospace;font-size:.7rem;font-weight:400;letter-spacing:0}
+    .price-card ul{list-style:none;margin:18px 0 28px;padding:18px 0 0;border-top:2.5px dashed var(--ink);font-size:.9rem;line-height:2.1}
+    .price-card.hot ul{border-color:var(--gold)}
+    .price-card li::before{content:'★';margin-right:9px;color:var(--rust)}
+    .price-card.hot li::before{color:var(--gold)}
+    .price-card .button{margin-top:auto;width:100%}
+    .price-note{margin:26px 0 0;font-family:'DM Mono',monospace;font-size:.74rem;color:var(--muted)}
+    .momo-callout{margin-top:18px;padding:18px 22px;border:3px solid var(--ink);border-radius:12px;background:var(--gold);box-shadow:var(--hard-sm);font-size:.94rem;max-width:62ch}
+    .momo-callout a{text-decoration:underline;text-underline-offset:3px;font-weight:800}
+    /* ---------- faq ---------- */
+    .faq-list{margin-top:44px;border:3px solid var(--ink);border-radius:14px;overflow:hidden;box-shadow:var(--hard);background:var(--white)}
+    .faq{border-bottom:3px solid var(--ink)}
+    .faq:last-child{border-bottom:0}
+    .faq summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 22px;font-weight:800;font-size:1rem;letter-spacing:-.01em}
+    .faq summary::-webkit-details-marker{display:none}
+    .faq summary::after{content:'+';flex:none;display:grid;place-items:center;width:36px;height:36px;border:2.5px solid var(--ink);border-radius:50%;background:var(--gold);font-size:1.3rem;line-height:1}
+    .faq[open] summary::after{content:'–';background:var(--ink);color:var(--gold)}
+    .faq p{margin:0;padding:0 22px 22px;max-width:62ch;color:var(--muted)}
+    /* ---------- final ---------- */
+    .final{background:var(--ink);color:var(--paper);border-top:3px solid var(--ink);text-align:left;overflow:clip}
+    .final-inner{padding:100px 0;position:relative}
+    .final h2{font-size:clamp(2.6rem,7vw,6rem);max-width:12ch}
+    .final h2 .gold{color:var(--gold)}
+    .final p{color:#b7b09a;max-width:44ch}
+    .final .button{margin-top:26px;font-size:1rem;min-height:58px;padding:0 30px}
+    .footer{padding:26px 0;background:var(--paper);border-top:3px solid var(--ink);font-size:.82rem}
+    .footer-inner{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+    .footer-links{display:flex;gap:20px;font-weight:700;text-transform:uppercase;font-size:.74rem;letter-spacing:.06em}
+    /* ---------- modal ---------- */
+    .modal{position:fixed;inset:0;z-index:70;display:none;place-items:center;padding:20px;background:rgba(14,14,12,.8)}
+    .modal.open{display:grid}
+    .modal-card{width:min(100%,460px);padding:30px 28px;border:3px solid var(--ink);border-radius:16px;background:var(--paper);box-shadow:8px 8px 0 var(--gold)}
+    .modal-head{display:flex;justify-content:space-between;align-items:start;gap:12px}
+    .modal-head h2{font-size:1.7rem}
+    .close{flex:none;width:38px;height:38px;border:3px solid var(--ink);border-radius:50%;background:var(--white);font-size:1.2rem;font-weight:900;box-shadow:3px 3px 0 var(--ink)}
+    .modal label{display:block;margin:18px 0 7px;font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em}
+    .modal input,.modal select{width:100%;height:50px;padding:0 13px;border:3px solid var(--ink);border-radius:10px;background:var(--white);color:var(--ink);outline:none}
+    .modal input:focus,.modal select:focus{box-shadow:3px 3px 0 var(--gold)}
+    .modal-message{min-height:24px;margin:14px 0;font-size:.82rem;color:#a83e2c;font-weight:700}
+    .modal-card .button{width:100%}
+    .msteps{margin:18px 0 0;padding:16px 0 0;border-top:2px dashed var(--ink);list-style:none;counter-reset:step;font-size:.82rem;color:var(--muted)}
+    .msteps li{counter-increment:step;position:relative;padding-left:34px;margin-top:9px}
+    .msteps li::before{content:counter(step);position:absolute;left:0;top:-1px;display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:var(--ink);color:var(--gold);font-family:'DM Mono',monospace;font-size:.68rem}
+    .sticky-cta{display:none}
+    @media(max-width:900px){
+      .sticky-cta{display:block;position:fixed;bottom:14px;left:14px;right:14px;z-index:55}
+      .sticky-cta .button{width:100%;min-height:56px;font-size:1rem}
+    }
+    @media(max-width:900px){
+      .nav-links{display:none}
+      .cards,.price-grid{grid-template-columns:1fr;max-width:520px}
+      .price-card.hot{transform:none}
+      .biz-grid{grid-template-columns:1fr 1fr}
+      .proof-grid,.quote-grid{grid-template-columns:1fr}
+      .sticker{display:none}
+    }
+    @media(max-width:560px){
+      .wrap{width:calc(100% - 32px)}
+      section.block{padding:70px 0}
+      .till-body{grid-template-columns:1fr 138px}
+      .till-catalog{padding:12px}
+      .till-grid{grid-template-columns:repeat(2,1fr)}
+      .till-item:nth-child(n+5){display:none}
+      .till-cart{padding:14px 10px}
+      .biz-grid{grid-template-columns:1fr}
+      .biz-card{min-height:250px}
+      .hero-actions .button{width:100%}
+      .login{display:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="ticker" aria-hidden="true"><div class="ticker-track" id="tickerTrack"></div></div>
+  <nav class="nav" aria-label="Main navigation"><div class="wrap nav-inner"><a class="brand" href="#top"><span class="brand-mark">B</span>BOSS POS</a><div class="nav-links"><a href="#product">Product</a><a href="#proof">Why BOSS</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div><div class="nav-actions"><a class="login" href="#faq-existing">Already selling?</a><button class="button button-primary signup-trigger" data-plan="basic">Be the boss</button></div></div></nav>
+  <main id="top">
+    <header class="hero"><div class="wrap">
+      <span class="hero-kicker">BOSS POS · KNOW YOUR SHOP</span>
+      <h1>You're the <span class="marker">boss.</span><br>Know your <span class="slab">shop.</span></h1>
+      <p class="hero-sub">BOSS puts <strong>every sale</strong>, <strong>every item</strong> and <strong>every shilling</strong> where you can see them — so you run the shop, not the other way round. Even when the internet drops.</p>
+      <div class="hero-actions"><button class="button button-primary signup-trigger" data-plan="basic">Be the boss of your shop <span>↗</span></button><a class="button button-paper" href="#product">See how it works ↓</a></div>
+      <div class="hero-proof"><span class="chip"><b>YES</b>Sales saved offline</span><span class="chip"><b>UGX</b>Cash · MoMo · Airtel · Credit</span><span class="chip"><b>1 DAY</b>Set up with current stock</span></div>
+    </div><div class="sticker" aria-hidden="true">YOU'RE<br>THE<br>★ BOSS ★</div></header>
+
+    <div class="till-zone wrap"><div class="till-frame" aria-label="BOSS POS sales screen preview">
+      <div class="till-top"><span class="till-dots"><i></i><i></i><i></i></span><span>IMAC ENTERPRISES · SELL</span><span class="till-live">● SYNCED</span></div>
+      <div class="till-body"><div class="till-catalog"><div class="till-head"><span>Sell something</span><span class="till-search">⌕ Search products</span></div>
+        <div class="till-cats"><span class="till-cat on">All</span><span class="till-cat">Electronics</span><span class="till-cat">Eatery</span></div>
+        <div class="till-grid">
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#f4c17d,#ed784f)"></div><small>Portable speaker</small><em>UGX 12,000</em></div>
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#99c5a1,#397d68)"></div><small>Data cable</small><em>UGX 4,000</em></div>
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#e8c878,#b47c2d)"></div><small>Stockings</small><em>UGX 5,000</em></div>
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#bac9d9,#6a86a0)"></div><small>Headphones</small><em>UGX 25,000</em></div>
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#d9a7c7,#8e44ad)"></div><small>Photocopying</small><em>UGX 200 / page</em></div>
+          <div class="till-item"><div class="till-art" style="background:linear-gradient(135deg,#a8d8ea,#2c7da0)"></div><small>Powerbank</small><em>UGX 35,000</em></div>
+        </div></div>
+        <aside class="till-cart"><h3>Current sale · 3 items</h3><div class="till-row"><span>Portable speaker ×1</span><span>12,000</span></div><div class="till-row"><span>Data cable ×2</span><span>8,000</span></div><div class="till-row"><span>Stockings ×1</span><span>5,000</span></div><div class="till-total"><span>Total</span><strong>25,000</strong></div><button class="till-charge" type="button">Charge · UGX 25,000</button></aside></div>
+    </div><div class="till-caption"><span>↑ THE ACTUAL TILL. ONE SCREEN, NO TRAINING MANUAL.</span><span>RUNS ON THE PHONE IN YOUR POCKET — NO TERMINAL, NO SCANNER ✓</span><span>WORKS WITH DEAD WI-FI ✓</span></div><div class="livebar"><span class="pulse">●</span><span><strong>Live now — IMAC Enterprises</strong> sells on BOSS every day: real till, real stock, real closing cash. Your shop is next.</span></div></div>
+
+    <div class="divider" aria-hidden="true"><div class="divider-track" id="dividerTrack"></div></div>
+
+    <section id="product" class="block"><div class="wrap"><div class="sec-head"><span class="sec-tag">RUN IT LIKE A BOSS</span><h2>Everything a boss needs <span class="marker">at the counter.</span></h2><p>A boss shouldn't need an accounting degree to survive a busy day. BOSS makes the right move obvious when the line is long.</p></div>
+      <div class="cards">
+        <article class="card"><span class="card-num">01 / SELL</span><h3>Checkout that keeps up</h3><p>Search, scan, price, and take Cash, MoMo, Airtel Money, or credit from one focused screen. The queue moves, the money lands.</p><a class="card-cta" href="#pricing">See plans →</a></article>
+        <article class="card"><span class="card-num">02 / COUNT</span><h3>Stock you can stand behind</h3><p>Know what is low, what moved, and what is really left — before you reorder or promise a customer. Low-stock alerts flag the Kikuubo run before the shelf empties.</p><a class="card-cta" href="#pricing">See plans →</a></article>
+        <article class="card"><span class="card-num">03 / CLOSE</span><h3>Close the day like a boss</h3><p>Daily close-out, expenses, credits, and money movements, all reconciled before you lock up.</p><a class="card-cta" href="#faq">Get answers →</a></article>
+      </div></div></section>
+
+    <section class="block biz"><div class="wrap"><div class="sec-head"><span class="sec-tag">EVERY KIND OF BOSS</span><h2>Find your trade. You're covered.</h2><p>A shop, an eatery, a tailoring desk, and a print counter don't boss the same way. BOSS bends the tools, categories, and reports to fit your work.</p></div>
+      <div class="gal-wrap"><div class="gal">
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Retail shop with stocked shelves" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Retail &amp; Wholesale</h3><p>Shops, duukas, distributors. Stock, barcodes, suppliers.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Busy restaurant tables" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Eatery &amp; Restaurants</h3><p>Kitchens, menus, production, end-of-day cash.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Café counter" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Café &amp; Takeaway</h3><p>Coffee, chapati, Rolex stands. Fast counter sales.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1558769132-cb1aea458c5e?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1558769132-cb1aea458c5e?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1558769132-cb1aea458c5e?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Tailor working with fabric" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Tailoring &amp; Fashion</h3><p>Measurements, deposits, deadlines. No loose paper.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Boutique clothes rail" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Boutique &amp; Clothes</h3><p>Sizes, variants, low-stock alerts that save sales.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1550009158-9ebf69173e03?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1550009158-9ebf69173e03?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1550009158-9ebf69173e03?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Electronics and accessories" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Electronics &amp; Phones</h3><p>Gadgets, accessories, airtime, repair jobs.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Power drill on a workbench" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Hardware &amp; Tools</h3><p>From nails to drills — every item counted.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Fresh produce in a grocery" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Grocery &amp; Market</h3><p>Fresh stock in, daily turnover out. Zero guessing.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Barbershop chairs" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Barbershop</h3><p>Walk-ins, price list, cash up at closing.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Salon hair wash" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Salon &amp; Beauty</h3><p>Services, products, and every appointment paid.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Medicine packs" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Pharmacy &amp; Health</h3><p>Counted stock you can stand behind.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1513364776144-60967b0f800f?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1513364776144-60967b0f800f?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1513364776144-60967b0f800f?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Art and stationery supplies" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Stationery &amp; Print</h3><p>Books, photocopy, design jobs, custom charges.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+        <article class="g-card"><img width="580" height="410" decoding="async" src="https://images.unsplash.com/photo-1530124566582-a618bc2615dc?auto=format&fit=crop&w=800&q=70" srcset="https://images.unsplash.com/photo-1530124566582-a618bc2615dc?auto=format&fit=crop&w=400&q=60 400w, https://images.unsplash.com/photo-1530124566582-a618bc2615dc?auto=format&fit=crop&w=800&q=70 800w" sizes="(max-width:560px) 76vw, 290px" alt="Workshop hand tools" loading="lazy"><div class="g-body"><span class="g-tag">✓ COVERED</span><h3>Workshop &amp; Repair</h3><p>Jobs, spares, and labour — all on the bill.</p><a class="g-link" href="#pricing">Get this till →</a></div></article>
+      </div><p class="gal-hint">SCROLL → 13 TRADES. FIND YOURS.</p></div></div></section>
+
+    <section id="proof" class="block"><div class="wrap"><div class="sec-head"><span class="sec-tag">THE BOSS TEST</span><h2>When the network goes quiet, <span class="marker">the boss doesn't.</span></h2></div>
+      <div class="proof-grid"><div><p style="max-width:44ch;color:var(--muted)">BOSS is made for small teams, shared tills, mobile money, and days when a spreadsheet just won't cut it.</p>
+        <div class="proof-list"><div class="proof-row"><span>Sales stored on the device</span><strong>YES</strong></div><div class="proof-row"><span>Cash + MoMo + credit</span><strong>BUILT IN</strong></div><div class="proof-row"><span>Multi-till sync</span><strong>READY</strong></div><div class="proof-row"><span>Local currency</span><strong>UGX</strong></div><div class="proof-row"><span>Seller name stamped on every sale</span><strong>STAMPED</strong></div><div class="proof-row"><span>Voids &amp; refunds need manager PIN</span><strong>LOCKED</strong></div><div class="proof-row"><span>Drawer cash vs sales at close</span><strong>RECONCILED</strong></div></div></div>
+        <div><div class="quote" style="margin-top:0"><blockquote>"A boss looks at the screen and knows what happened today."</blockquote><cite>— THE STANDARD. NO DASHBOARD TO DECODE.</cite></div>
+        <div style="margin-top:22px;color:var(--muted)"><p><strong style="color:var(--ink)">Most shop software is built for perfect internet and a finance department.</strong> BOSS is built for the owner serving customers, checking stock, and counting cash before going home.</p><p>Start small. Add products as you go. Keep your workflow — but run it like you own it.</p></div></div></div></div></section>
+
+    <section class="block" style="background:var(--paper2);border-top:3px solid var(--ink)"><div class="wrap"><div class="sec-head"><span class="sec-tag">DITCH THE EXERCISE BOOK</span><h2>From paper to till without typing a thing.</h2><p>Your stock list already exists — in a book, on a price sheet, on the shelf. Send it as it is. We do the typing.</p></div>
+      <div class="cards">
+        <article class="card"><span class="card-num">① SNAP</span><h3>Photograph the book</h3><p>Your exercise book, supplier price list, or shelf rows. No typing, no spreadsheets, no counting twice.</p></article>
+        <article class="card"><span class="card-num">② SEND</span><h3>Drop it on WhatsApp</h3><p>Send the photos in chat and tell us opening quantities as you count them. A human handles it.</p></article>
+        <article class="card"><span class="card-num">③ SELL</span><h3>Approve and open</h3><p>We load every product and price into your till. You check it, set your PIN, and make the first sale.</p></article>
+      </div><div style="margin-top:36px"><a class="button button-primary" href="https://wa.me/256727790003?text=Hello%20BOSS%20POS!%20Here%20is%20my%20price%20list%20%E2%80%94%20please%20load%20my%20shop.">Snap it, send it — start here ↗</a></div></div></section>
+
+    <section id="start" class="block"><div class="wrap"><div class="sec-head"><span class="sec-tag">FROM CHAT TO TILL</span><h2>Selling on BOSS in three steps.</h2><p>No forms, no waiting rooms, no salespeople chasing you. One chat, and we do the heavy lifting.</p></div>
+      <div class="cards">
+        <article class="card"><span class="card-num">STEP 1</span><h3>Say hello on WhatsApp</h3><p>Tell us your shop name and plan. A human replies — same day, no bots.</p></article>
+        <article class="card"><span class="card-num">STEP 2</span><h3>We build your till</h3><p>Your private shop link, your products loaded, your PIN set. You approve it.</p></article>
+        <article class="card"><span class="card-num">STEP 3</span><h3>You sell like a boss</h3><p>Open the link, add it to your home screen, make your first sale today.</p></article>
+      </div><div style="margin-top:36px"><button class="button button-primary signup-trigger" data-plan="basic">Start step 1 on WhatsApp ↗</button></div></div></section>
+
+    <section id="pricing" class="block"><div class="wrap"><div class="sec-head"><span class="sec-tag">BOSS ECONOMICS</span><h2>Start small. <span class="marker">Earn the bigger chair.</span></h2><p>No hardware lock-in. No foreign-currency surprises. Choose a plan, request your till, keep your data yours.</p></div>
+      <div class="price-grid">
+        <article class="price-card"><h3>Starter</h3><p>One shop, one till.</p><div class="amount">UGX 75,000 <small>/ year</small></div><ul><li>Offline sales</li><li>Product and stock tracking</li><li>Daily reports</li><li>Cash, MoMo, Airtel, credit</li><li>Itemized receipts (print + WhatsApp)</li></ul><button class="button button-paper signup-trigger" data-plan="basic">Choose Starter</button></article>
+        <article class="price-card hot"><span class="flag">★ MOST BOSSES PICK THIS</span><h3>Growth</h3><p>For teams that need control.</p><div class="amount">UGX 185,000 <small>/ year</small></div><ul><li>Everything in Starter</li><li>Multiple tills</li><li>Sheets sync and backups</li><li>Priority support</li></ul><button class="button button-primary signup-trigger" data-plan="pro">Choose Growth</button></article>
+        <article class="price-card"><h3>Scale</h3><p>Multiple locations.</p><div class="amount">UGX 500,000 <small>/ year</small></div><ul><li>Unlimited tills</li><li>Advanced reporting</li><li>EFRIS fiscal invoices (TIN onboarding included)</li><li>Exportable sales records for accountant &amp; tax filing</li><li>Dedicated support</li></ul><button class="button button-paper signup-trigger" data-plan="enterprise">Talk about Scale</button></article>
+      </div><p class="price-note">Every plan starts with a working till. A boss upgrades when the shop earns it.</p><div class="momo-callout"><strong>Yearly feels heavy?</strong> Split any plan on MoMo — Starter ≈ UGX 6,500/month, Growth ≈ UGX 15,500/month. <a href="https://wa.me/256727790003">Ask on WhatsApp</a> and we'll structure it around your cash flow.</div></div></section>
+
+    <section id="faq" class="block"><div class="wrap"><div class="sec-head"><span class="sec-tag">BEFORE YOU TAKE CHARGE</span><h2>Ask like <span class="marker">a boss.</span></h2></div>
+      <div class="faq-list">
+        <details class="faq"><summary>Can I sell when the internet is down?</summary><p>Yes. Sales are saved on the device and sync when the connection returns. The app shows you what is still pending.</p></details>
+        <details class="faq"><summary>Do I need new hardware?</summary><p>No. Start with the Android phone, tablet, or computer you already use. Add a scanner or printer later if it earns its place.</p></details>
+        <details class="faq"><summary>Can I use mobile money and cash?</summary><p>Yes. Cash, MTN MoMo, Airtel Money, and credit are first-class payment methods in the till.</p></details>
+        <details class="faq"><summary>How long does setup take?</summary><p>One sitting: create the shop, set a PIN, add your first products, make a sale.</p></details>
+        <details class="faq"><summary>What if my phone breaks or gets stolen?</summary><p>Your data lives on our secure server, not just your phone. Every sale syncs whenever you're online, and the server keeps daily snapshots of the whole shop. Get a new phone, open your till link, enter your PIN — your stock, sales, and history are all there.</p></details>
+        <details class="faq"><summary>How do I back up without internet?</summary><p>You don't have to think about it. Every sale is saved on the device the second it happens, then syncs automatically when the connection returns. On top of that the server snapshots your shop daily, and you can download a full backup anytime from Settings.</p></details>
+        <details class="faq"><summary>What stops my attendant pocketing cash or voiding sales?</summary><p>Three locks: every sale is stamped with the seller's name, refunds and deleted sales need your manager PIN, and the end-of-day count compares drawer cash against sales — so shortages show up the same evening, not month-end.</p></details>
+        <details class="faq"><summary>How do I know when to restock from Kikuubo?</summary><p>Set a low-stock level per product. BOSS flags it on the till, pings your phone, and lists everything to reorder on the daily close-out — before the shelf empties.</p></details>
+        <details class="faq"><summary>Is BOSS EFRIS-ready?</summary><p>Yes. BOSS builds the fiscal invoice for every sale — VAT split, goods codes, totals — and files it under your shop's own TIN and device registration, with the Fiscal Document Number printed on the receipt. One-time URA device approval per shop takes 1–2 days; we walk you through it on WhatsApp, and sandbox mode lets you rehearse first.</p></details>
+        <details class="faq" id="faq-existing"><summary>I'm already selling with BOSS — does anything change?</summary><p>No. Your till link, PIN, stock, and sales history stay exactly the same. This page is for new shops — keep opening your till from the same bookmark on your phone.</p></details>
+      </div></div></section>
+
+    <section class="final"><div class="wrap final-inner"><p class="mono" style="color:var(--gold);font-size:.76rem;letter-spacing:.16em">LESS GUESSING. MORE BOSS.</p><h2>Know your shop. <span class="gold">Be the boss.</span></h2><p>Set up a real till in minutes and feel the difference by closing time. No ticket queues — a human replies on WhatsApp.</p><a class="button button-primary" href="https://wa.me/256727790003?text=Hello%20BOSS%20POS!%20I%20want%20instant%20setup%20for%20my%20shop.">Chat on WhatsApp for instant setup ↗</a></div></section>
+  </main>
+  <footer class="footer"><div class="wrap footer-inner"><span class="brand"><span class="brand-mark">B</span>BOSS POS</span><span>Point of sale for Ugandan bosses. <a href="https://wa.me/256727790003" style="text-decoration:underline">WhatsApp us</a> · <a href="mailto:1mark2mike@gmail.com" style="text-decoration:underline">Email</a></span><div class="footer-links"><a href="#top">Back to top</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div></div></footer>
+  <div class="modal" id="signupModal" aria-hidden="true"><form class="modal-card" id="signupForm"><div class="modal-head"><div><p class="mono" style="margin:0 0 8px;font-size:.7rem;letter-spacing:.14em">TAKE CHARGE</p><h2>Request your shop</h2></div><button type="button" class="close" id="closeSignup" aria-label="Close">×</button></div><label for="shopName">Shop name</label><input id="shopName" name="shopName" required maxlength="100" placeholder="e.g. Amina's Electronics"><label for="plan">Plan</label><select id="plan" name="plan"><option value="basic">Starter · UGX 75,000/year</option><option value="pro">Growth · UGX 185,000/year</option><option value="enterprise">Scale · UGX 500,000/year</option></select><p class="modal-message" id="signupMessage"></p><button class="button button-primary" id="submitSignup">Request my shop on WhatsApp</button><ol class="msteps"><li>Send the message — it opens WhatsApp with everything filled in.</li><li>We build your private till and load your products.</li><li>You get your link — most shops sell the same day.</li></ol></form></div>
+  <div class="sticky-cta"><button class="button button-primary signup-trigger" data-plan="basic">Be the boss — start free chat ↗</button></div>
+  <script>
+    // Standalone marketing site — no backend here. Requests go to sales over
+    // New shops are provisioned with scripts/provision-shop.mjs.
+    const BOSS_WHATSAPP = '256727790003'; // sales WhatsApp — requests open a chat here
+    const BOSS_EMAIL = '1mark2mike@gmail.com'; // shown as a fallback contact
+    const TICKER_ITEMS = ['KNOW YOUR SHOP','YOU\u2019RE THE BOSS','SELLS WITH DEAD WI-FI','CASH \u00b7 MOMO \u00b7 AIRTEL','UGX 6,500/MO ON MOMO','13 TRADES COVERED','CLOSING CASH, NO GUESSING','SAME-DAY SETUP'];
+    const fill = (id) => { const el = document.getElementById(id); if (!el) return; const half = TICKER_ITEMS.map((t) => `<span>${t} \u2605</span>`).join(''); el.innerHTML = half + half; };
+    fill('tickerTrack'); fill('dividerTrack');
+    const modal=document.getElementById('signupModal'),form=document.getElementById('signupForm'),message=document.getElementById('signupMessage'),plan=document.getElementById('plan');const openSignup=(selected)=>{plan.value=selected||'basic';modal.classList.add('open');modal.setAttribute('aria-hidden','false');document.getElementById('shopName').focus()};const closeSignup=()=>{modal.classList.remove('open');modal.setAttribute('aria-hidden','true')};document.querySelectorAll('.signup-trigger').forEach((button)=>button.addEventListener('click',()=>openSignup(button.dataset.plan)));document.getElementById('closeSignup').addEventListener('click',closeSignup);modal.addEventListener('click',(event)=>{if(event.target===modal)closeSignup()});form.addEventListener('submit',(event)=>{event.preventDefault();const data=new FormData(form);const shop=String(data.get('shopName')||'').trim();const planName=plan.options[plan.selectedIndex]?plan.options[plan.selectedIndex].text:String(data.get('plan'));const text=`Hello BOSS POS! I want a till for "${shop}" (${planName}). Please set up my shop.`;message.style.color='';message.textContent='';try{const url=BOSS_WHATSAPP?`https://wa.me/${BOSS_WHATSAPP}?text=${encodeURIComponent(text)}`:`https://wa.me/?text=${encodeURIComponent(text)}`;window.open(url,'_blank','noopener');message.style.color='#0d5c45';message.textContent=BOSS_EMAIL?`Opening WhatsApp… send the message and we will set up "${shop}". Or email ${BOSS_EMAIL}.`:`Opening WhatsApp… send the message and we will set up "${shop}".`}catch(error){message.textContent=BOSS_EMAIL?`Could not open WhatsApp — email us at ${BOSS_EMAIL}.`:'Could not open WhatsApp. Please try again.'}});
+  </script>
+</body>
+</html>

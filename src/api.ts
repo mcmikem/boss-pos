@@ -728,6 +728,36 @@ export const sheetsApi = {
   status: () => api<{ configured: boolean; lastError: string | null; lastOkAt: string | null }>('/api/sheets/status', { store: 60 }),
 };
 
+export interface EfrisStatus {
+  status: 'none' | 'pending' | 'issued' | 'failed';
+  invoiceNo: string;
+  fdn: string;
+  verifyCode: string;
+  qr: string;
+  error: string;
+  at: string;
+}
+
+export const efrisApi = {
+  config: () => api<{ config: import('./types').EfrisConfig; hasToken: boolean }>('/api/efris/config', { fresh: true }),
+  save: (config: import('./types').EfrisConfig, token?: string, clearToken?: boolean) =>
+    api<{ success: boolean; config: import('./types').EfrisConfig; hasToken: boolean }>('/api/efris/config', {
+      method: 'PUT',
+      body: JSON.stringify({ config, token, clearToken }),
+    }),
+  issue: (saleId: string) =>
+    api<{ success: boolean; status: string; sale: import('./types').Sale }>('/api/efris/issue', {
+      method: 'POST',
+      body: JSON.stringify({ saleId }),
+    }),
+  retry: (saleId: string) =>
+    api<{ success: boolean; status: string; sale: import('./types').Sale }>('/api/efris/retry', {
+      method: 'POST',
+      body: JSON.stringify({ saleId }),
+    }),
+  status: (saleId: string) => api<EfrisStatus>(`/api/efris/status?saleId=${encodeURIComponent(saleId)}`, { fresh: true }),
+};
+
 export interface BootData {
   products: Product[];
   suppliers: Supplier[];

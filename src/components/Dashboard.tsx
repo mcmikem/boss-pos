@@ -508,6 +508,7 @@ export default function Dashboard({
           formatCurrency={formatCurrency}
           onClose={() => setShowReceiptModal(false)}
           triggerToast={triggerToast}
+          onFiscalUpdate={(updated) => setSelectedSaleForModal(updated)}
         />
       )}
     </div>

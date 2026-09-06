@@ -94,7 +94,7 @@ async function main() {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), `imac-fleet-${slug}-`));
   const repo = fs.readdirSync('.');
   // .env carries the production DATABASE_URL — never ship it to a shop build.
-  const skip = new Set(['node_modules', 'dist', '.git', '.vercel', 'fleet', 'pos.db', 'pos.db-shm', 'pos.db-wal', '.DS_Store', '.env']);
+  const skip = new Set(['node_modules', 'dist', '.git', '.vercel', 'fleet', 'landing', 'pos.db', 'pos.db-shm', 'pos.db-wal', '.DS_Store', '.env']);
   for (const entry of repo) {
     if (!skip.has(entry)) fs.cpSync(entry, path.join(work, entry), { recursive: true, verbatimSymlinks: true });
   }

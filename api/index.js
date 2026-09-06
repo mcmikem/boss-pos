@@ -2,6 +2,7 @@ import express from 'express';
 import { neon } from '@neondatabase/serverless';
 import sharp from 'sharp';
 import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider } from './efris.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -81,6 +82,14 @@ async function initDB() {
     paymentmethod TEXT DEFAULT 'Cash', customername TEXT,
     discount DOUBLE PRECISION, notes TEXT
   )`;
+  // EFRIS fiscalisation state per sale (guarded ALTERs so existing DBs migrate).
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_status TEXT DEFAULT 'none'`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_invoice_no TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_fdn TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_verify TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_qr TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_error TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE sales ADD COLUMN efris_at TEXT DEFAULT ''`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, description TEXT NOT NULL,
     amount DOUBLE PRECISION DEFAULT 0, category TEXT DEFAULT ''
@@ -1162,6 +1171,12 @@ app.post('/api/sales', asHandler(async (req, res) => {
         staffName: s.staffName || null,
       }).catch(() => {});
       maybeAutoBackup().catch(() => {});
+      // EFRIS auto-issue: fire-and-forget, never blocks or breaks the sale.
+      readEfrisConfig().then((cfg) => {
+        if (cfg.enabled && cfg.autoIssue && cfg.mode !== 'off') {
+          issueEfrisForSale(saleId).catch(() => {});
+        }
+      }).catch(() => {});
       return res.json({ ...s, id: saleId, orderNumber });
     } catch (err) {
       // Order-number collision from a queued/replayed offline sale: renumber
@@ -1363,13 +1378,134 @@ app.delete('/api/expenses/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === EFRIS (URA fiscal invoicing) ===
+// Per-shop credentials: the public config lives under the `efris` settings
+// key (visible to tills); the provider bearer token lives under `efrisToken`
+// (never returned by GET /api/settings — see BLOCKED_GET above).
+async function readEfrisConfig() {
+  let cfg = defaultEfrisConfig();
+  try {
+    const rows = await sql`SELECT value FROM settings WHERE key='efris'`;
+    if (rows.length) {
+      const parsed = JSON.parse(rows[0].value);
+      if (parsed && typeof parsed === 'object') cfg = { ...cfg, ...parsed };
+    }
+  } catch {}
+  return sanitizeEfrisConfig(cfg);
+}
+
+async function readShopName() {
+  try {
+    const rows = await sql`SELECT value FROM settings WHERE key='shopName'`;
+    if (rows.length) return JSON.parse(rows[0].value);
+  } catch {}
+  return 'My Shop';
+}
+
+// File one sale with the fiscal endpoint. Never throws to callers — a fiscal
+// failure must never break or delay the actual sale.
+async function issueEfrisForSale(saleId) {
+  const cfg = await readEfrisConfig();
+  if (!cfg.enabled || cfg.mode === 'off') return { status: 'none' };
+  const rows = await sql`SELECT * FROM sales WHERE id=${saleId}`;
+  if (!rows.length) throw new Error('Sale not found');
+  const sale = mapSale(rows[0]);
+  if (sale.refunded) throw new Error('Refunded sales cannot be fiscalised');
+  if (sale.efrisStatus === 'issued') return { status: 'issued', sale };
+  if (cfg.mode === 'provider' && !cfg.tin) throw new Error('Shop TIN is not configured');
+  await sql`UPDATE sales SET efris_status='pending', efris_error='' WHERE id=${saleId}`;
+  try {
+    const payload = buildInvoicePayload(sale, { shopName: await readShopName() }, cfg);
+    const out = cfg.mode === 'sandbox'
+      ? simulateSandbox(payload)
+      : await sendToProvider(payload, {
+          base: cfg.providerBase,
+          token: (await readSettingValue('efrisToken')) || '',
+        });
+    const at = new Date().toISOString();
+    await sql`UPDATE sales SET efris_status='issued', efris_invoice_no=${out.invoiceNo},
+      efris_fdn=${out.fdn}, efris_verify=${out.verifyCode || ''}, efris_qr=${out.qr || ''},
+      efris_error='', efris_at=${at} WHERE id=${saleId}`;
+    await audit('efris.issue', `${sale.orderNumber} → ${out.fdn} (${cfg.mode})`);
+    const fresh = await sql`SELECT * FROM sales WHERE id=${saleId}`;
+    return { status: 'issued', sale: mapSale(fresh[0]) };
+  } catch (err) {
+    const msg = String(err?.message || err).slice(0, 300);
+    await sql`UPDATE sales SET efris_status='failed', efris_error=${msg} WHERE id=${saleId}`;
+    await audit('efris.failed', `${sale.orderNumber}: ${msg}`);
+    throw err instanceof Error ? err : new Error(msg);
+  }
+}
+
+app.get('/api/efris/config', asHandler(async (req, res) => {
+  const cfg = await readEfrisConfig();
+  const tok = await readSettingValue('efrisToken');
+  res.json({ config: cfg, hasToken: !!(tok && String(tok).length > 0) });
+}));
+
+app.put('/api/efris/config', asHandler(async (req, res) => {
+  const cfg = sanitizeEfrisConfig((req.body || {}).config);
+  if (cfg.mode === 'provider' && !cfg.tin) {
+    return res.status(400).json({ error: 'TIN is required for provider mode' });
+  }
+  await sql`INSERT INTO settings (key, value) VALUES ('efris', ${JSON.stringify(cfg)})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+  const token = typeof (req.body || {}).token === 'string' ? req.body.token.slice(0, 500) : '';
+  if (token) {
+    await sql`INSERT INTO settings (key, value) VALUES ('efrisToken', ${JSON.stringify(token)})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+  } else if ((req.body || {}).clearToken === true) {
+    await sql`DELETE FROM settings WHERE key='efrisToken'`;
+  }
+  await audit('efris.config', `EFRIS ${cfg.enabled ? `enabled (${cfg.mode})` : 'disabled'}`);
+  const hasToken = token ? true : !!await readSettingValue('efrisToken');
+  res.json({ success: true, config: cfg, hasToken });
+}));
+
+app.post('/api/efris/issue', asHandler(async (req, res) => {
+  const saleId = String((req.body || {}).saleId || '');
+  if (!saleId) return res.status(400).json({ error: 'saleId is required' });
+  try {
+    const out = await issueEfrisForSale(saleId);
+    res.json({ success: true, ...out });
+  } catch (err) {
+    res.status(502).json({ error: String(err?.message || err) });
+  }
+}));
+
+app.post('/api/efris/retry', asHandler(async (req, res) => {
+  const saleId = String((req.body || {}).saleId || '');
+  if (!saleId) return res.status(400).json({ error: 'saleId is required' });
+  const rows = await sql`SELECT efris_status FROM sales WHERE id=${saleId}`;
+  if (!rows.length) return res.status(404).json({ error: 'Sale not found' });
+  if (rows[0].efris_status === 'issued') return res.json({ success: true, status: 'issued' });
+  try {
+    const out = await issueEfrisForSale(saleId);
+    res.json({ success: true, ...out });
+  } catch (err) {
+    res.status(502).json({ error: String(err?.message || err) });
+  }
+}));
+
+app.get('/api/efris/status', asHandler(async (req, res) => {
+  const saleId = String(req.query.saleId || '');
+  if (!saleId) return res.status(400).json({ error: 'saleId is required' });
+  const rows = await sql`SELECT * FROM sales WHERE id=${saleId}`;
+  if (!rows.length) return res.status(404).json({ error: 'Sale not found' });
+  const s = mapSale(rows[0]);
+  res.json({
+    status: s.efrisStatus, invoiceNo: s.efrisInvoiceNo, fdn: s.efrisFdn,
+    verifyCode: s.efrisVerify, qr: s.efrisQr, error: s.efrisError, at: s.efrisAt,
+  });
+}));
+
 // === SETTINGS API ===
 app.get('/api/settings', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM settings`;
   const obj = {};
   const BLOCKED_GET = new Set([
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
-    'clientWriteId', 'deviceId',
+    'clientWriteId', 'deviceId', 'efrisToken',
   ]);
   for (const r of rows) {
     if (BLOCKED_GET.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
@@ -1389,7 +1525,7 @@ app.put('/api/settings', asHandler(async (req, res) => {
   // on cold DBs to hit Vercel's 30s maxDuration.
   const BLOCKED = new Set([
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
-    'clientWriteId', 'deviceId', 'hasPin',
+    'clientWriteId', 'deviceId', 'hasPin', 'efrisToken',
   ]);
   let body = req.body || {};
   // Guard: never allow a stale till to truncate categories/expenseCategories to 1-2 items.
@@ -2266,6 +2402,13 @@ function mapSale(r) {
     items: JSON.parse(r.items), subtotal: r.subtotal, tax: r.tax, total: r.total,
     paymentMethod: r.paymentmethod, customerName: r.customername,
     discount: r.discount, notes: r.notes, refunded: !!r.refunded,
+    efrisStatus: r.efris_status || 'none',
+    efrisInvoiceNo: r.efris_invoice_no || '',
+    efrisFdn: r.efris_fdn || '',
+    efrisVerify: r.efris_verify || '',
+    efrisQr: r.efris_qr || '',
+    efrisError: r.efris_error || '',
+    efrisAt: r.efris_at || '',
   };
 }
 

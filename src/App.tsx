@@ -1,9 +1,9 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText
 } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
+import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
+import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -118,6 +118,10 @@ export default function App() {
   const [auditFilter, setAuditFilter] = useState('');
   const [updatingApp, setUpdatingApp] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
+  const [efrisForm, setEfrisForm] = useState<EfrisConfig | null>(null);
+  const [efrisToken, setEfrisToken] = useState('');
+  const [efrisHasToken, setEfrisHasToken] = useState(false);
+  const [efrisSaving, setEfrisSaving] = useState(false);
   const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
@@ -765,6 +769,7 @@ export default function App() {
     backupsApi.latest().then((b) => setLastBackupAt(b.createdAt)).catch(() => {});
     auditApi.list(30).then((entries) => setAuditEntries(entries)).catch(() => {});
     sheetsApi.status().then(setSheetStatus).catch(() => setSheetStatus(null));
+    efrisApi.config().then((c) => { setEfrisForm(c.config); setEfrisHasToken(c.hasToken); setEfrisToken(''); }).catch(() => {});
   }, [isSettingsOpen]);
 
   const handleTestSheets = async () => {
@@ -1583,6 +1588,84 @@ export default function App() {
                   </div>
                 )}
                 <p className="text-[10px] text-zinc-600 leading-relaxed">Every sale and expense is added to the sheet automatically. To set up: create a Google Sheet → Extensions → Apps Script → paste the script from the repo (scripts/appsscript-sheet.gs) → Deploy → Web app → paste the <span className="text-zinc-400">/exec</span> URL here.</p>
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <ReceiptText className="w-3.5 h-3.5 text-gold-brand" /> URA EFRIS fiscal invoices
+                </label>
+                {efrisForm ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['off', 'sandbox', 'provider'] as const).map(m => (
+                        <button key={m} onClick={() => setEfrisForm(prev => prev ? { ...prev, mode: m, enabled: m !== 'off' } : prev)}
+                          className={`py-2 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${efrisForm.mode === m ? 'border-gold-brand bg-gold-brand/10 text-white font-extrabold' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                          {m === 'off' ? 'Off' : m === 'sandbox' ? 'Sandbox' : 'Live'}
+                        </button>
+                      ))}
+                    </div>
+                    {efrisForm.mode !== 'off' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input type="text" value={efrisForm.tin} placeholder="Shop TIN"
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, tin: e.target.value } : prev)}
+                            className="h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                          <input type="text" value={efrisForm.deviceNo} placeholder="Device no."
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, deviceNo: e.target.value } : prev)}
+                            className="h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <input type="text" value={efrisForm.branchCode} placeholder="Branch"
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, branchCode: e.target.value } : prev)}
+                            className="h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                          <input type="number" min="0" max="100" value={efrisForm.vatRate} placeholder="VAT %"
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, vatRate: Number(e.target.value) } : prev)}
+                            className="h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                          <input type="text" value={efrisForm.goodsPrefix} placeholder="Goods prefix"
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, goodsPrefix: e.target.value } : prev)}
+                            className="h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                        </div>
+                        {efrisForm.mode === 'provider' && (
+                          <>
+                            <input type="url" value={efrisForm.providerBase} placeholder="Fiscal endpoint base URL (https://…)"
+                              onChange={(e) => setEfrisForm(prev => prev ? { ...prev, providerBase: e.target.value } : prev)}
+                              className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                            <input type="password" value={efrisToken} placeholder={efrisHasToken ? 'Token saved — enter a new one to replace' : 'Provider bearer token'}
+                              onChange={(e) => setEfrisToken(e.target.value)}
+                              className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                          </>
+                        )}
+                        <label className="flex items-center gap-2 text-xs text-zinc-300 font-bold cursor-pointer">
+                          <input type="checkbox" checked={efrisForm.autoIssue}
+                            onChange={(e) => setEfrisForm(prev => prev ? { ...prev, autoIssue: e.target.checked } : prev)}
+                            className="w-4 h-4 accent-gold-brand" />
+                          File every sale automatically
+                        </label>
+                        <button disabled={efrisSaving} onClick={async () => {
+                          if (!efrisForm) return;
+                          setEfrisSaving(true);
+                          try {
+                            const res = await efrisApi.save(efrisForm, efrisToken || undefined);
+                            setEfrisForm(res.config);
+                            setEfrisHasToken(res.hasToken);
+                            setEfrisToken('');
+                            setSettings(prev => ({ ...prev, efris: res.config }));
+                            triggerToast(res.config.enabled ? `EFRIS enabled (${res.config.mode})` : 'EFRIS disabled', 'success');
+                          } catch (err) {
+                            triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Failed to save EFRIS settings', 'error');
+                          } finally {
+                            setEfrisSaving(false);
+                          }
+                        }}
+                          className="w-full h-10 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer disabled:opacity-50">
+                          {efrisSaving ? 'Saving…' : 'Save EFRIS settings'}
+                        </button>
+                      </>
+                    )}
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">Sandbox rehearses the full flow with simulated URA responses — no credentials needed. Live mode needs URA device approval for this shop's TIN (1–2 days) and goods registered in EFRIS with matching codes. Fiscal filing never blocks a sale: failures queue as failed for retry.</p>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-zinc-600">Loading EFRIS settings…</p>
+                )}
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>

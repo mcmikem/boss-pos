@@ -35,14 +35,14 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         } ${cartItem ? 'border-gold-brand/40 bg-gold-brand/5' : ''}`}
       >
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-white uppercase truncate">{product.name}</p>
-          <p className="text-[10px] text-zinc-500 font-bold mt-0.5 uppercase">
+          <p className="text-sm font-semibold text-zinc-100 truncate leading-snug">{product.name}</p>
+          <p className="text-[11px] text-zinc-500 font-medium mt-0.5 truncate tracking-wide">
             {product.category} • {formatCurrency(product.price)}
-            {!product.isService && ` • Stock: ${product.stockQty}`}
+            {!product.isService && ` • ${product.stockQty} left`}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0 ml-3">
-          {cartItem && <span className="text-xs font-black text-gold-brand">x{cartItem.qty}</span>}
+          {cartItem && <span className="text-xs font-bold text-gold-brand">×{cartItem.qty}</span>}
           <div className="w-11 h-11 bg-gold-brand text-black rounded-xl flex items-center justify-center font-black text-lg">+</div>
         </div>
       </button>
@@ -72,38 +72,47 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
                               <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
                             </div>
         )}
+        {/* Mistake 1 fix: badges sit on ANY product photo (dark, bright, busy), so
+            they get a solid container + outline + shadow — never bare text/icons
+            on the image. See video "icons lost in the image". */}
         {isOutOfStock ? (
-          <div className="absolute top-2 right-2 bg-rose-950/90 backdrop-blur-sm text-rose-300 text-[10px] font-black px-2.5 py-1 rounded-lg border border-rose-800/50 uppercase tracking-wider">SOLD OUT</div>
+          <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-rose-300 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-white/15 shadow-md uppercase tracking-[0.08em] leading-none">Sold out</div>
         ) : cartItem && !product.isService ? (
-          <div className="absolute top-2 right-2 bg-gold-brand/90 backdrop-blur-sm text-black text-[10px] font-black px-2.5 py-1 rounded-lg border border-gold-brand uppercase tracking-wider">RESERVED {cartItem.qty}/{product.stockQty}</div>
+          <div className="absolute top-2 right-2 bg-gold-brand text-black text-[10px] font-bold px-2.5 py-1 rounded-lg border border-black/20 shadow-md tracking-[0.08em] leading-none">{cartItem.qty} in cart</div>
         ) : isLowStock ? (
-          <div className="absolute top-2 right-2 bg-amber-950/90 backdrop-blur-sm text-amber-300 text-[10px] font-black px-2.5 py-1 rounded-lg border border-amber-800/50 uppercase tracking-wider animate-pulse">LOW ({product.stockQty})</div>
+          <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-white/15 shadow-md tracking-[0.08em] leading-none">Only {product.stockQty} left</div>
         ) : (
           !product.isService && (
-            <div className="absolute top-2 right-2 bg-black/50 backdrop-blur-sm text-zinc-300 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-white/10 uppercase tracking-wider">{product.stockQty}</div>
+            <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-zinc-200 text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-white/15 shadow-md tracking-[0.08em] leading-none">{product.stockQty}</div>
           )
         )}
       </div>
 
-      <div className="p-3 flex flex-col gap-1.5 flex-1 min-h-0">
-        <h3 className="text-xs sm:text-sm font-bold text-white uppercase tracking-wide line-clamp-2 leading-tight min-h-[2.5em]">
+      <div className="p-3 flex flex-col gap-1 flex-1 min-h-0">
+        {/* Mistake 7 fix: title stands out without shouting — sentence case,
+            semibold (not black/uppercase), tight leading for easy scanning. */}
+        <h3 className="text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
           {product.name}
         </h3>
+        {/* Mistake 9 fix: trust signal (stock) lives next to the title/price,
+            not only as a far-away badge — "what is it, can I trust it, how much". */}
         <div className="flex items-center justify-between mt-auto gap-1">
-          <div>
-            <p className="text-xs font-black text-gold-brand font-display leading-tight">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-bold normal-case"> / {product.saleUnit}</span> : null}</p>
-            {marginPct !== null ? (
-              <p className={`text-[10px] font-black uppercase mt-0.5 ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                {marginPct <= 0 ? 'LOSS' : `+${marginPct.toFixed(0)}%`}
+          <div className="min-w-0">
+            <p className="text-[13px] font-bold text-gold-brand font-display leading-tight truncate">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-semibold"> / {product.saleUnit}</span> : null}</p>
+            {isLowStock && !isOutOfStock && !product.isService ? (
+              <p className="text-[11px] font-semibold text-amber-400/90 mt-0.5">Only {product.stockQty} left</p>
+            ) : marginPct !== null ? (
+              <p className={`text-[11px] font-bold mt-0.5 ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {marginPct <= 0 ? 'Loss' : `+${marginPct.toFixed(0)}%`}
               </p>
             ) : (
               product.cost > 0 && (
-                <p className="text-[10px] text-zinc-600 font-bold uppercase mt-0.5">Cost: {formatCurrency(product.cost)}</p>
+                <p className="text-[11px] text-zinc-500 font-medium mt-0.5">{formatCurrency(product.cost)}</p>
               )
             )}
           </div>
           {hasVariants ? (
-            <span className="text-[9px] text-amber-400/80 font-black uppercase tracking-wider border border-amber-400/30 bg-amber-950/30 rounded-lg px-2 py-1.5">
+            <span className="text-[10px] text-amber-300/90 font-semibold tracking-[0.06em] border border-white/10 bg-white/5 rounded-lg px-2 py-1.5">
               Options
             </span>
           ) : cartItem && onAdjustQty ? (

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { Sale, StoreSettings } from '../types';
 import { unitLabel } from '../utils/units';
 import { printViaBluetooth } from '../utils/bluetoothPrint';
+import { efrisApi } from '../api';
 
 interface ReceiptModalProps {
   sale: Sale;
@@ -10,6 +11,7 @@ interface ReceiptModalProps {
   formatCurrency: (val: number) => string;
   onClose: () => void;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onFiscalUpdate?: (sale: Sale) => void;
 }
 
 function escapeHtml(s: string): string {
@@ -36,8 +38,40 @@ function printViaPopup(html: string): boolean {
   }
 }
 
-export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast }: ReceiptModalProps) {
+export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast, onFiscalUpdate }: ReceiptModalProps) {
   const [copied, setCopied] = useState(false);
+  const [fiscal, setFiscal] = useState({
+    status: sale.efrisStatus || 'none',
+    fdn: sale.efrisFdn || '',
+    verify: sale.efrisVerify || '',
+    invoiceNo: sale.efrisInvoiceNo || '',
+    error: sale.efrisError || '',
+  });
+  const [issuing, setIssuing] = useState(false);
+  const efrisOn = !!settings.efris?.enabled && settings.efris.mode !== 'off';
+
+  const handleIssueFiscal = async () => {
+    setIssuing(true);
+    try {
+      const res = await efrisApi.issue(sale.id);
+      const updated = res.sale;
+      setFiscal({
+        status: (updated.efrisStatus as typeof fiscal.status) || 'issued',
+        fdn: updated.efrisFdn || '',
+        verify: updated.efrisVerify || '',
+        invoiceNo: updated.efrisInvoiceNo || '',
+        error: updated.efrisError || '',
+      });
+      onFiscalUpdate?.(updated);
+      triggerToast(updated.efrisFdn ? `Fiscal invoice filed: ${updated.efrisFdn}` : 'Fiscal invoice filed', 'success');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Fiscal filing failed';
+      setFiscal(prev => ({ ...prev, status: 'failed', error: msg }));
+      triggerToast(msg.slice(0, 110), 'error');
+    } finally {
+      setIssuing(false);
+    }
+  };
 
   const items = sale.items
     .map(i => {
@@ -49,6 +83,10 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
   const discountRow =
     sale.discount && sale.discount > 0
       ? `<tr><td style="padding:2px 0">Discount</td><td style="text-align:right;white-space:nowrap">-${formatCurrency(sale.discount)}</td></tr>`
+      : '';
+  const fiscalHtml =
+    fiscal.status === 'issued' && fiscal.fdn
+      ? `<div class="divider"></div><div class="center"><div style="font-weight:bold">URA E-FISCAL RECEIPT</div><div class="muted">FDN: ${escapeHtml(fiscal.fdn)}</div>${fiscal.invoiceNo ? `<div class="muted">INV: ${escapeHtml(fiscal.invoiceNo)}</div>` : ''}${fiscal.verify ? `<div class="muted">VERIFY: ${escapeHtml(fiscal.verify)}</div>` : ''}</div>`
       : '';
 
   const html = `<!doctype html>
@@ -96,6 +134,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
   </table>
   <div class="divider"></div>
   <div class="center muted">Thank you for your business!</div>
+  ${fiscalHtml}
   <script>
     window.onload = function () { setTimeout(function () { window.print(); }, 150); };
   <\/script>
@@ -113,6 +152,9 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     '',
     `TOTAL: ${formatCurrency(sale.total)}`,
     `PAYMENT: ${sale.paymentMethod}${sale.customerName ? ` • ${sale.customerName}` : ''}`,
+    ...(fiscal.status === 'issued' && fiscal.fdn
+      ? ['', `URA E-FISCAL RECEIPT`, `FDN: ${fiscal.fdn}`, ...(fiscal.invoiceNo ? [`INV: ${fiscal.invoiceNo}`] : []), ...(fiscal.verify ? [`VERIFY: ${fiscal.verify}`] : [])]
+      : []),
   ].join('\n');
 
   const handlePrint = () => {
@@ -197,7 +239,28 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           </div>
           <div className="border-t border-dashed border-zinc-400 my-2" />
           <div className="text-center text-[10px] text-zinc-600">Thank you for your business!</div>
+          {fiscal.status === 'issued' && fiscal.fdn && (
+            <>
+              <div className="border-t border-dashed border-zinc-400 my-2" />
+              <div className="text-center">
+                <div className="text-[11px] font-black">URA E-FISCAL RECEIPT</div>
+                <div className="text-[10px] text-zinc-700">FDN: {fiscal.fdn}</div>
+                {fiscal.invoiceNo && <div className="text-[10px] text-zinc-700">INV: {fiscal.invoiceNo}</div>}
+                {fiscal.verify && <div className="text-[10px] text-zinc-700">VERIFY: {fiscal.verify}</div>}
+              </div>
+            </>
+          )}
         </div>
+
+        {efrisOn && fiscal.status !== 'issued' && (
+          <button onClick={handleIssueFiscal} disabled={issuing}
+            className="mt-3 w-full h-11 bg-gold-brand hover:bg-yellow-400 disabled:opacity-60 text-black font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 cursor-pointer">
+            {issuing ? 'Filing…' : fiscal.status === 'failed' ? 'Retry fiscal filing' : 'File URA fiscal invoice'}
+          </button>
+        )}
+        {fiscal.status === 'failed' && fiscal.error && (
+          <p className="mt-2 text-[10px] text-rose-400 font-bold">Fiscal filing failed: {fiscal.error.slice(0, 120)}</p>
+        )}
 
         <div className="grid grid-cols-4 gap-2 mt-4">
           <button onClick={handlePrint}
