@@ -107,6 +107,8 @@ export default function Sales({
   const [isCustomChargeOpen, setIsCustomChargeOpen] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
+  const [showSellerEditor, setShowSellerEditor] = useState(false);
+  const [sellerDraft, setSellerDraft] = useState('');
   const [discount, setDiscount] = useState<string>('');
   const [customCashReceived, setCustomCashReceived] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
@@ -381,10 +383,10 @@ export default function Sales({
       <div key={lineKey} className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl flex flex-col justify-between gap-3">
         <div className="flex justify-between items-start gap-2">
           <div className="min-w-0">
-            <span className="text-sm font-bold text-white uppercase tracking-wide truncate max-w-[180px] block" title={item.productName}>{item.productName}</span>
-            {item.variantLabel && <span className="text-[10px] text-zinc-500 uppercase font-bold block">{item.variantLabel}</span>}
+            <span className="text-sm font-semibold text-zinc-100 truncate max-w-[180px] block leading-snug" title={item.productName}>{item.productName}</span>
+            {item.variantLabel && <span className="text-[11px] text-zinc-500 font-medium block truncate">{item.variantLabel}</span>}
           </div>
-          <p className="text-sm font-black text-gold-brand font-display shrink-0">{formatCurrency(item.lineTotal)}</p>
+          <p className="text-sm font-bold text-gold-brand font-display shrink-0">{formatCurrency(item.lineTotal)}</p>
         </div>
         <div className="flex justify-between items-center">
           {isEditing ? (
@@ -400,9 +402,10 @@ export default function Sales({
                 className="p-2 bg-gold-brand text-black rounded text-sm hover:opacity-90 cursor-pointer touch-target"><Check className="w-4 h-4" /></button>
             </div>
           ) : (
+            // Mistake 14: unit lives INSIDE qty selector, not in product title.
             <button onClick={() => { setEditingItemId(lineKey); setEditingQtyValue(String(item.qty)); }}
-              className="text-xs font-bold text-zinc-400 bg-zinc-900 hover:text-gold-brand hover:bg-zinc-800 px-3 py-1.5 rounded-lg cursor-pointer transition-all touch-target">
-              {item.saleUnit ? <>{unitLabel(item.qty, item.saleUnit)}</> : <>Qty: <span className="text-gold-light underline font-black">{item.qty}</span></>}
+              className="text-xs font-semibold text-zinc-300 bg-zinc-900 hover:text-gold-brand hover:bg-zinc-800 px-3 py-1.5 rounded-lg cursor-pointer transition-all touch-target tabular-nums">
+              {item.saleUnit ? unitLabel(item.qty, item.saleUnit) : `${item.qty} × ${formatCurrency(item.unitPrice)}`}
             </button>
           )}
           <div className="flex items-center gap-1.5">
@@ -428,12 +431,12 @@ export default function Sales({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 relative lg:h-[calc(100vh-140px)] lg:overflow-hidden pb-2" id="sales-tab-content">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 relative min-w-0 overflow-x-hidden lg:h-[calc(100vh-140px)] lg:overflow-hidden pb-2" id="sales-tab-content">
       
       {/* LEFT COLUMN */}
       <div className="lg:col-span-8 flex flex-col h-full lg:overflow-hidden space-y-3">
-        <div className="flex gap-2 items-center">
-          <div className="relative flex-1">
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative basis-full min-w-0 sm:basis-auto sm:flex-1">
             <input
               ref={searchRef}
               type="text"
@@ -445,22 +448,24 @@ export default function Sales({
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
-          <button onClick={() => { const name = window.prompt('Who is selling now?', staffName || ''); if (name !== null) setStaffName(name.trim()); }}
-            className="shrink-0 h-12 px-3 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
-            title="Who is selling — each sale is stamped with this name" id="seller-chip">
+          <button onClick={() => { setSellerDraft(staffName || ''); setShowSellerEditor(true); }}
+              className="shrink-0 h-12 w-12 px-0 sm:w-auto sm:px-3 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
+              title="Who is selling — each sale is stamped with this name"
+              aria-label="Set seller"
+              id="seller-chip">
             {staffName ? (
-              <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-gold-brand" />{staffName}</span>
+              <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-gold-brand" /><span className="hidden sm:inline">{staffName}</span></span>
             ) : (
-              <span className="text-zinc-500">Seller</span>
+              <span className="flex items-center justify-center gap-1.5"><User className="w-4 h-4 text-zinc-500" /><span className="hidden sm:inline text-zinc-500">Seller</span></span>
             )}
           </button>
           <button onClick={() => setIsCustomChargeOpen(true)}
-            className="shrink-0 h-12 px-4 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
+            className="shrink-0 h-12 px-3 sm:px-4 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
             id="open-custom-charge-btn">
             + Custom
           </button>
           <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
-            className="shrink-0 h-12 px-4 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            className="shrink-0 h-12 px-3 sm:px-4 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
             id="open-quick-sale-btn">
             <Zap className="w-4 h-4" /> Quick Sale
           </button>
@@ -474,7 +479,7 @@ export default function Sales({
         )}
 
         {/* Categories */}
-        <div className="relative -mx-4 px-4 sm:mx-0 sm:px-0">
+        <div className="relative -mx-4 min-w-0 max-w-[calc(100%+2rem)] overflow-hidden px-4 sm:mx-0 sm:max-w-none sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
             <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); }}
@@ -640,21 +645,23 @@ export default function Sales({
           </div>
 
           {cart.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-zinc-800 space-y-2">
-              <p className="text-sm text-zinc-400 font-bold uppercase tracking-wider">Payment:</p>
+            <div className="mt-4 pt-4 border-t border-white/5 space-y-2">
+              <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">PAYMENT</p>
               <div className="grid grid-cols-4 gap-1.5">
+                {/* Mistake 10 fix: one icon style, one neutral color — active state
+                    carries meaning via border/gold, not 4 competing hues. */}
                 {[
-                  { name: 'Cash', label: 'Cash', icon: <Coins className="w-4 h-4 text-emerald-400" /> },
-                  { name: 'MTN MoMo', label: 'MTN', icon: <Smartphone className="w-4 h-4 text-yellow-400" /> },
-                  { name: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4 text-red-500" /> },
-                  { name: 'Credit / Book', label: 'Credit', icon: <UserCheck className="w-4 h-4 text-blue-400" /> },
+                  { name: 'Cash', label: 'Cash', icon: <Coins className="w-4 h-4" /> },
+                  { name: 'MTN MoMo', label: 'MTN', icon: <Smartphone className="w-4 h-4" /> },
+                  { name: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" /> },
+                  { name: 'Credit / Book', label: 'Credit', icon: <UserCheck className="w-4 h-4" /> },
                 ].map(opt => (
                   <button key={opt.name} onClick={() => { setPaymentMethod(opt.name as any); setCustomCashReceived(''); }}
-                    className={`flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-sm font-bold uppercase transition-all cursor-pointer min-h-[56px] touch-target ${
-                      paymentMethod === opt.name ? 'border-gold-brand bg-gold-brand/15 text-white font-black' : 'border-white/5 bg-[#0A0A0A] text-zinc-500 hover:border-white/10 hover:text-zinc-400'
+                    className={`flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
+                      paymentMethod === opt.name ? 'border-gold-brand bg-gold-brand/15 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500 hover:border-white/10 hover:text-zinc-300'
                     }`}>
                     <div className="mb-1 shrink-0">{opt.icon}</div>
-                    <span className="truncate w-full text-center text-xs">{opt.label}</span>
+                    <span className="truncate w-full text-center">{opt.label}</span>
                   </button>
                 ))}
               </div>
@@ -746,25 +753,27 @@ export default function Sales({
 
           <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
             {discountNum > 0 && (
-              <div className="flex justify-between text-zinc-500 text-sm font-bold">
+              <div className="flex justify-between text-zinc-500 text-sm font-medium">
                 <span>Subtotal</span>
                 <span className="line-through">{formatCurrency(subtotal)}</span>
               </div>
             )}
-            <div className="flex justify-between items-center py-2">
-              <span className="text-sm font-black text-white uppercase tracking-wider">Total</span>
-              <span className="text-2xl font-black text-gold-brand font-display">{formatCurrency(total)}</span>
+            <div className="flex justify-between items-center py-1">
+              <span className="text-[13px] font-semibold text-zinc-300 tracking-wide">Total</span>
+              <span className="text-2xl font-bold text-gold-brand font-display tabular-nums">{formatCurrency(total)}</span>
             </div>
+            {/* Mistake 15 fix: CTA is refined (not shouting ALL-CAPS black) and
+                carries the total price — user knows what they pay before tapping. */}
             <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-              className={`w-full h-14 rounded-2xl text-sm font-black uppercase tracking-widest transition-all active:scale-95 cursor-pointer ${
+              className={`w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
                 !isDisabled
                   ? 'bg-gold-brand text-black hover:bg-gold-medium shadow-[0_4px_15px_rgba(255,204,0,0.25)]'
                   : 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
               }`}>
-              Complete Sale
+              {cart.length === 0 ? 'Complete sale' : `Complete sale • ${formatCurrency(total)}`}
             </button>
             {isDisabled && disabledReason && (
-              <p className="text-[10px] text-rose-400 font-bold text-center uppercase tracking-wider -mt-2">{disabledReason}</p>
+              <p className="text-[11px] text-rose-400/90 font-medium text-center -mt-2">{disabledReason}</p>
             )}
           </div>
         </div>
@@ -774,48 +783,48 @@ export default function Sales({
       <div className="lg:hidden">
         {cart.length > 0 && !isMobileCartOpen && !isQuickSale && (
           <button onClick={() => setIsMobileCartOpen(true)}
-            className="fixed bottom-20 right-4 z-40 bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer">
+            className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-[55] bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer">
             <ShoppingCart className="w-5 h-5" />
             <span className="text-sm uppercase font-display font-black">Cart ({cart.reduce((sum, item) => sum + item.qty, 0)}) • {formatCurrency(total)}</span>
           </button>
         )}
-        {isMobileCartOpen && <div onClick={() => setIsMobileCartOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40"></div>}
-        <div className={`fixed bottom-0 left-0 right-0 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl p-5 z-50 max-h-[85vh] overflow-y-auto flex flex-col ${
+        {isMobileCartOpen && <div onClick={() => setIsMobileCartOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60]"></div>}
+        <div className={`fixed bottom-0 left-0 right-0 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 z-[70] max-h-[85vh] overflow-y-auto flex flex-col ${
           isMobileCartOpen ? '' : 'hidden'
         }`}>
-          <div className="flex justify-between items-center pb-4 border-b border-zinc-800 mb-4">
-            <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
+          <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
+            <h3 className="text-sm font-bold text-zinc-100 tracking-wide font-display flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-gold-brand" /> Checkout
             </h3>
-            <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-bold uppercase hover:text-white cursor-pointer touch-target">Close</button>
+            <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">Close</button>
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] max-h-[40vh]">
             {cart.map(item => (
-              <div key={`${item.productId}::${item.variantId || ''}`} className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
+              <div key={`${item.productId}::${item.variantId || ''}`} className="bg-[#0A0A0A] border border-white/5 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
                 <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-bold text-white uppercase truncate max-w-[160px]" title={item.productName}>{item.productName}</h4>
-                  {item.variantLabel && <p className="text-[10px] text-zinc-500 uppercase font-bold">{item.variantLabel}</p>}
-                  <p className="text-xs text-gold-brand font-black mt-0.5">{formatCurrency(item.lineTotal)}</p>
+                  <h4 className="text-sm font-semibold text-zinc-100 truncate max-w-[160px] leading-snug" title={item.productName}>{item.productName}</h4>
+                  {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
+                  <p className="text-xs text-gold-brand font-bold mt-0.5 tabular-nums">{formatCurrency(item.lineTotal)}</p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
-                    className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
-                  <span className="text-sm font-black text-white min-w-[24px] text-center">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
+                    className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
+                  <span className="text-sm font-bold text-white min-w-[24px] text-center tabular-nums">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
                   <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
-                    className="touch-target bg-zinc-950 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
+                    className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
                   <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
                     className="touch-target bg-rose-950/20 hover:bg-rose-950/40 text-rose-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">x</button>
                 </div>
               </div>
             ))}
           </div>
-          <div className="mt-4 pt-3 border-t border-zinc-800 space-y-1.5">
-            <p className="text-xs text-zinc-400 font-bold uppercase">Payment:</p>
+          <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
+            <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">PAYMENT</p>
             <div className="grid grid-cols-4 gap-1.5">
               {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'].map(name => (
                 <button key={name} onClick={() => { setPaymentMethod(name as any); setCustomCashReceived(''); }}
-                  className={`py-3 rounded-xl text-xs border font-black uppercase transition-all min-h-[48px] cursor-pointer active:scale-95 ${
-                    paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-white' : 'border-zinc-900 text-zinc-500'
+                  className={`py-3 rounded-xl text-xs border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
+                    paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500'
                   }`}>
                   {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
                 </button>
@@ -824,46 +833,72 @@ export default function Sales({
             {paymentMethod === 'Credit / Book' && (
               <input type="text" placeholder="Customer name" value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
-                className="w-full bg-[#0A0A0A] border border-zinc-800 text-gold-light rounded-xl h-11 px-3 text-xs outline-none" />
+                className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
             )}
             {paymentMethod === 'Cash' && (
-              <div className="bg-[#141414] border border-white/5 p-4 rounded-2xl space-y-3 mt-2">
-                <input type="number" placeholder="Cash Received" value={customCashReceived}
+              <div className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl space-y-3 mt-2">
+                <input type="number" placeholder="Cash received" value={customCashReceived}
                   onChange={(e) => setCustomCashReceived(e.target.value)}
-                  className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11" />
+                  className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
                 {customCashReceived && (
                   <div className="flex justify-between items-center">
                     {parseFloat(customCashReceived) >= total ? (
-                      <><span className="text-xs text-emerald-400 font-bold uppercase">Change:</span><span className="text-base font-black text-emerald-400">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
+                      <><span className="text-xs text-emerald-400 font-semibold">Change</span><span className="text-base font-bold text-emerald-400 tabular-nums">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
                     ) : (
-                      <><span className="text-xs text-amber-500 font-bold uppercase">Pending:</span><span className="text-base font-black text-amber-500">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
+                      <><span className="text-xs text-amber-400 font-semibold">Pending</span><span className="text-base font-bold text-amber-400 tabular-nums">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
                     )}
                   </div>
                 )}
               </div>
             )}
           </div>
-          <div className="mt-4 pt-4 border-t-2 border-dashed border-zinc-800 space-y-3">
+          {/* Improvement 2: sticky bottom action — total + CTA stay visible while
+              the sheet scrolls, so the cashier can act the moment they decide. */}
+          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 sticky bottom-0 bg-[#141414] pb-1">
             <div className="flex justify-between items-center">
-              <span className="text-sm font-bold text-zinc-400 uppercase">Total</span>
-              <span className="text-2xl font-black text-gold-brand font-display">{formatCurrency(total)}</span>
+              <span className="text-[13px] font-semibold text-zinc-300">Total</span>
+              <span className="text-2xl font-bold text-gold-brand font-display tabular-nums">{formatCurrency(total)}</span>
             </div>
             <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-              className={`w-full h-14 rounded-2xl text-sm font-black uppercase tracking-widest transition-all active:scale-95 cursor-pointer ${
+              className={`w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
                 !isDisabled
                   ? 'bg-gold-brand text-black shadow-[0_4px_20px_rgba(255,204,0,0.3)]'
                   : 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
               }`}>
-              Complete Sale
+              {cart.length === 0 ? 'Complete sale' : `Complete sale • ${formatCurrency(total)}`}
             </button>
             {isDisabled && disabledReason && (
-              <p className="text-[10px] text-rose-400 font-bold text-center uppercase tracking-wider">{disabledReason}</p>
+              <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>
             )}
           </div>
         </div>
       </div>
 
       {/* Modals */}
+      {showSellerEditor && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#141414] border border-white/10 rounded-2xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-white">Set seller</h3>
+              <button onClick={() => setShowSellerEditor(false)} aria-label="Close seller editor" className="touch-target text-zinc-400 hover:text-white text-xl">×</button>
+            </div>
+            <label htmlFor="seller-name-input" className="block text-xs text-zinc-400 font-semibold mb-2">Name stamped on sales</label>
+            <input
+              id="seller-name-input"
+              autoFocus
+              value={sellerDraft}
+              onChange={(e) => setSellerDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { setStaffName(sellerDraft.trim()); setShowSellerEditor(false); } }}
+              className="w-full h-12 bg-[#0A0A0A] border border-white/10 rounded-xl px-3 text-base text-white outline-none focus:border-gold-brand"
+              placeholder="e.g. Amina"
+            />
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setShowSellerEditor(false)} className="flex-1 h-11 rounded-xl border border-white/10 text-zinc-300 text-sm font-semibold">Cancel</button>
+              <button onClick={() => { setStaffName(sellerDraft.trim()); setShowSellerEditor(false); }} className="flex-1 h-11 rounded-xl bg-gold-brand text-black text-sm font-bold">Save seller</button>
+            </div>
+          </div>
+        </div>
+      )}
       <CustomChargeModal
         isOpen={isCustomChargeOpen}
         onClose={() => setIsCustomChargeOpen(false)}
@@ -933,19 +968,19 @@ export default function Sales({
             </div>
           </div>
           {cart.length > 0 && (
-            <div className="border-t border-white/5 p-4 space-y-3 bg-zinc-950">
+            <div className="border-t border-white/5 p-4 space-y-3 bg-[#0A0A0A]">
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {cart.map(item => (
-                  <div key={`${item.productId}::${item.variantId || ''}`} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 p-3 rounded-xl">
+                  <div key={`${item.productId}::${item.variantId || ''}`} className="flex items-center justify-between bg-[#141414] border border-white/5 p-3 rounded-xl">
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold text-white uppercase truncate">{item.productName}</p>
-                      {item.variantLabel && <p className="text-[10px] text-zinc-500 uppercase font-bold">{item.variantLabel}</p>}
-                      <p className="text-xs font-black text-gold-brand">{formatCurrency(item.lineTotal)}</p>
+                      <p className="text-xs font-semibold text-zinc-100 truncate leading-snug">{item.productName}</p>
+                      {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
+                      <p className="text-xs font-bold text-gold-brand tabular-nums">{formatCurrency(item.lineTotal)}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0 ml-2">
                       <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
                         className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">-</button>
-                      <span className="text-sm font-black text-white min-w-[20px] text-center">{item.qty}</span>
+                      <span className="text-sm font-bold text-white min-w-[20px] text-center tabular-nums">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
                       <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
                         className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">+</button>
                       <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
@@ -957,20 +992,20 @@ export default function Sales({
               <div className="grid grid-cols-4 gap-1.5">
                 {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'].map(name => (
                   <button key={name} onClick={() => setPaymentMethod(name as any)}
-                    className={`py-2.5 rounded-xl text-xs border font-black uppercase transition-all cursor-pointer active:scale-95 ${
-                      paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-white' : 'border-zinc-800 text-zinc-500'
+                    className={`py-2.5 rounded-xl text-xs border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 ${
+                      paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'
                     }`}>
                     {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
                   </button>
                 ))}
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-sm font-bold text-zinc-400 uppercase">Total</span>
-                <span className="text-xl font-black text-gold-brand">{formatCurrency(total)}</span>
+                <span className="text-[13px] font-semibold text-zinc-300">Total</span>
+                <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
               </div>
               <button onClick={() => setShowConfirmSale(true)} disabled={cart.length === 0}
-                className="w-full h-12 bg-gold-brand text-black font-black uppercase tracking-widest text-sm rounded-xl cursor-pointer">
-                Complete Sale
+                className="w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer">
+                {`Complete sale • ${formatCurrency(total)}`}
               </button>
             </div>
           )}

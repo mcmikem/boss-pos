@@ -3,13 +3,16 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
+import {AdminDashboard} from './components/AdminDashboard.tsx';
 
 const root = createRoot(document.getElementById('root')!);
+
+const Root = window.location.pathname === '/admin' ? AdminDashboard : App;
 
 root.render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <Root />
     </ErrorBoundary>
   </StrictMode>,
 );

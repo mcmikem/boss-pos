@@ -238,11 +238,31 @@ async function initDB() {
   // - Runs once per shop DB during provisioning
   // - Sets up tenant record + default subscription
   // ============================================
+  await sql`CREATE TABLE IF NOT EXISTS tenants (
+    id VARCHAR(255) PRIMARY KEY,
+    name TEXT NOT NULL,
+    plan VARCHAR(32) NOT NULL DEFAULT 'basic',
+    status VARCHAR(32) NOT NULL DEFAULT 'active'
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(255) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    plan VARCHAR(32) NOT NULL DEFAULT 'basic',
+    current_period_end TIMESTAMP,
+    cancel_at_period_end BOOLEAN DEFAULT false
+  )`;
   // Ensure tenant record exists (idempotent)
   const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const shopNameRows = await sql`SELECT value FROM settings WHERE key='shopName'`;
+  const configuredShopName = String(shopNameRows[0]?.value || '').trim().slice(0, 100);
   const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
   if (existingTenant.length === 0) {
-    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, 'My Shop', 'basic', 'active')`;
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${configuredShopName || 'IMAC Enterprises'}, 'basic', 'active')`;
+  } else if (configuredShopName) {
+    // Keep SaaS identity aligned with the existing POS shop; this does not
+    // modify sales, products, settings, or any operational records.
+    await sql`UPDATE tenants SET name=${configuredShopName} WHERE id=${tenantId}`;
   }
   // Ensure subscription record exists
   const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
@@ -788,6 +808,9 @@ app.get('/uploads/:file', asHandler(async (req, res) => {
 // (the fleet provisioner and the scheduled backup/export run headless).
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/cron/')) return next();
+  // Super-admin routes authenticate with their separate admin token below,
+  // rather than a shop till PIN token.
+  if (req.path.startsWith('/api/admin/')) return next();
   if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
     requireAuth(req, res, next).catch(next);
     return;
@@ -2375,18 +2398,23 @@ app.use((err, req, res, _next) => {
 // POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN
 app.post('/api/onboard', asHandler(async (req, res) => {
   const { shopName, plan, pin } = req.body || {};
+  const cleanName = String(shopName || '').trim().slice(0, 100);
+  const cleanPlan = ['basic', 'pro', 'enterprise'].includes(plan) ? plan : 'basic';
+  const cleanPin = String(pin || '').trim();
+  if (!cleanName) return res.status(400).json({ error: 'Shop name is required' });
+  if (!/^\d{4}$/.test(cleanPin)) return res.status(400).json({ error: 'PIN must be exactly 4 digits' });
   const tenantId = process.env.APP_TENANT_ID || `shop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   // Create tenant record
   const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
   if (existingTenant.length === 0) {
-    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${shopName}, ${plan}, 'active')`;
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${cleanName}, ${cleanPlan}, 'active')`;
   }
 
   // Create/default subscription
   const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
   if (subExists.length === 0) {
-    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${plan})`;
+    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${cleanPlan})`;
   }
 
   // Set tenant_id middleware context for this shop's API calls
@@ -2394,40 +2422,114 @@ app.post('/api/onboard', asHandler(async (req, res) => {
   // For now, just store it in a global the API can read
   process.env.APP_TENANT_ID = tenantId;
 
-  // Set the default PIN hash in the DB (we store a salted hash)
-  // For now, just note the PIN was set - the app will handle verification
+  const salt = randomBytes(16).toString('hex');
+  const pinHash = pinHashFormat(salt, hashPinStrong(cleanPin, salt));
+  await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${pinHash}) ON CONFLICT (key) DO UPDATE SET value=${pinHash}`;
   await sql`INSERT INTO settings (key, value) VALUES ('onboarded', 'true') ON CONFLICT (key) DO NOTHING`;
 
   res.json({ tenantId, redirect: '/' });
 }));
 
-// ============================================
-// Ensure every uncaught API error is JSON (not Express' HTML), so the
-// till can surface "Database timeout, retry" instead of a generic wall of HTML.
-// POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN
-app.post('/api/onboard', asHandler(async (req, res) => {
-  const { shopName, plan, pin } = req.body || {};
-  const tenantId = process.env.APP_TENANT_ID || `shop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+// --------------------------------------------
+// ADMIN ROUTES - Super admin functions
+// --------------------------------------------
 
-  // Create tenant record (idempotent)
-  const existingTenant = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
-  if (existingTenant.length === 0) {
-    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${shopName}, ${plan}, 'active')`;
+function requireSuperAdmin(req, res, next) {
+  const configured = process.env.SUPER_ADMIN_SECRET;
+  const localDevToken = 'local-dev-admin';
+  const isLoopback = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+  if (!configured && process.env.NODE_ENV !== 'production' && isLoopback) {
+    if (req.headers['x-admin-token'] === localDevToken) return next();
+    return res.status(401).json({ error: 'Use local development admin access' });
   }
+  if (!configured) return res.status(503).json({ error: 'Super admin access is not configured' });
+  const supplied = String(req.headers['x-admin-token'] || '');
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(configured);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return res.status(401).json({ error: 'Super admin authentication required' });
+  next();
+}
 
-  // Create/default subscription
-  const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
-  if (subExists.length === 0) {
-    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${plan})`;
-  }
-
-  // Mark as onboarded in settings
-  await sql`INSERT INTO settings (key, value) VALUES ('onboarded', 'true') ON CONFLICT (key) DO NOTHING`;
-
-  res.json({ tenantId, redirect: '/' });
+// GET /api/admin/shops - list all shops with subscription status
+app.get('/api/admin/shops', requireSuperAdmin, asHandler(async (req, res) => {
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  // When no specific tenant context, query all tenants
+  const tenants = await sql`SELECT id, name, plan, status FROM tenants`;
+  const subscriptions = await sql`SELECT tenant_id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions`;
+  const subMap = new Map(
+    subscriptions.map(s => [s.tenant_id, { status: s.status, plan: s.plan, current_period_end: s.current_period_end, cancel_at_period_end: s.cancel_at_period_end }])
+  );
+  const shops = tenants.map(t => ({
+    id: t.id,
+    name: t.name,
+    plan: t.plan,
+    status: t.status,
+    subscriptionStatus: subMap.get(t.id) ? {
+      status: subMap.get(t.id).status,
+      plan: subMap.get(t.id).plan,
+      currentPeriodEnd: subMap.get(t.id).current_period_end,
+      cancelAtPeriodEnd: subMap.get(t.id).cancel_at_period_end
+    } : null
+  }));
+  res.json({ shops });
 }));
 
-// ============================================
-// Ensure every uncaught API error is JSON (not Express' HTML), so the
-// till can surface "Database timeout, retry" instead of a generic wall of HTML.
+// GET /api/admin/stats - get admin statistics
+app.get('/api/admin/stats', requireSuperAdmin, asHandler(async (req, res) => {
+  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  const tenants = await sql`SELECT id, name, plan, status FROM tenants`;
+  const subscriptions = await sql`SELECT tenant_id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions`;
+  const subMap = new Map(
+    subscriptions.map(s => [s.tenant_id, { status: s.status, plan: s.plan, current_period_end: s.current_period_end, cancel_at_period_end: s.cancel_at_period_end }])
+  );
+
+  const activeShops = tenants.filter(t => t.status === 'active').length;
+  const paymentRows = await sql`SELECT COALESCE(SUM(amount), 0)::numeric AS total FROM payment_log`;
+  const recordedPayments = Number(paymentRows[0]?.total || 0);
+  const pendingPayments = subscriptions.filter(s => s.status !== 'active').length;
+
+  res.json({ stats: { totalShops: tenants.length, activeShops, totalRevenue: recordedPayments, pendingPayments } });
+}));
+
+// POST /api/admin/shop/:tenantId/plan - update shop plan (super admin)
+app.post('/api/admin/shop/:tenantId/plan', requireSuperAdmin, asHandler(async (req, res) => {
+  const { plan } = req.body || {};
+  const tenantId = req.params.tenantId;
+  if (plan) await sql`UPDATE tenants SET plan = ${plan} WHERE id = ${tenantId}`;
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  res.json({ tenant: tenant[0] });
+}));
+
+// POST /api/admin/shop/:tenantId/cancel - cancel shop subscription (super admin)
+app.post('/api/admin/shop/:tenantId/cancel', requireSuperAdmin, asHandler(async (req, res) => {
+  const tenantId = req.params.tenantId;
+  await sql`UPDATE subscriptions SET status = 'cancelled', cancel_at_period_end = true WHERE tenant_id = ${tenantId}`;
+  const sub = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  res.json({ subscription: sub[0] });
+}));
+
+// POST /api/admin/shop/:tenantId/payment - record manual payment (super admin)
+app.post('/api/admin/shop/:tenantId/payment', requireSuperAdmin, asHandler(async (req, res) => {
+  const { amount, method, reference } = req.body || {};
+  const tenantId = req.params.tenantId;
+  if (amount && method) {
+    await sql`INSERT INTO payment_log (id, tenant_id, amount, method, reference, created_at) VALUES (gen_random_uuid(), ${tenantId}, ${amount}, ${method}, ${reference || ''}, NOW()) ON CONFLICT (id) DO NOTHING`;
+  }
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  res.json({ tenant: tenant[0] });
+}));
+
+// Payment log table tracking helper
+await sql`
+  CREATE TABLE IF NOT EXISTS payment_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(255) NOT NULL,
+    amount INTEGER NOT NULL,
+    method VARCHAR(50) NOT NULL,
+    reference VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW()
+  )
+`;
+
+// --------------------------------------------
 export default app;

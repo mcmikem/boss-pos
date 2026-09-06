@@ -441,6 +441,15 @@ export default defineConfig(() => {
     },
     build: {
       chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            react: ['react', 'react-dom'],
+            icons: ['lucide-react'],
+            search: ['fuse.js'],
+          },
+        },
+      },
     },
     server: {
       port: 3000,

@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Menu, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
@@ -14,7 +14,6 @@ import { initSentry } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import Sales from './components/Sales';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
 import SyncProductsButton from './components/SyncProductsButton';
@@ -22,6 +21,7 @@ const Inventory = lazy(() => import('./components/Inventory'));
 const Analytics = lazy(() => import('./components/Analytics'));
 const Expenses = lazy(() => import('./components/Expenses'));
 const CategoryRegister = lazy(() => import('./components/CategoryRegister'));
+const Sales = lazy(() => import('./components/Sales'));
 
 const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
@@ -67,6 +67,7 @@ export default function App() {
     try {
       if (theme === 'dark') document.documentElement.classList.add('dark');
       else document.documentElement.classList.remove('dark');
+      document.documentElement.classList.toggle('light-theme', theme === 'light');
     } catch {}
   }, [theme]);
   const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
@@ -1386,7 +1387,6 @@ export default function App() {
     >
       <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center px-4 py-3 h-16 w-full">
         <div className="flex items-center gap-3">
-          <Menu className="w-5 h-5 text-gold-brand cursor-pointer hover:opacity-80 transition-opacity" />
           <h1 className="text-sm sm:text-base md:text-lg font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[150px] sm:max-w-none">
             {settings.shopName}
           </h1>
@@ -1435,11 +1435,11 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 px-4 pt-4 max-w-7xl mx-auto w-full">
+      <main className="flex-1 px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] max-w-7xl mx-auto w-full">
         {renderContent()}
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-16 bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
+      <nav className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
         <button onClick={() => setActiveTab('sales')} aria-label="Sell" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />
@@ -1462,6 +1462,10 @@ export default function App() {
         <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label="Reports" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Reports</span>
+        </button>
+        <button onClick={() => setActiveTab('registers')} aria-label="Daily close-out" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
+          <LayoutGrid className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">Close</span>
         </button>
       </nav>
 
@@ -1627,6 +1631,7 @@ export default function App() {
                     } else {
                       document.documentElement.classList.remove('dark');
                     }
+                    document.documentElement.classList.toggle('light-theme', newTheme === 'light');
                   }}
                     className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-gold-brand/40 transition-all cursor-pointer">
                     {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
