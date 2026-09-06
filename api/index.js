@@ -2,7 +2,7 @@ import express from 'express';
 import { neon } from '@neondatabase/serverless';
 import sharp from 'sharp';
 import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider } from './efris.js';
+import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider, saleVatTotal } from './efris.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -75,6 +75,14 @@ async function initDB() {
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS supplier_prices (
+    id TEXT PRIMARY KEY, supplier_id TEXT NOT NULL, product_id TEXT NOT NULL,
+    price DOUBLE PRECISION DEFAULT 0, updated_at TEXT NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS staff (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT DEFAULT 'cashier',
+    pin_hash TEXT DEFAULT '', active BOOLEAN DEFAULT true, created_at TEXT NOT NULL
+  )`;
   await sql`CREATE TABLE IF NOT EXISTS sales (
     id TEXT PRIMARY KEY, ordernumber TEXT NOT NULL, timestamp TEXT NOT NULL,
     items TEXT NOT NULL, subtotal DOUBLE PRECISION DEFAULT 0,
@@ -90,6 +98,9 @@ async function initDB() {
   try { await sql`ALTER TABLE sales ADD COLUMN efris_qr TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN efris_error TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN efris_at TEXT DEFAULT ''`; } catch {}
+  // Branch attribution: which shop location made the sale. Stock stays pooled
+  // across branches in v1 (per-branch stock is a separate project).
+  try { await sql`ALTER TABLE sales ADD COLUMN branch TEXT DEFAULT ''`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, description TEXT NOT NULL,
     amount DOUBLE PRECISION DEFAULT 0, category TEXT DEFAULT ''
@@ -1075,6 +1086,40 @@ app.delete('/api/suppliers/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === SUPPLIER PRICES (per-supplier quotes for price comparison) ===
+app.get('/api/supplier-prices', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM supplier_prices ORDER BY updated_at DESC`;
+  res.json(rows.map(mapSupplierPrice));
+}));
+
+app.put('/api/supplier-prices', asHandler(async (req, res) => {
+  const b = req.body || {};
+  const supplierId = String(b.supplierId || '');
+  const productId = String(b.productId || '');
+  const price = Math.max(0, Math.round(Number(b.price) || 0));
+  if (!supplierId || !productId || !price) {
+    return res.status(400).json({ error: 'supplierId, productId and a price above 0 are required' });
+  }
+  const at = new Date().toISOString();
+  const existing = await sql`SELECT id FROM supplier_prices WHERE supplier_id=${supplierId} AND product_id=${productId}`;
+  let id;
+  if (existing.length) {
+    id = existing[0].id;
+    await sql`UPDATE supplier_prices SET price=${price}, updated_at=${at} WHERE id=${id}`;
+  } else {
+    id = `sp-${randomUUID()}`;
+    await sql`INSERT INTO supplier_prices (id, supplier_id, product_id, price, updated_at) VALUES (${id}, ${supplierId}, ${productId}, ${price}, ${at})`;
+  }
+  await audit('supplierprice.upsert', `${supplierId} → ${productId} @ ${price}`);
+  res.json({ id, supplierId, productId, price, updatedAt: at });
+}));
+
+app.delete('/api/supplier-prices/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM supplier_prices WHERE id=${req.params.id}`;
+  await audit('supplierprice.delete', `Deleted ${req.params.id}`);
+  res.json({ success: true });
+}));
+
 // === SALES API ===
 app.get('/api/sales', asHandler(async (req, res) => {
   const { from, to, limit, offset } = req.query;
@@ -1098,6 +1143,7 @@ app.post('/api/sales', asHandler(async (req, res) => {
   const itemsJson = JSON.stringify(s.items);
   const customerName = text(s.customerName, 120) || null;
   const notes = text(s.notes, 500) || null;
+  const branch = text(s.branch, 50) || '';
   // Server timestamp is canonical (device clocks skew → reports out of order).
   // We keep device timestamp as notes suffix for audit if supplied, but DB timestamp is server now.
   const serverNow = new Date().toISOString();
@@ -1113,6 +1159,17 @@ app.post('/api/sales', asHandler(async (req, res) => {
   if (String(orderNumber).startsWith('Temp #')) {
     orderNumber = `Order #${await nextOrderNumberValue()}`;
   }
+  // Automatic VAT: the server stamps sale.tax from the shop's configured VAT
+  // rate (EFRIS settings) so every till — online or replayed offline — books
+  // identical tax with zero till math. Falls back to the client value if the
+  // config can't be read; a tax failure must never break a sale.
+  let serverTax = Math.max(0, Math.round(Number(s.tax) || 0));
+  try {
+    const vcfg = await readEfrisConfig();
+    if (vcfg.mode !== 'off' && Number(vcfg.vatRate) > 0) {
+      serverTax = saleVatTotal(s.items || [], vcfg);
+    }
+  } catch {}
 
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
@@ -1127,8 +1184,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
           JOIN products p ON p.id = sub."productId" AND p.isService = false
         ),
         ins AS (
-          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,client_write_id)
-          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${s.tax||0},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${cwid}
+          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,branch,client_write_id)
+          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${serverTax},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${branch},${cwid}
           WHERE NOT EXISTS (SELECT 1 FROM checkstock WHERE oversold)
           ON CONFLICT (id) DO NOTHING
           RETURNING id, items
@@ -1166,7 +1223,7 @@ app.post('/api/sales', asHandler(async (req, res) => {
       await audit('sale.create', `${orderNumber} (${s.paymentMethod || 'Cash'})`);
       pushToSheet('sale', {
         id: saleId, orderNumber, timestamp: s.timestamp || new Date().toISOString(),
-        items: s.items || [], subtotal: s.subtotal || 0, tax: s.tax || 0, total: s.total || 0,
+        items: s.items || [], subtotal: s.subtotal || 0, tax: serverTax, total: s.total || 0,
         paymentMethod: s.paymentMethod || 'Cash', discount: s.discount || null,
         staffName: s.staffName || null,
       }).catch(() => {});
@@ -1177,7 +1234,7 @@ app.post('/api/sales', asHandler(async (req, res) => {
           issueEfrisForSale(saleId).catch(() => {});
         }
       }).catch(() => {});
-      return res.json({ ...s, id: saleId, orderNumber });
+      return res.json({ ...s, tax: serverTax, id: saleId, orderNumber });
     } catch (err) {
       // Order-number collision from a queued/replayed offline sale: renumber
       // and retry. Any other unique-violation (e.g. duplicate id) is fatal.
@@ -1823,7 +1880,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
   const obj = {};
   const BLOCKED_BOOT = new Set([
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
-    'clientWriteId', 'deviceId',
+    'clientWriteId', 'deviceId', 'efrisToken',
   ]);
   for (const r of settingsRows) {
     if (BLOCKED_BOOT.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
@@ -1834,9 +1891,10 @@ app.get('/api/boot', asHandler(async (req, res) => {
   obj.hasPin = hasPin;
 
   const BOOT_SALE_CAP = 2000;
-  const [products, suppliers, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, counts] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, staff, counts] = await Promise.all([
     sql`SELECT * FROM products WHERE deleted = false`.then(r => r.map(mapProduct)),
     sql`SELECT * FROM suppliers`.then(r => r.map(mapSupplier)),
+    sql`SELECT * FROM supplier_prices`.then(r => r.map(mapSupplierPrice)),
     sql`SELECT * FROM sales ORDER BY timestamp DESC LIMIT ${BOOT_SALE_CAP}`.then(r => r.map(mapSale)),
     sql`SELECT * FROM expenses ORDER BY timestamp DESC LIMIT ${BOOT_SALE_CAP}`,
     sql`SELECT * FROM credit_payments ORDER BY createdat DESC`.then(r => r.map(x => ({ id: x.id, saleId: x.saleid, amount: x.amount, createdAt: x.createdat }))),
@@ -1844,6 +1902,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
     sql`SELECT * FROM production_register ORDER BY date DESC, createdat DESC`.then(r => r.map(mapProductionRegister)),
     sql`SELECT * FROM wastage_log ORDER BY date DESC, createdat DESC`.then(r => r.map(mapWastageLog)),
     sql`SELECT * FROM momo_transfers ORDER BY createdat DESC`.then(r => r.map(mapMomoTransfer)),
+    sql`SELECT * FROM staff ORDER BY created_at ASC`.then(r => r.map(mapStaff)),
     sql`SELECT
       (SELECT COUNT(*)::int FROM sales) AS sales_total,
       (SELECT COUNT(*)::int FROM expenses) AS expenses_total`,
@@ -1851,8 +1910,8 @@ app.get('/api/boot', asHandler(async (req, res) => {
 
   maybeAutoBackup().catch(() => {});
   res.json({
-    products, suppliers, sales, expenses, creditPayments, creditEats,
-    productionRegisters, wastageLogs, momoTransfers, settings: obj,
+    products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats,
+    productionRegisters, wastageLogs, momoTransfers, staff, settings: obj,
     // Tells the client the history list was capped (aggregates still exact via
     // /api/summary, older rows are one pageable query away).
     salesTruncated: (counts[0]?.sales_total || 0) > BOOT_SALE_CAP,
@@ -1893,6 +1952,9 @@ app.get('/api/summary', asHandler(async (req, res) => {
   if (to) { salesParams.push(to); salesWhere.push(`timestamp <= $${salesParams.length}`); }
   const salesRows = await sql.query(
     `SELECT timestamp, items, total FROM sales WHERE ${salesWhere.join(' AND ')}`, salesParams);
+  const vatRows = await sql.query(
+    `SELECT COALESCE(SUM(tax),0)::float AS total FROM sales WHERE ${salesWhere.join(' AND ')}`, salesParams);
+  const vatTotal = vatRows.length ? vatRows[0].total : 0;
   let revenue = 0;
   let cogs = 0;
   for (const r of salesRows) {
@@ -1958,6 +2020,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
     expenseTotal,
     netProfit: grossProfit - expenseTotal,
     creditOutstanding: (creditRows.length ? creditRows[0].total : 0) - (paidRows.length ? paidRows[0].total : 0),
+    vatTotal,
     lowStockCount: lowRows.length ? lowRows[0].n : 0,
     hourly: bucket === 'hourly' ? hourly : undefined,
     daily: bucket === 'daily' ? daily : undefined,
@@ -1966,9 +2029,10 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
+    sql`SELECT * FROM supplier_prices`,
     sql`SELECT * FROM sales`,
     sql`SELECT * FROM expenses`,
     sql`SELECT * FROM settings`,
@@ -1981,11 +2045,13 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM production_register`,
     sql`SELECT * FROM wastage_log`,
     sql`SELECT * FROM momo_transfers`,
+    sql`SELECT * FROM staff`,
   ]);
   res.json({
     exportedAt: new Date().toISOString(),
     products: products.map(mapProduct),
     suppliers: suppliers.map(mapSupplier),
+    supplierPrices: supplierPrices.map(mapSupplierPrice),
     sales: sales.map(mapSale),
     expenses,
     settings: settingsRows,
@@ -1998,6 +2064,9 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     productionRegisters: productionRegisters.map(mapProductionRegister),
     wastageLogs: wastageLogs.map(mapWastageLog),
     momoTransfers: momoTransfers.map(mapMomoTransfer),
+    // Staff PIN hashes ride along like the till pinHash in settings: a backup
+    // that couldn't restore logins wouldn't be a backup.
+    staff: staffRows.map(r => ({ ...mapStaff(r), pin_hash: r.pin_hash || '' })),
   });
 }));
 
@@ -2034,6 +2103,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     customername: text(s.customerName, 120) || null,
     discount: s.discount != null ? s.discount : null,
     notes: text(s.notes, 500) || null, refunded: !!s.refunded,
+    branch: text(s.branch, 50) || '',
     refundedat: s.refundedAt || null,
     client_write_id: s.clientWriteId || null,
   }));
@@ -2046,6 +2116,17 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
 
   const creditPaymentRows = (d.creditPayments || []).map(cp => ({
     id: cp.id, saleid: cp.saleId, amount: num(cp.amount), createdat: cp.createdAt,
+  }));
+
+  const supplierPriceRows = (d.supplierPrices || []).map(sp => ({
+    id: sp.id, supplier_id: sp.supplierId, product_id: sp.productId,
+    price: num(sp.price), updated_at: sp.updatedAt || new Date().toISOString(),
+  }));
+
+  const staffRows = (d.staff || []).map(st => ({
+    id: st.id, name: text(st.name, 80), role: st.role === 'manager' ? 'manager' : 'cashier',
+    pin_hash: String(st.pin_hash || ''), active: st.active !== false,
+    createdat: new Date().toISOString(),
   }));
 
   const transferRows = (d.cashTransfers || []).map(t => ({
@@ -2117,7 +2198,9 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('settings', 'key', ['key', 'value'], settingsRows).then(n => counts.settings = n),
     batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'saleunit', 'imei', 'barcode', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
     batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
-    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'client_write_id'], saleRows).then(n => counts.sales = n),
+    batchUpsert('supplier_prices', 'id', ['id', 'supplier_id', 'product_id', 'price', 'updated_at'], supplierPriceRows).then(n => counts.supplierPrices = n),
+    batchUpsert('staff', 'id', ['id', 'name', 'role', 'pin_hash', 'active', 'created_at'], staffRows).then(n => counts.staff = n),
+    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id'], saleRows).then(n => counts.sales = n),
     batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100) }))).then(n => counts.expenses = n),
     batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
@@ -2136,9 +2219,10 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
 
 // === BACKUPS (automatic daily snapshots) ===
 async function gatherExport() {
-  const [products, suppliers, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
+    sql`SELECT * FROM supplier_prices`,
     sql`SELECT * FROM sales`,
     sql`SELECT * FROM expenses`,
     sql`SELECT * FROM settings`,
@@ -2151,11 +2235,13 @@ async function gatherExport() {
     sql`SELECT * FROM production_register`,
     sql`SELECT * FROM wastage_log`,
     sql`SELECT * FROM momo_transfers`,
+    sql`SELECT * FROM staff`,
   ]);
   return {
     exportedAt: new Date().toISOString(),
     products: products.map(mapProduct),
     suppliers: suppliers.map(mapSupplier),
+    supplierPrices: supplierPrices.map(mapSupplierPrice),
     sales: sales.map(mapSale),
     expenses,
     settings: settingsRows,
@@ -2168,6 +2254,9 @@ async function gatherExport() {
     productionRegisters: productionRegisters.map(mapProductionRegister),
     wastageLogs: wastageLogs.map(mapWastageLog),
     momoTransfers: momoTransfers.map(mapMomoTransfer),
+    // Staff PIN hashes ride along like the till pinHash in settings: a backup
+    // that couldn't restore logins wouldn't be a backup.
+    staff: staffRows.map(r => ({ ...mapStaff(r), pin_hash: r.pin_hash || '' })),
   };
 }
 
@@ -2402,6 +2491,7 @@ function mapSale(r) {
     items: JSON.parse(r.items), subtotal: r.subtotal, tax: r.tax, total: r.total,
     paymentMethod: r.paymentmethod, customerName: r.customername,
     discount: r.discount, notes: r.notes, refunded: !!r.refunded,
+    branch: r.branch || '',
     efrisStatus: r.efris_status || 'none',
     efrisInvoiceNo: r.efris_invoice_no || '',
     efrisFdn: r.efris_fdn || '',
@@ -2425,6 +2515,92 @@ function mapSupplier(r) {
     phone: r.phone, email: r.email,
   };
 }
+
+function mapSupplierPrice(r) {
+  return {
+    id: r.id, supplierId: r.supplier_id, productId: r.product_id,
+    price: r.price, updatedAt: r.updated_at,
+  };
+}
+
+function mapStaff(r) {
+  // PIN hashes never leave the server — verification happens via /api/staff/verify.
+  return { id: r.id, name: r.name, role: r.role === 'manager' ? 'manager' : 'cashier', active: !!r.active };
+}
+
+// === STAFF (per-person logins with roles) ===
+// Optional layer: with zero staff rows the till behaves exactly as before
+// (single till PIN + manager PIN). Once staff exist, destructive actions and
+// tabs are gated by the active seller's role (enforced client-side; the PIN
+// check itself is server-side with the same hashing + lockout as the till PIN).
+app.get('/api/staff', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM staff ORDER BY created_at ASC`;
+  res.json(rows.map(mapStaff));
+}));
+
+app.post('/api/staff', asHandler(async (req, res) => {
+  const b = req.body || {};
+  const name = text(b.name, 80);
+  const role = b.role === 'manager' ? 'manager' : 'cashier';
+  if (!name) return res.status(400).json({ error: 'Staff name is required' });
+  if (!/^\d{4}$/.test(String(b.pin || ''))) return res.status(400).json({ error: 'A 4-digit PIN is required' });
+  const salt = randomBytes(16).toString('hex');
+  const hash = pinHashFormat(salt, hashPinStrong(String(b.pin), salt));
+  const id = `st-${randomUUID()}`;
+  const at = new Date().toISOString();
+  await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${hash}, true, ${at})`;
+  await audit('staff.create', `${name} (${role})`);
+  res.json({ id, name, role, active: true });
+}));
+
+app.put('/api/staff/:id', asHandler(async (req, res) => {
+  const b = req.body || {};
+  const rows = await sql`SELECT * FROM staff WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Staff not found' });
+  const name = b.name !== undefined ? text(b.name, 80) : rows[0].name;
+  const role = b.role !== undefined ? (b.role === 'manager' ? 'manager' : 'cashier') : rows[0].role;
+  const active = b.active !== undefined ? !!b.active : !!rows[0].active;
+  if (!name) return res.status(400).json({ error: 'Staff name is required' });
+  await sql`UPDATE staff SET name=${name}, role=${role}, active=${active} WHERE id=${req.params.id}`;
+  if (/^\d{4}$/.test(String(b.pin || ''))) {
+    const salt = randomBytes(16).toString('hex');
+    await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(String(b.pin), salt))} WHERE id=${req.params.id}`;
+  }
+  await audit('staff.update', `${name} (${role}, ${active ? 'active' : 'disabled'})`);
+  res.json({ id: req.params.id, name, role, active });
+}));
+
+app.post('/api/staff/verify', asHandler(async (req, res) => {
+  const key = 'staff:' + attemptKey(clientIp(req));
+  const now = Date.now();
+  const attempts = await sql`SELECT failures, lockeduntil FROM auth_attempts WHERE id=${key}`;
+  const lockedUntil = attempts.length ? parseInt(attempts[0].lockeduntil || '0', 10) : 0;
+  if (lockedUntil > now) {
+    return res.status(429).json({ error: 'Too many attempts. Try again later.', code: 'RATE_LIMITED' });
+  }
+  const fail = async () => {
+    if (!attempts.length) {
+      await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
+    } else {
+      const n = (attempts[0].failures || 0) + 1;
+      if (n >= LOCKOUT_FAILURES) {
+        await sql`UPDATE auth_attempts SET failures=0, lastfailedat=${String(now)}, lockeduntil=${String(now + LOCKOUT_MS)} WHERE id=${key}`;
+      } else {
+        await sql`UPDATE auth_attempts SET failures=${n}, lastfailedat=${String(now)} WHERE id=${key}`;
+      }
+    }
+  };
+  const { id, pin } = req.body || {};
+  const rows = await sql`SELECT * FROM staff WHERE id=${String(id || '')} AND active=true`;
+  if (!rows.length || !verifyStoredPin(rows[0].pin_hash, String(pin || ''))) {
+    await fail();
+    await audit('staff.failed', `Failed staff login (${String(id || '').slice(0, 20)})`);
+    return res.status(401).json({ error: 'Wrong PIN', code: 'WRONG_PIN' });
+  }
+  if (attempts.length > 0) await sql`DELETE FROM auth_attempts WHERE id=${key}`;
+  await audit('staff.login', `${rows[0].name} (${rows[0].role}) started selling`);
+  res.json({ ok: true, ...mapStaff(rows[0]) });
+}));
 
 function mapStockMovement(r) {
   return {

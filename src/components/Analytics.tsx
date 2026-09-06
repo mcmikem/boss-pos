@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, type FormEvent } from 'react';
 import { 
-  TrendingUp, Plus, Coins, User, Phone, Mail,
+  TrendingUp, Plus, Coins, User, Phone, Mail, MessageCircle,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
   Settings2, Hash, Check, Edit2, ChevronDown,
   CalendarDays, Receipt, LayoutGrid, Info
@@ -9,6 +9,7 @@ import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, De
 import CreditsLedger from './CreditsLedger';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
+import { restockQtyFor, buildRestockMessage, supplierTelUrl, supplierWhatsAppUrl } from '../utils/suppliers';
 import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
@@ -102,6 +103,12 @@ export default function Analytics({
   const DAY_VIEW_LIMIT = 10;
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [showAllDays, setShowAllDays] = useState(false);
+  const [branchFilter, setBranchFilter] = useState<string>('All');
+  const branchOptions = useMemo(() => {
+    const fromSettings = (settings.branches || []).filter(Boolean);
+    const fromSales = Array.from(new Set(sales.map(s => s.branch || '').filter(Boolean)));
+    return Array.from(new Set([...fromSettings, ...fromSales]));
+  }, [settings.branches, sales]);
   useEffect(() => {
     setExpandedDays(new Set());
     setShowAllDays(false);
@@ -123,8 +130,10 @@ export default function Analytics({
   }, [timeFilter]);
 
   const filteredSales = useMemo(() => {
-    return sales.filter(s => !s.refunded && timeRange.filter(s.timestamp));
-  }, [sales, timeRange]);
+    return sales.filter(s =>
+      !s.refunded && timeRange.filter(s.timestamp) &&
+      (branchFilter === 'All' || (s.branch || '') === branchFilter));
+  }, [sales, timeRange, branchFilter]);
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => timeRange.filter(e.timestamp));
@@ -170,6 +179,11 @@ export default function Analytics({
   const displayIncome = serverWindowSummary ? serverWindowSummary.revenue : totalIncome;
   const displayDesignRevenue = serverWindowSummary ? (serverWindowSummary.designRevenue || 0) : designRevenue;
   const displayNetProfit = serverWindowSummary ? serverWindowSummary.netProfit : netProfit;
+  // VAT collected inside these sales (server-stamped per sale). Falls back to
+  // the in-memory rows when the server window hasn't loaded.
+  const displayVat = serverWindowSummary && typeof serverWindowSummary.vatTotal === 'number'
+    ? serverWindowSummary.vatTotal
+    : filteredSales.reduce((a, s) => a + (s.tax || 0), 0);
 
   const dailySeries = useMemo(() => {
     if (serverWindowSummary?.daily && serverWindowSummary.daily.length > 0) {
@@ -586,6 +600,31 @@ const colorsMap: { [key: string]: string } = {
                     <Mail className="w-3.5 h-3.5 text-zinc-600" />
                     <span className="truncate">{sup.email}</span>
                   </div>
+                  {(() => {
+                    const tel = supplierTelUrl(sup.phone);
+                    const lowItems = products
+                      .filter(p => p.supplierId === sup.id && !p.isService && p.stockQty <= (p.lowStockThreshold || 5))
+                      .map(p => ({ name: p.name, qty: restockQtyFor(p) }));
+                    const wa = supplierWhatsAppUrl(sup.phone, lowItems.length
+                      ? buildRestockMessage(settings.shopName || 'My Shop', sup.name, lowItems)
+                      : `Hello ${sup.name}! This is ${settings.shopName || 'my shop'} — saving your contact for restocks.`);
+                    return (
+                      <div className="flex gap-2 pt-1">
+                        {tel ? (
+                          <a href={tel} className="flex-1 h-9 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5">
+                            <Phone className="w-3.5 h-3.5" /> Call
+                          </a>
+                        ) : null}
+                        {wa ? (
+                          <a href={wa} target="_blank" rel="noopener noreferrer" className="flex-1 h-9 bg-emerald-950/40 border border-emerald-800/40 hover:bg-emerald-950/60 text-emerald-300 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5">
+                            <MessageCircle className="w-3.5 h-3.5" /> WhatsApp{lowItems.length ? ` (${lowItems.length})` : ''}
+                          </a>
+                        ) : (
+                          <span className="flex-1 h-9 text-zinc-600 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center">Add phone to contact</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {confirmDeleteSupplier === sup.id && (
                   <div className="bg-rose-950/20 border border-rose-500/30 rounded-xl p-3 space-y-2">
@@ -631,6 +670,13 @@ const colorsMap: { [key: string]: string } = {
                 {filter}
               </button>
             ))}
+            {branchOptions.length > 0 && (
+              <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} title="Filter by branch"
+                className="px-4 h-10 rounded-full font-bold text-xs uppercase tracking-wider bg-[#0A0A0A] border border-zinc-800 text-zinc-300 focus:border-gold-brand outline-none cursor-pointer">
+                <option value="All">All branches</option>
+                {branchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            )}
           </nav>
 
           {lossProducts.length > 0 && (
@@ -678,6 +724,9 @@ const colorsMap: { [key: string]: string } = {
               <p className="text-xs text-zinc-500 font-bold uppercase">
                 Total sales{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''} • Tap Daily/Weekly/Monthly above
               </p>
+              {displayVat > 0 && (
+                <p className="text-xs text-emerald-400 font-bold uppercase mt-1">VAT inside: {formatCurrency(displayVat)}</p>
+              )}
             </div>
             <div className="boss-card p-5 flex flex-col justify-between h-32" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Profit Left <Info className="w-3 h-3 text-zinc-600" /></span>

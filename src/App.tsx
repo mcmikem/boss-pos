@@ -1,9 +1,9 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User
 } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
+import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { UGX_TO_USD_RATE } from './data/constants';
@@ -17,6 +17,8 @@ import { logPriceChange } from './utils/priceHistory';
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
+import StaffSwitcher from './components/StaffSwitcher';
+import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
 import SyncProductsButton from './components/SyncProductsButton';
 const Inventory = lazy(() => import('./components/Inventory'));
 const Analytics = lazy(() => import('./components/Analytics'));
@@ -53,8 +55,34 @@ const DEFAULT_SETTINGS: StoreSettings = {
   sheetsUrl: '',
 };
 
-export default function App() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+// Inline add-staff form used in Settings (first setup + later adds).
+function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'cashier', pin: string) => void }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<'manager' | 'cashier'>('cashier');
+  const [pin, setPin] = useState('');
+  return (
+    <div className="flex items-center gap-2">
+      <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name"
+        className="flex-1 min-w-0 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+      <button onClick={() => setRole(role === 'manager' ? 'cashier' : 'manager')}
+        className="h-10 px-2.5 text-[10px] font-black uppercase rounded-xl border border-gold-brand/40 text-gold-brand shrink-0" title="Toggle role">
+        {role === 'manager' ? 'MGR' : 'CSH'}
+      </button>
+      <input type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="PIN"
+        className="w-16 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-2 rounded-xl text-white font-bold text-center focus:border-gold-brand outline-none" />
+      <button onClick={() => {
+        if (!name.trim() || pin.length !== 4) return;
+        onAdd(name.trim(), role, pin);
+        setName(''); setPin('');
+      }} disabled={!name.trim() || pin.length !== 4}
+        className="h-10 px-3 bg-gold-brand text-black font-black uppercase text-[10px] rounded-xl disabled:opacity-40 shrink-0 cursor-pointer">
+        Add
+      </button>
+    </div>
+  );
+}
+
+export default function App() {  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const stored = localStorage.getItem(THEME_KEY);
       if (stored) return stored === 'dark' ? 'dark' : 'light';
@@ -85,6 +113,28 @@ export default function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierPrices, setSupplierPrices] = useState<SupplierPrice[]>([]);
+  const [staffList, setStaffList] = useState<StaffMember[]>([]);
+  // This till's branch (per-device, never synced — each phone belongs to one branch).
+  const [tillBranch, setTillBranch] = useState<string>(() => {
+    try { return localStorage.getItem('boss_pos_branch') || ''; } catch { return ''; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('boss_pos_branch', tillBranch || ''); } catch {}
+  }, [tillBranch]);
+  const [activeStaffId, setActiveStaffId] = useState<string | null>(() => {
+    try { return localStorage.getItem('boss_pos_staff_id'); } catch { return null; }
+  });
+  const [showStaffSwitcher, setShowStaffSwitcher] = useState(false);
+  const [staffVerifying, setStaffVerifying] = useState(false);
+  const [staffVerifyError, setStaffVerifyError] = useState<string | null>(null);
+
+  // Role gates. Zero staff rows = legacy behavior: everything open, manager
+  // PIN prompts as before. Once staff exist, cashiers sell + expenses only.
+  const staffConfigured = staffList.length > 0;
+  const activeStaff = activeStaffOf(staffList, activeStaffId);
+  const activeRole = activeStaff?.role || null;
+  const isManager = isManagerRole(activeRole, staffConfigured);
   const [creditPayments, setCreditPayments] = useState<CreditPayment[]>([]);
   const [creditEats, setCreditEats] = useState<CreditEat[]>([]);
   const [productionRegisters, setProductionRegisters] = useState<ProductionRegister[]>([]);
@@ -152,6 +202,8 @@ export default function App() {
     setProducts(enriched);
     saveProducts(enriched);
     setSuppliers(d.suppliers);
+    setSupplierPrices(d.supplierPrices || []);
+    setStaffList(d.staff || []);
     setSales(d.sales);
     setExpenses(d.expenses);
     setCreditPayments(d.creditPayments);
@@ -162,6 +214,8 @@ export default function App() {
     // Warm per-endpoint caches so later reads (and offline reloads) hit cache.
     primeCache('/api/products', d.products);
     primeCache('/api/suppliers', d.suppliers);
+    primeCache('/api/supplier-prices', d.supplierPrices || []);
+    primeCache('/api/staff', d.staff || []);
     primeCache('/api/sales', d.sales);
     primeCache('/api/expenses', d.expenses);
     primeCache('/api/credit-payments', d.creditPayments);
@@ -208,6 +262,8 @@ export default function App() {
         saveProducts(enriched);
       }).catch(fail('products')),
       supplierApi.list().then(setSuppliers).catch(fail('suppliers')),
+      supplierPriceApi.list().then(setSupplierPrices).catch(fail('supplier prices')),
+      staffApi.list().then(setStaffList).catch(fail('staff')),
       saleApi.list().then(setSales).catch(fail('sales')),
       expenseApi.list().then(setExpenses).catch(fail('expenses')),
       creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
@@ -570,9 +626,11 @@ export default function App() {
   const lastSentSettingsRef = useRef<string>('');
   useEffect(() => {
     if (!readyRef.current) return;
+    // Cashiers never push settings (a clocked-in cashier only sells).
+    if (staffConfigured && activeRole !== 'manager') return;
     const ALLOWED = new Set([
       'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate',
-      'categories','expenseCategories','showTailoring','showDesign','sheetsUrl','eodCapital',
+      'categories','expenseCategories','showTailoring','showDesign','sheetsUrl','eodCapital','branches',
     ]);
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
@@ -600,7 +658,7 @@ export default function App() {
       });
     }, 600);
     return () => clearTimeout(t);
-  }, [settings]);
+  }, [settings, staffConfigured, activeRole]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_categories', JSON.stringify(categories));
@@ -621,6 +679,8 @@ export default function App() {
   const staffPromptedRef = useRef(false);
   useEffect(() => {
     if (authState !== 'ready' || staffName || staffPromptedRef.current) return;
+    // Staff logins replace the free-text prompt with the PIN-checked switcher.
+    if (staffConfigured) return;
     staffPromptedRef.current = true;
     if (localStorage.getItem('boss_pos_staff_prompted') === '1') return;
     setTimeout(() => {
@@ -628,7 +688,20 @@ export default function App() {
       if (name && name.trim()) setStaffName(name.trim());
       localStorage.setItem('boss_pos_staff_prompted', '1');
     }, 700);
-  }, [authState, staffName]);
+  }, [authState, staffName, staffConfigured]);
+
+  // With staff logins, the active seller owns the attribution name.
+  useEffect(() => {
+    if (activeStaff) setStaffName(activeStaff.name);
+  }, [activeStaff?.id]);
+
+  // Cashiers are fenced to selling + expenses, even if they deep-link a tab.
+  useEffect(() => {
+    if (authState === 'ready' && !canAccessTab(activeTab, activeRole, staffConfigured)) {
+      setActiveTab('sales');
+      triggerToast('Managers only — ask a manager to switch in', 'error');
+    }
+  }, [authState, activeTab, activeRole, staffConfigured]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_cart', JSON.stringify(cart));  }, [cart]);
@@ -951,8 +1024,10 @@ export default function App() {
   };
 
   // Ask for the PIN before destructive actions (refund / delete a sale). If no
-  // PIN is set yet, skip the prompt.
+  // PIN is set yet, skip the prompt. A clocked-in manager passes straight
+  // through; everyone else takes the legacy manager-PIN path.
   const requirePin = async (message: string, managerOnly = false): Promise<boolean> => {
+    if (staffConfigured && activeStaff?.role === 'manager') return true;
     if (!settings.hasPin) return true;
     const managerPin = localStorage.getItem('boss_pos_manager_pin');
     if (managerOnly && managerPin && /^\d{4}$/.test(managerPin)) {
@@ -1082,12 +1157,94 @@ export default function App() {
   const handleDeleteSupplier = async (supplierId: string) => {
     const prev = suppliers.find(s => s.id === supplierId);
     const prevProducts = products;
+    const prevQuotes = supplierPrices;
     setSuppliers(prev => prev.filter(s => s.id !== supplierId));
     setProducts(prev => prev.map(p => p.supplierId === supplierId ? { ...p, supplierId: undefined } : p));
+    setSupplierPrices(prev => prev.filter(q => q.supplierId !== supplierId));
     try { await supplierApi.remove(supplierId); } catch {
       if (prev) setSuppliers(list => [...list, prev]);
       setProducts(prevProducts);
+      setSupplierPrices(prevQuotes);
       triggerToast('Failed to delete supplier', 'error');
+    }
+  };
+
+  const handleUpsertQuote = async (supplierId: string, productId: string, price: number) => {
+    const prev = supplierPrices;
+    const at = new Date().toISOString();
+    const optimistic: SupplierPrice = prev.find(q => q.supplierId === supplierId && q.productId === productId)
+      ? { ...prev.find(q => q.supplierId === supplierId && q.productId === productId)!, price, updatedAt: at }
+      : { id: `sp-local-${Date.now()}`, supplierId, productId, price, updatedAt: at };
+    setSupplierPrices(list => {
+      const rest = list.filter(q => !(q.supplierId === supplierId && q.productId === productId));
+      return [...rest, optimistic];
+    });
+    try {
+      const saved = await supplierPriceApi.upsert(supplierId, productId, price);
+      setSupplierPrices(list => list.map(q =>
+        q.supplierId === supplierId && q.productId === productId ? saved : q));
+    } catch {
+      setSupplierPrices(prev);
+      triggerToast('Failed to save supplier price — not added', 'error');
+    }
+  };
+
+  const handleDeleteQuote = async (quoteId: string) => {
+    const prev = supplierPrices.find(q => q.id === quoteId);
+    setSupplierPrices(list => list.filter(q => q.id !== quoteId));
+    try { await supplierPriceApi.remove(quoteId); } catch {
+      if (prev) setSupplierPrices(list => [...list, prev]);
+      triggerToast('Failed to delete supplier price', 'error');
+    }
+  };
+
+  const handleVerifyStaff = async (id: string, pin: string) => {
+    setStaffVerifying(true);
+    setStaffVerifyError(null);
+    try {
+      const s = await staffApi.verify(id, pin);
+      setActiveStaffId(s.id);
+      try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
+      setStaffName(s.name);
+      setShowStaffSwitcher(false);
+      triggerToast(`${s.name} is selling (${s.role})`, 'success');
+    } catch (err) {
+      setStaffVerifyError(err instanceof Error ? err.message : 'Wrong PIN');
+    } finally {
+      setStaffVerifying(false);
+    }
+  };
+
+  const handleSwitchStaff = () => {
+    // Legacy tills (no staff rows): free-text seller name, as before.
+    if (!staffConfigured) {
+      const name = window.prompt('Who is selling? (cashier name for this phone)');
+      if (name && name.trim()) setStaffName(name.trim());
+      return;
+    }
+    setStaffVerifyError(null);
+    setShowStaffSwitcher(true);
+  };
+
+  const handleAddStaff = async (name: string, role: 'manager' | 'cashier', pin: string) => {
+    try {
+      const created = await staffApi.create(name, role, pin);
+      setStaffList(prev => [...prev, created]);
+      triggerToast(`${name} added as ${role}`, 'success');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Failed to add staff', 'error');
+    }
+  };
+
+  const handleUpdateStaff = async (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) => {
+    const prev = staffList;
+    setStaffList(list => list.map(s => s.id === id ? { ...s, ...patch, pin: undefined } as StaffMember : s));
+    try {
+      const updated = await staffApi.update(id, patch);
+      setStaffList(list => list.map(s => s.id === id ? updated : s));
+    } catch (err) {
+      setStaffList(prev);
+      triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Failed to update staff', 'error');
     }
   };
 
@@ -1233,6 +1390,8 @@ export default function App() {
             categories={categories}
             staffName={staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
+            staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
+            tillBranch={tillBranch}
           />
           </ErrorBoundary>
         );
@@ -1241,10 +1400,12 @@ export default function App() {
           <ErrorBoundary key="inventory">
           <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Inventory 
-            products={products} suppliers={suppliers}
+            products={products} suppliers={suppliers} supplierPrices={supplierPrices}
+            shopName={settings.shopName}
             categories={categories}
             onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct}
             onDeleteProduct={handleDeleteProduct}
+            onUpsertQuote={handleUpsertQuote} onDeleteQuote={handleDeleteQuote}
             onAddCategory={handleAddCategory}
             onUpdateCategory={handleUpdateCategory}
             onDeleteCategory={handleDeleteCategory}
@@ -1338,6 +1499,8 @@ export default function App() {
             categories={categories}
             staffName={staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
+            staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
+            tillBranch={tillBranch}
           />
           </ErrorBoundary>
         );
@@ -1430,6 +1593,12 @@ export default function App() {
               Install
             </button>
           )}
+          <button onClick={handleSwitchStaff} title={staffConfigured ? 'Switch seller (PIN-checked)' : 'Who is selling'}
+            className="flex items-center gap-1.5 h-8 px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer">
+            <span className={`w-1.5 h-1.5 rounded-full ${activeStaff ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+            <span className="max-w-[90px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
+            {staffConfigured && <span className="text-[8px] text-zinc-600">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
+          </button>
           <button onClick={() => {
             const next = theme === 'light' ? 'dark' : 'light';
             setTheme(next);
@@ -1459,25 +1628,52 @@ export default function App() {
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">Sell</span>
         </button>
+        {isManager && (
         <button onClick={() => setActiveTab('inventory')} aria-label="Stock" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Stock</span>
         </button>
+        )}
         <button onClick={() => { setActiveTab('expenses'); }} aria-label="Spend" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Spend</span>
         </button>
+        {isManager && (
         <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label="Reports" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Reports</span>
         </button>
+        )}
+        {isManager && (
         <button onClick={() => setActiveTab('registers')} aria-label="Daily close-out" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">Close</span>
         </button>
+        )}
       </nav>
 
       {toastMessage && <Toast message={toastMessage} type={toastType} onClose={() => setToastMessage(null)} />}
+
+      {showStaffSwitcher && staffConfigured && (
+        <StaffSwitcher
+          staff={staffList.filter(s => s.active)}
+          mandatory={false}
+          verifying={staffVerifying}
+          error={staffVerifyError}
+          onVerify={handleVerifyStaff}
+          onClose={() => setShowStaffSwitcher(false)}
+        />
+      )}
+      {staffConfigured && !activeStaff && (
+        <StaffSwitcher
+          staff={staffList.filter(s => s.active)}
+          mandatory={true}
+          verifying={staffVerifying}
+          error={staffVerifyError}
+          onVerify={handleVerifyStaff}
+          onClose={() => {}}
+        />
+      )}
 
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
@@ -1563,10 +1759,74 @@ export default function App() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Who is selling</label>
-                <input type="text" value={staffName} placeholder="Cashier / seller name"
-                  onChange={(e) => setStaffName(e.target.value)}
-                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                <button onClick={handleSwitchStaff}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none flex items-center justify-between cursor-pointer">
+                  <span>{activeStaff?.name || staffName || 'Tap to set seller'}</span>
+                  <span className="text-[10px] text-gold-brand font-black uppercase">Switch</span>
+                </button>
                 <p className="text-[10px] text-zinc-600">Every sale is stamped with this name so Reports can show sales by seller.</p>
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <User className="w-3.5 h-3.5 text-gold-brand" /> Staff logins
+                </label>
+                {!staffConfigured ? (
+                  <>
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">One shared till PIN today. Add the first staff member to switch on PIN-checked logins: cashiers sell, managers unlock everything.</p>
+                    <StaffFirstSetup onAdd={handleAddStaff} />
+                  </>
+                ) : isManager ? (
+                  <>
+                    {staffList.map(s => (
+                      <div key={s.id} className="flex items-center gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${s.active ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+                        <span className="flex-1 min-w-0 text-xs font-bold text-zinc-200 truncate">{s.name}</span>
+                        <button onClick={() => handleUpdateStaff(s.id, { role: s.role === 'manager' ? 'cashier' : 'manager' })}
+                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title="Toggle role">
+                          {s.role === 'manager' ? 'MGR' : 'CSH'}
+                        </button>
+                        <button onClick={() => {
+                          const pin = window.prompt(`New 4-digit PIN for ${s.name}:`);
+                          if (pin && /^\d{4}$/.test(pin)) handleUpdateStaff(s.id, { pin });
+                          else if (pin) triggerToast('PIN must be 4 digits', 'error');
+                        }} className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title="Reset PIN">PIN</button>
+                        <button onClick={() => handleUpdateStaff(s.id, { active: !s.active })}
+                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title={s.active ? 'Disable' : 'Enable'}>
+                          {s.active ? 'On' : 'Off'}
+                        </button>
+                      </div>
+                    ))}
+                    <StaffFirstSetup onAdd={handleAddStaff} />
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">Cashiers see Sell + Spend only — no stock, reports, close-out, or settings. Voids and refunds ask for a manager.</p>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-zinc-600 leading-relaxed">You are clocked in as {activeStaff?.name} (cashier). A manager can add staff here.</p>
+                )}
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <LayoutGrid className="w-3.5 h-3.5 text-gold-brand" /> Branches
+                </label>
+                <label className="block text-[10px] text-zinc-500 font-bold uppercase">This till belongs to</label>
+                <select value={tillBranch} onChange={(e) => setTillBranch(e.target.value)}
+                  className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
+                  <option value="">Main shop (no branch)</option>
+                  {(settings.branches || []).map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                {isManager ? (
+                  <>
+                    <label className="block text-[10px] text-zinc-500 font-bold uppercase pt-1">All branches (one per line or comma)</label>
+                    <input type="text" value={(settings.branches || []).join(', ')} placeholder="e.g. Owino, Kikuubo"
+                      onChange={(e) => setSettings(prev => ({
+                        ...prev,
+                        branches: e.target.value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).slice(0, 20),
+                      }))}
+                      className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">Each sale is stamped with its till's branch; Reports can filter per branch. Stock stays pooled across branches. Rename carefully — old sales keep the old name.</p>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-zinc-600 leading-relaxed">Branch list is managed by a manager. Your sales are stamped “{tillBranch || 'main shop'}”.</p>
+                )}
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
@@ -1592,6 +1852,7 @@ export default function App() {
                 )}
                 <p className="text-[10px] text-zinc-600 leading-relaxed">Every sale and expense is added to the sheet automatically. To set up: create a Google Sheet → Extensions → Apps Script → paste the script from the repo (scripts/appsscript-sheet.gs) → Deploy → Web app → paste the <span className="text-zinc-400">/exec</span> URL here.</p>
               </div>
+              {isManager && (
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
                   <ReceiptText className="w-3.5 h-3.5 text-gold-brand" /> URA EFRIS fiscal invoices
@@ -1670,6 +1931,8 @@ export default function App() {
                   <p className="text-[10px] text-zinc-600">Loading EFRIS settings…</p>
                 )}
               </div>
+              )}
+              {isManager && (
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
                 <div className="flex gap-2">
@@ -1707,6 +1970,7 @@ export default function App() {
                 </button>
                 <p className="text-[10px] text-zinc-600">Use if a till is lost/stolen or shared. Ends the session everywhere instantly.</p>
 </div>
+              )}
                 <div className="flex gap-2">
                   <button onClick={async () => {
                     const newTheme = theme === 'light' ? 'dark' : 'light';
@@ -1723,6 +1987,7 @@ export default function App() {
                     {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
                   </button>
                 </div>
+              {isManager && (
                 <div className="border-t border-white/5 pt-3 space-y-2">
                   <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
                 <div className="flex items-center justify-between text-[10px] text-zinc-500 font-bold">
@@ -1840,6 +2105,7 @@ export default function App() {
                 />
                 <p className="text-[10px] text-zinc-600">Restoring merges over existing records. Create a fresh backup first.</p>
               </div>
+              )}
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();
                 const apiCacheKey = `boss_api_cache_/api/products`;

@@ -1,4 +1,4 @@
-import { Product, Supplier, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -637,6 +637,23 @@ export const supplierApi = {
   remove: (id: string) => api<{ success: boolean }>(`/api/suppliers/${id}`, { method: 'DELETE' }),
 };
 
+export const supplierPriceApi = {
+  list: () => api<SupplierPrice[]>('/api/supplier-prices'),
+  upsert: (supplierId: string, productId: string, price: number) =>
+    api<SupplierPrice>('/api/supplier-prices', { method: 'PUT', body: JSON.stringify({ supplierId, productId, price }) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/supplier-prices/${id}`, { method: 'DELETE' }),
+};
+
+export const staffApi = {
+  list: () => api<StaffMember[]>('/api/staff'),
+  create: (name: string, role: 'manager' | 'cashier', pin: string) =>
+    api<StaffMember>('/api/staff', { method: 'POST', body: JSON.stringify({ name, role, pin }) }),
+  update: (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) =>
+    api<StaffMember>(`/api/staff/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  verify: (id: string, pin: string) =>
+    api<StaffMember & { ok: boolean }>('/api/staff/verify', { method: 'POST', body: JSON.stringify({ id, pin }) }),
+};
+
 export const saleApi = {
   list: () => api<Sale[]>('/api/sales'),
   create: (s: Sale) => api<Sale>('/api/sales', { method: 'POST', body: JSON.stringify(s) }),
@@ -761,6 +778,8 @@ export const efrisApi = {
 export interface BootData {
   products: Product[];
   suppliers: Supplier[];
+  supplierPrices: SupplierPrice[];
+  staff: StaffMember[];
   sales: Sale[];
   expenses: Expense[];
   creditPayments: CreditPayment[];
@@ -798,6 +817,7 @@ export interface SummaryResult {
   expenseTotal: number;
   netProfit: number;
   creditOutstanding: number;
+  vatTotal: number;
   lowStockCount: number;
   hourly?: number[];
   daily?: { date: string; revenue: number }[];

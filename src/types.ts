@@ -91,6 +91,7 @@ export interface Sale {
   discount?: number;
   notes?: string;
   staffName?: string;
+  branch?: string;
   refunded?: boolean;
   refundedAt?: string;
   // EFRIS fiscalisation (server-filled; see api/efris.js)
@@ -163,6 +164,23 @@ export interface Supplier {
   contactPerson: string;
   phone: string;
   email: string;
+}
+
+export interface SupplierPrice {
+  id: string;
+  supplierId: string;
+  productId: string;
+  price: number;
+  updatedAt: string;
+}
+
+export type StaffRole = 'manager' | 'cashier';
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  role: StaffRole;
+  active: boolean;
 }
 
 export interface TailoringOrder {
@@ -243,6 +261,7 @@ export interface StoreSettings {
   showDesign?: boolean;
   sheetsUrl?: string;
   efris?: EfrisConfig;
+  branches?: string[];
   eodCapital?: Record<string, number>;
   lastSheetOk?: boolean;
   lastSheetAt?: string;

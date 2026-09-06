@@ -3,18 +3,23 @@ import {
   Search, Plus, AlertTriangle, Edit, Package, Save, X,
   PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat
 } from 'lucide-react';
-import type { Product, ProductVariant, Supplier, Recipe, RecipeIngredient } from '../types';
+import type { Product, ProductVariant, Supplier, SupplierPrice, Recipe, RecipeIngredient } from '../types';
 import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
 import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
+import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, supplierWhatsAppUrl } from '../utils/suppliers';
 
 interface InventoryProps {
   products: Product[];
   suppliers: Supplier[];
+  supplierPrices: SupplierPrice[];
+  shopName: string;
   categories: string[];
   onAddProduct: (product: Product) => void;
   onUpdateProduct: (product: Product) => void;
   onDeleteProduct: (productId: string) => void;
+  onUpsertQuote: (supplierId: string, productId: string, price: number) => void;
+  onDeleteQuote: (quoteId: string) => void;
   onAddCategory: (name: string) => void;
   onUpdateCategory: (oldName: string, newName: string) => void;
   onDeleteCategory: (name: string) => void;
@@ -25,10 +30,14 @@ interface InventoryProps {
 export default function Inventory({
   products,
   suppliers,
+  supplierPrices,
+  shopName,
   categories,
   onAddProduct,
   onUpdateProduct,
   onDeleteProduct,
+  onUpsertQuote,
+  onDeleteQuote,
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
@@ -72,6 +81,8 @@ export default function Inventory({
   const [editSaleUnit, setEditSaleUnit] = useState('');
   const [editVariants, setEditVariants] = useState<ProductVariant[]>([]);
   const [editRecipe, setEditRecipe] = useState<Recipe | null>(null);
+  const [quoteSupplierId, setQuoteSupplierId] = useState('');
+  const [quotePrice, setQuotePrice] = useState('');
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -600,6 +611,12 @@ export default function Inventory({
                   <div>
                     <p className="text-[13px] font-bold text-zinc-100 font-display tabular-nums">{formatCurrency(product.price)}</p>
                     <p className="text-[11px] text-zinc-500 font-medium mt-0.5 tabular-nums">{formatCurrency(effectiveCost(product))}</p>
+                    {(() => {
+                      const best = bestQuoteFor(supplierPrices, product.id);
+                      return best ? (
+                        <p className="text-[10px] text-emerald-400 font-bold mt-0.5 tabular-nums">Best supply {formatCurrency(best.price)}</p>
+                      ) : null;
+                    })()}
                   </div>
                   <Edit className="w-4 h-4 text-zinc-600 group-hover:text-gold-brand transition-colors" />
                 </div>
@@ -843,6 +860,63 @@ export default function Inventory({
                 </select>
               </div>
             </div>
+
+            {editingProduct && (
+              <div className="bg-zinc-900/60 rounded-xl p-3 border border-zinc-800/60">
+                <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5 mb-1">
+                  <Truck className="w-3.5 h-3.5 text-gold-brand" /> Supplier prices
+                </h4>
+                <p className="text-[11px] text-zinc-500 mb-2">Record what each supplier charges — cheapest is flagged, and reorders go out on WhatsApp.</p>
+                {(() => {
+                  const quotes = quotesForProduct(supplierPrices, editingProduct.id);
+                  const best = bestQuoteFor(supplierPrices, editingProduct.id);
+                  const qty = restockQtyFor({ ...editingProduct, stockQty: editingProduct.stockQty, lowStockThreshold: parseFloat(editThreshold) || editingProduct.lowStockThreshold });
+                  return (
+                    <>
+                      {quotes.length === 0 ? (
+                        <p className="text-xs text-zinc-600 italic">No quotes yet. Add the first one below.</p>
+                      ) : (
+                        <div className="space-y-2 mb-2">
+                          {quotes.map(q => {
+                            const sup = suppliers.find(s => s.id === q.supplierId);
+                            const wa = sup ? supplierWhatsAppUrl(sup.phone, buildRestockMessage(shopName, sup.name, [{ name: editingProduct.name, qty }])) : null;
+                            return (
+                              <div key={q.id} className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5">
+                                <span className="flex-1 min-w-0 text-xs font-bold text-zinc-200 truncate">{sup?.name || 'Unknown supplier'}</span>
+                                {best?.id === q.id && <span className="text-[9px] font-black bg-gold-brand text-black px-1.5 py-0.5 rounded uppercase">Best</span>}
+                                <span className="text-xs font-bold text-gold-brand tabular-nums">{formatCurrency(q.price)}</span>
+                                {wa ? (
+                                  <a href={wa} target="_blank" rel="noopener noreferrer" className="text-[10px] font-black uppercase text-emerald-400 hover:text-emerald-300 px-1.5 py-1">Order</a>
+                                ) : (
+                                  <button onClick={() => triggerToast('Add a phone number for this supplier first (Reports → Suppliers)', 'error')} className="text-[10px] font-black uppercase text-zinc-600 px-1.5 py-1">Order</button>
+                                )}
+                                <button onClick={() => onDeleteQuote(q.id)} className="text-rose-400 hover:text-rose-300 p-1" title="Delete quote"><X className="w-3.5 h-3.5" /></button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <select value={quoteSupplierId} onChange={(e) => setQuoteSupplierId(e.target.value)}
+                          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none">
+                          <option value="">Supplier…</option>
+                          {suppliers.map(sup => <option key={sup.id} value={sup.id}>{sup.name}</option>)}
+                        </select>
+                        <input type="number" min="0" value={quotePrice} onChange={(e) => setQuotePrice(e.target.value)} placeholder="Price"
+                          className="w-24 bg-zinc-950 border border-zinc-800 text-gold-brand rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold text-right" />
+                        <button onClick={() => {
+                          const amt = parseFloat(quotePrice) || 0;
+                          if (!quoteSupplierId) { triggerToast('Pick a supplier first', 'error'); return; }
+                          if (amt <= 0) { triggerToast('Enter the supplier price', 'error'); return; }
+                          onUpsertQuote(quoteSupplierId, editingProduct.id, amt);
+                          setQuotePrice('');
+                        }} className="h-9 px-3 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-lg text-xs font-black uppercase hover:bg-gold-brand/20">Add</button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
 
             <div>
               <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Alert when stock below</label>

@@ -136,6 +136,16 @@ function hashRef(s) {
   return Math.abs(h).toString(36).toUpperCase().padStart(7, '0');
 }
 
+// Total VAT across sale lines at the configured rate. Used to stamp
+// sale.tax automatically so tax balances itself — no till math needed.
+export function saleVatTotal(items, cfg) {
+  if (!cfg || !(Number(cfg.vatRate) > 0)) return 0;
+  return (items || []).reduce(
+    (a, it) => a + splitVat(Number(it.lineTotal) || 0, cfg.vatRate, cfg.pricesIncludeVat).tax,
+    0,
+  );
+}
+
 // Simulated URA response for sandbox mode. Shape mirrors what a provider
 // returns so switching to live changes nothing downstream.
 export function simulateSandbox(payload) {

@@ -74,6 +74,9 @@ interface SalesProps {
   staffName?: string;
   setStaffName: (name: string) => void;
   onSaveCustomProduct?: (p: Product) => void;
+  staffConfigured?: boolean;
+  onOpenStaffSwitcher?: () => void;
+  tillBranch?: string;
 }
 
 const localOrderNumber = () => {
@@ -86,7 +89,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
@@ -350,6 +353,7 @@ export default function Sales({
       customerName: customerName.trim() || undefined,
       discount: saleDiscount > 0 ? saleDiscount : undefined,
       staffName: staffName?.trim() || undefined,
+      branch: tillBranch || undefined,
     };
     onAddSale(newSale);
     try {
@@ -451,7 +455,11 @@ export default function Sales({
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
-          <button onClick={() => { setSellerDraft(staffName || ''); setShowSellerEditor(true); }}
+          <button onClick={() => {
+            // Staff logins replace free-text seller names with PIN-checked switching.
+            if (staffConfigured && onOpenStaffSwitcher) { onOpenStaffSwitcher(); return; }
+            setSellerDraft(staffName || ''); setShowSellerEditor(true);
+          }}
               className="shrink-0 h-12 w-12 px-0 sm:w-auto sm:px-3 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
               title="Who is selling — each sale is stamped with this name"
               aria-label="Set seller"

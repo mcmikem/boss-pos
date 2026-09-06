@@ -9,6 +9,7 @@ import {
   sendToProvider,
   goodsCodeFor,
   splitVat,
+  saleVatTotal,
 } from '../api/efris.js';
 
 const sale = {
@@ -88,6 +89,16 @@ describe('simulateSandbox', () => {
     assert.deepEqual(a, b);
     assert.match(a.fdn, /^FDN-SANDBOX-/);
     assert.ok(a.qr.includes('9900'));
+  });
+});
+
+describe('saleVatTotal', () => {
+  it('sums extracted VAT across lines', () => {
+    assert.equal(saleVatTotal(sale.items, cfg), 1510);
+  });
+  it('is zero without a configured rate', () => {
+    assert.equal(saleVatTotal(sale.items, sanitizeEfrisConfig({ vatRate: 0 })), 0);
+    assert.equal(saleVatTotal([], cfg), 0);
   });
 });
 
