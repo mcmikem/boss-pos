@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BOSS POS privacy policy — what shop data we store, why, and how to export or delete it.">
+  <meta name="theme-color" content="#0e0e0c">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23ffec00'/%3E%3Ctext x='32' y='45' font-family='Arial Black,sans-serif' font-size='36' font-weight='900' text-anchor='middle' fill='%230e0e0c'%3EB%3C/text%3E%3C/svg%3E">
+  <title>Privacy — BOSS POS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=DM+Mono:wght@400;500&family=Montserrat:wght@700;800;900&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=DM+Mono:wght@400;500&family=Montserrat:wght@700;800;900&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=DM+Mono:wght@400;500&family=Montserrat:wght@700;800;900&display=swap"></noscript>
+  <style>
+    :root{
+      --ink:#0e0e0c; --paper:#f2eee1; --paper2:#e9e3d0; --gold:#ffec00; --gold-deep:#e0a800;
+      --green:#0d5c45; --white:#fffdf6; --muted:#453f32;
+      --hard:6px 6px 0 var(--ink); --hard-sm:4px 4px 0 var(--ink);
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{margin:0;color:var(--ink);background:var(--paper);font-family:'Archivo',sans-serif;line-height:1.6}
+    ::selection{background:var(--gold);color:var(--ink)}
+    a{color:inherit} a:focus-visible{outline:3px solid var(--ink);outline-offset:2px;box-shadow:0 0 0 5px var(--gold)}
+    .wrap{width:min(860px,calc(100% - 40px));margin:auto}
+    .mono{font-family:'DM Mono',monospace}
+    .nav{position:sticky;top:0;z-index:50;background:var(--paper);border-bottom:3px solid var(--ink)}
+    .nav-inner{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .brand{display:flex;align-items:center;gap:10px;font-family:'Montserrat',sans-serif;font-weight:900;letter-spacing:-.03em;font-size:1.3rem;text-decoration:none}
+    .brand-mark{display:grid;place-items:center;width:34px;height:34px;color:var(--ink);background:var(--gold);border:3px solid var(--ink);border-radius:9px;box-shadow:3px 3px 0 var(--ink);font-family:'DM Mono',monospace;font-size:15px}
+    .back{font-size:.82rem;font-weight:700;text-decoration:underline;text-decoration-color:var(--gold-deep);text-decoration-thickness:3px;text-underline-offset:4px}
+    main{padding:64px 0 96px}
+    .tag{display:inline-block;padding:6px 13px;margin-bottom:18px;border:2.5px solid var(--ink);border-radius:8px;background:var(--white);box-shadow:var(--hard-sm);font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:.14em;transform:rotate(-1.2deg)}
+    h1{font-family:'Montserrat',sans-serif;font-weight:900;letter-spacing:-.03em;line-height:1.02;margin:0 0 12px;font-size:clamp(2.2rem,6vw,3.6rem);text-transform:uppercase}
+    .updated{font-family:'DM Mono',monospace;font-size:.76rem;color:var(--muted);letter-spacing:.06em;margin:0 0 40px}
+    .card{padding:26px 24px;margin-bottom:18px;border:3px solid var(--ink);border-radius:14px;background:var(--white);box-shadow:var(--hard-sm)}
+    .card h2{margin:0 0 10px;font-family:'Montserrat',sans-serif;font-size:1.25rem;letter-spacing:-.02em}
+    .card p,.card li{color:var(--muted);font-size:.95rem}
+    .card ul{margin:10px 0 0;padding-left:20px}
+    .card li{margin-top:6px}
+    .card strong{color:var(--ink)}
+    .footer{padding:26px 0;background:var(--paper);border-top:3px solid var(--ink);font-size:.82rem}
+    .footer-inner{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+  </style>
+</head>
+<body>
+  <nav class="nav" aria-label="Main navigation"><div class="wrap nav-inner"><a class="brand" href="/"><span class="brand-mark">B</span>BOSS POS</a><a class="back" href="/">← Back to home</a></div></nav>
+  <main><div class="wrap">
+    <span class="tag">YOUR SHOP, YOUR DATA</span>
+    <h1>Privacy policy</h1>
+    <p class="updated">LAST UPDATED · SEPTEMBER 2026</p>
+    <div class="card"><h2>What we store to run your till</h2><p>Only what the till needs to work:</p><ul><li><strong>Shop records you enter</strong> — products, sales, expenses, suppliers, staff names and roles, and till settings.</li><li><strong>Contact details</strong> — your shop name plus the WhatsApp number or email you use to talk to us.</li><li><strong>PINs, stored hashed</strong> — till and staff PINs are kept as one-way hashes with rate-limiting, never as readable text.</li></ul></div>
+    <div class="card"><h2>What stays on your device</h2><p>Every sale is saved on your phone, tablet, or computer the second it happens, and syncs to our server when the connection returns. The server also keeps daily snapshots so a lost or stolen phone never means lost records — open your till link on a new device, enter your PIN, and your stock, sales, and history are there. You can download a full backup anytime from Settings.</p></div>
+    <div class="card"><h2>What we never do</h2><ul><li><strong>No selling your data.</strong> Your shop records are never sold or shared for marketing.</li><li><strong>Google Sheets only if you connect it.</strong> Sales and expenses are sent to your sheet only when you paste in your own sheet URL.</li><li><strong>URA filing only if you switch it on.</strong> Fiscal invoices go to EFRIS under your shop's own TIN only on plans with EFRIS enabled.</li></ul></div>
+    <div class="card"><h2>Your control</h2><ul><li>Export your full shop data anytime from Settings.</li><li>Ask for a correction or full deletion and we will do it — message us on <a href="https://wa.me/256727790003">WhatsApp</a> or <a href="mailto:1mark2mike@gmail.com">email</a>.</li></ul></div>
+    <div class="card"><h2>Questions</h2><p>Talk to a human: <a href="https://wa.me/256727790003">WhatsApp us</a> or <a href="mailto:1mark2mike@gmail.com">1mark2mike@gmail.com</a>.</p></div>
+  </div></main>
+  <footer class="footer"><div class="wrap footer-inner"><span class="brand"><span class="brand-mark">B</span>BOSS POS</span><span>Point of sale for Ugandan bosses.</span></div></footer>
+</body>
+</html>
