@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Lock } from 'lucide-react';
+import { readLockLog, isRapidRelock } from '../utils/locklog';
 
 interface PinGateProps {
   onUnlock: (pin: string) => Promise<void>;
@@ -19,6 +20,17 @@ export default function PinGate({ onUnlock, shopName }: PinGateProps) {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Why is the till asking for PIN again? Show the last recorded cause so a
+  // loop becomes a named reason; escalate when locks are cycling rapidly.
+  const [lockInfo] = useState(() => {
+    try {
+      const log = readLockLog();
+      return { last: log[0] || null, rapid: isRapidRelock(log) };
+    } catch {
+      return { last: null, rapid: false };
+    }
+  });
 
   const handleDigit = async (d: string) => {
     if (Date.now() < lockedUntil) return;
@@ -63,7 +75,14 @@ export default function PinGate({ onUnlock, shopName }: PinGateProps) {
         <Lock className="w-7 h-7 text-gold-brand" />
       </div>
       <h1 className="text-lg font-black text-white uppercase tracking-wider mb-1">{shopName}</h1>
-      <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-8">Enter PIN</p>
+      <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2">Enter PIN</p>
+      {lockInfo.rapid && lockInfo.last ? (
+        <p className="text-[11px] text-amber-300 font-bold mb-1 max-w-[260px] text-center">
+          Till keeps locking (last: {lockInfo.last.reason}) — after unlock, check Settings → Security for the full history.
+        </p>
+      ) : lockInfo.last ? (
+        <p className="text-[10px] text-zinc-600 font-bold mb-1">Last lock: {lockInfo.last.reason}</p>
+      ) : null}
 
       <div className="flex gap-3 mb-8">
         {[0, 1, 2, 3].map(i => (

@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { t } from './utils/i18n';
@@ -11,6 +11,7 @@ import { momoFeeFor } from './utils/fees';
 import { supplierWhatsAppUrl } from './utils/suppliers';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { verifyPinAgainstHash } from './utils/crypto';
+import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
 import { downloadBlob } from './utils/download';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
@@ -109,6 +110,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
+  // Why the till keeps asking for PIN: last 10 lock reasons (boot/idle/revoke).
+  const [lockLog, setLockLog] = useState<LockEvent[]>(() => {
+    try { return readLockLog(); } catch { return []; }
+  });
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
   const [staffName, setStaffName] = useState<string>(() => {
@@ -303,6 +308,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       // unlock. Show the lock screen immediately (offline included) instead of
       // burning 1-2 network round-trips that can hang on dead WiFi.
       if (localStorage.getItem('boss_pos_has_pin') === 'true') {
+        recordLock('boot:pin-set');
         setAuthState('locked');
         return;
       }
@@ -365,6 +371,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           setAuthState('ready');
         } else {
           if (shopName) setSettings(prev => ({ ...prev, shopName }));
+          recordLock(serverHasPin === true ? 'boot:pin-set' : 'boot:locked');
           setAuthState('locked');
         }
       }
@@ -560,9 +567,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, []);
 
   // "Log out all devices" (or an expired token) just got enforced server-side:
-  // drop the session and re-lock the till.
+  // drop the session and re-lock the till. The event detail names the cause
+  // (revoke:/api/sales, revoke-all, …) so the next PIN loop is diagnosable.
   useEffect(() => {
-    const onRevoked = () => {
+    const onRevoked = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail as { path?: string; reason?: string } | undefined;
+      const reason = detail?.reason
+        || (detail?.path ? `revoke:${detail.path}` : 'revoke');
+      recordLock(reason);
+      setLockLog(readLockLog());
       setAuthState('locked');
       triggerToast('Logged out on all devices — re-enter your PIN to continue.', 'info');
     };
@@ -741,6 +754,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         // auth after an offline re-unlock, and the server would drop those
         // queued sales (data loss). The lock screen is still enforced via
         // authState; the token only expires on the server after 7 days.
+        recordLock('idle');
+        setLockLog(readLockLog());
         setAuthState('locked');
         triggerToast('Locked after inactivity', 'info');
       }
@@ -816,7 +831,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (!confirm('Log out on ALL devices (including this one)? You will need the PIN to log back in.')) return;
     try {
       await revokeAllSessions();
-      try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+      emitAuthRevoked({ reason: 'revoke-all' });
     } catch {
       triggerToast('Failed to log out other devices', 'error');
     }
@@ -840,6 +855,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // and the recent activity log.
   useEffect(() => {
     if (!isSettingsOpen) return;
+    try { setLockLog(readLockLog()); } catch {}
     backupsApi.latest().then((b) => setLastBackupAt(b.createdAt)).catch(() => {});
     auditApi.list(30).then((entries) => setAuditEntries(entries)).catch(() => {});
     sheetsApi.status().then(setSheetStatus).catch(() => setSheetStatus(null));
@@ -2018,6 +2034,30 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   Log out all devices
                 </button>
                 <p className="text-[10px] text-zinc-600">Use if a till is lost/stolen or shared. Ends the session everywhere instantly.</p>
+                <div className="rounded-xl border border-white/5 bg-[#0A0A0A] p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400">Why PIN keeps asking ({lockLog.length})</span>
+                    {lockLog.length > 0 && (
+                      <button onClick={() => { clearLockLog(); setLockLog([]); }}
+                        className="text-[9px] font-black uppercase text-zinc-500 hover:text-white cursor-pointer">Clear</button>
+                    )}
+                  </div>
+                  {isRapidRelock(lockLog) && (
+                    <p className="text-[10px] font-bold text-amber-300">Locking repeatedly — {lockLog[0]?.reason} is the likely cause, not a wrong PIN.</p>
+                  )}
+                  {lockLog.length === 0 ? (
+                    <p className="text-[10px] text-zinc-600">No recent locks recorded.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-28 overflow-y-auto">
+                      {lockLog.slice(0, 5).map((e, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2 text-[10px] font-bold">
+                          <span className="text-zinc-300 truncate">{e.reason}</span>
+                          <span className="text-zinc-600 shrink-0">{new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 </div>
               )}
                 <div className="flex gap-2">

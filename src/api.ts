@@ -89,6 +89,15 @@ function getAuthHeader(): string {
   return t ? `Bearer ${t}` : '';
 }
 
+// Auth-revoke signal: carries the endpoint (or reason) that triggered the
+// lock so the UI can log *why* the till re-locked instead of a mystery loop.
+// Listeners read (e as CustomEvent)?.detail?.path | .reason.
+export function emitAuthRevoked(detail?: { path?: string; reason?: string }): void {
+  try {
+    window.dispatchEvent(new CustomEvent('boss-pos-auth-revoked', { detail: detail || {} }));
+  } catch {}
+}
+
 interface OutboxEntry {
   id: string;
   path: string;
@@ -187,6 +196,7 @@ export async function flushOutbox(): Promise<number> {
   let dropped = 0;
   let sawAuthFailure = false;
   let sawNetworkFailure = false;
+  let firstAuthPath = '';
   const remaining: OutboxEntry[] = [];
   for (let idx = 0; idx < list.length; idx++) {
     const entry = list[idx];
@@ -202,6 +212,7 @@ export async function flushOutbox(): Promise<number> {
       }
       if (res.status === 401) {
         sawAuthFailure = true;
+        if (!firstAuthPath) firstAuthPath = entry.path;
         remaining.push(entry);
         continue;
       }
@@ -242,7 +253,7 @@ export async function flushOutbox(): Promise<number> {
   saveOutbox(remaining);
   if (sawAuthFailure) {
     setAuthToken(null);
-    try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+    emitAuthRevoked(firstAuthPath ? { path: firstAuthPath } : undefined);
   }
   if (sawNetworkFailure) {
     try { window.dispatchEvent(new Event('boss-pos-sync-offline')); } catch {}
@@ -551,7 +562,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
           // fires when a token was actually present — a wrong PIN on the lock
           // screen is also a 401 and must NOT be treated as a global revoke.
           setAuthToken(null);
-          try { window.dispatchEvent(new Event('boss-pos-auth-revoked')); } catch {}
+          emitAuthRevoked({ path });
         }
         const transientStatus =
           res.status === 502 || res.status === 503 || res.status === 504 ||
