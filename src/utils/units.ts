@@ -8,3 +8,11 @@ export function unitLabel(n: number, unit?: string): string {
   if (/[^aeiou]y$/i.test(trimmed)) return `${n} ${trimmed.replace(/y$/i, 'ies')}`;
   return `${n} ${trimmed}s`;
 }
+
+// Parse a loose-goods quantity: up to 3 decimals (2.5 kg tomatoes, 0.5 m
+// fabric), never negative, never NaN. Rounded so 0.1 + 0.2 stays 0.3.
+export function parseQty(v: string | number | undefined | null): number {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * 1000) / 1000;
+}

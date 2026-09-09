@@ -181,3 +181,59 @@ html {
 .animate-slide-up {
   animation: slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* ============ OLD-ANDROID OVERLAY SAFETY (Android 5-9 WebViews) ============
+   The build pipeline (vite legacy + lightningcss targets) already downlevels
+   CSS *features*, but three *runtime* behaviors still break tall forms on old
+   phones — e.g. the tailoring order sheet whose Save footer sat unreachable:
+   1. Flex-centering clips overflow: with `items-center justify-center`, an
+      over-tall card's top/bottom render outside the box and NO scroll reaches
+      them. `margin: auto` on a single child centers identically but keeps
+      both ends scroll-reachable. Scoped to single-child centered overlays so
+      multi-child layouts are untouched.
+   2. The overlay root itself must scroll: old WebViews ignore inner max-h
+      math once the keyboard is open, so the root becomes the scroller.
+   3. `92vh` counts the URL bar: stack % (same basis, always valid), vh, then
+      svh (excludes the bar where supported). Unlayered rules win over layered
+      Tailwind utilities, so these safely override without !important. */
+div.fixed.inset-0.flex.items-center.justify-center,
+div.fixed.inset-0.flex.flex-col {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+div.fixed.inset-0.flex.items-center.justify-center > :only-child {
+  margin-top: auto;
+  margin-bottom: auto;
+}
+[class*="max-h-[92"] {
+  max-height: 92%;
+}
+/* Separate @supports blocks so the minifier cannot collapse the stack into
+   a single declaration (it keeps only the last one it parses). */
+@supports (max-height: 92vh) {
+  [class*="max-h-[92"] {
+    max-height: 92vh;
+  }
+}
+@supports (max-height: 92svh) {
+  [class*="max-h-[92"] {
+    max-height: 92svh;
+  }
+}
+
+/* position:sticky needs its prefix where unprefixed sticky is unknown. The
+   @supports gate keeps modern browsers on the standard declaration. */
+@supports not (position: sticky) {
+  .sticky {
+    position: -webkit-sticky;
+  }
+}
+
+/* backdrop-filter blur without prefix is ignored before Chrome 76 — the dim
+   layer still shows, this only restores the frosted look on Android 5-8. */
+.backdrop-blur-sm {
+  -webkit-backdrop-filter: blur(4px);
+}
+.backdrop-blur-md {
+  -webkit-backdrop-filter: blur(12px);
+}

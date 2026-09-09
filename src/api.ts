@@ -1,4 +1,4 @@
-import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -690,6 +690,20 @@ export const designOrderApi = {
   create: (o: DesignOrder) => api<DesignOrder>('/api/design-orders', { method: 'POST', body: JSON.stringify(o) }),
   update: (o: DesignOrder) => api<DesignOrder>(`/api/design-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/design-orders/${id}`, { method: 'DELETE' }),
+};
+
+export const bookingApi = {
+  list: () => api<Booking[]>('/api/bookings'),
+  create: (o: Booking) => api<Booking>('/api/bookings', { method: 'POST', body: JSON.stringify(o) }),
+  update: (o: Booking) => api<Booking>(`/api/bookings/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/bookings/${id}`, { method: 'DELETE' }),
+};
+
+export const repairJobApi = {
+  list: () => api<RepairJob[]>('/api/repair-jobs'),
+  create: (o: RepairJob) => api<RepairJob>('/api/repair-jobs', { method: 'POST', body: JSON.stringify(o) }),
+  update: (o: RepairJob) => api<RepairJob>(`/api/repair-jobs/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/repair-jobs/${id}`, { method: 'DELETE' }),
 };
 
 export const creditEatApi = {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, FileText } from 'lucide-react';
 import { Product } from '../types';
-import { unitLabel } from '../utils/units';
+import { unitLabel, parseQty } from '../utils/units';
 
 interface ServiceQtyModalProps {
   product: Product | null;
@@ -18,11 +18,11 @@ export default function ServiceQtyModal({ product, formatCurrency, onAdd, onClos
   if (!product) return null;
 
   const unit = product.saleUnit || '';
-  const qty = parseInt(qtyValue, 10) || 0;
+  const qty = parseQty(qtyValue);
   const total = qty * (product.price || 0);
 
   const handleConfirm = () => {
-    const n = parseInt(qtyValue, 10);
+    const n = parseQty(qtyValue);
     if (!n || n <= 0) return;
     onAdd(n);
   };
@@ -43,7 +43,7 @@ export default function ServiceQtyModal({ product, formatCurrency, onAdd, onClos
           How many {unit ? `${unit}s` : ''}? • {formatCurrency(product.price)} / {unit || 'unit'}
         </p>
 
-        <input type="number" min="1" autoFocus placeholder={`e.g. 20 ${unit || 'units'}`} value={qtyValue}
+        <input type="number" min="0" step="any" autoFocus placeholder={`e.g. 20 ${unit || 'units'}`} value={qtyValue}
           onChange={(e) => setQtyValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
           className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black focus:border-gold-brand h-14 px-4 rounded-xl text-lg outline-none text-center" />

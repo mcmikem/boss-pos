@@ -1,16 +1,19 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
 import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
+import { t } from './utils/i18n';
+import { momoFeeFor } from './utils/fees';
+import { supplierWhatsAppUrl } from './utils/suppliers';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { verifyPinAgainstHash } from './utils/crypto';
 import { downloadBlob } from './utils/download';
 import { reconcileCartPrices } from './utils/cart';
-import { printDailyClose } from './utils/dailyClose';
+import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
 import { initSentry } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
 
@@ -52,6 +55,8 @@ const DEFAULT_SETTINGS: StoreSettings = {
   usdRate: UGX_TO_USD_RATE,
   showTailoring: false,
   showDesign: false,
+  showBookings: false,
+  showRepairs: false,
   sheetsUrl: '',
 };
 
@@ -629,8 +634,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     // Cashiers never push settings (a clocked-in cashier only sells).
     if (staffConfigured && activeRole !== 'manager') return;
     const ALLOWED = new Set([
-      'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate',
-      'categories','expenseCategories','showTailoring','showDesign','sheetsUrl','eodCapital','branches',
+      'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate','momoFeePct','ownerPhone',
+      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches',
     ]);
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
@@ -996,7 +1001,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         return prod;
       });
     });
-    try { await saleApi.create(newSale); } catch (err) {
+    try {
+      await saleApi.create(newSale);
+      // MoMo cut: MTN/Airtel take a percentage off the top. Book it as its
+      // own expense so profit stays honest. Silent when off or dust — the
+      // sale itself must never depend on the fee booking.
+      const fee = momoFeeFor(newSale.total, settings.momoFeePct, newSale.paymentMethod);
+      if (fee > 0) {
+        if (!expenseCategories.includes('MoMo Fees')) {
+          setExpenseCategories(prev => (prev.includes('MoMo Fees') ? prev : [...prev, 'MoMo Fees']));
+        }
+        handleAddExpense({
+          id: `exp-momofee-${newSale.id}`,
+          timestamp: new Date().toISOString(),
+          description: `MoMo fee · ${newSale.orderNumber}`,
+          amount: fee,
+          category: 'MoMo Fees',
+        });
+      }
+    } catch (err) {
       // Real server failure (not offline — offline writes are queued and would
       // have returned optimistic success). Roll the sale and its stock effect
       // back so the UI never shows an unsaved sale.
@@ -1401,6 +1424,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Inventory 
             products={products} suppliers={suppliers} supplierPrices={supplierPrices}
+            sales={sales}
             shopName={settings.shopName}
             categories={categories}
             onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct}
@@ -1617,7 +1641,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       </main>
 
       <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
-        <button onClick={() => setActiveTab('sales')} aria-label="Sell" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
+        <button onClick={() => setActiveTab('sales')} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />
             {cart.length > 0 && (
@@ -1626,28 +1650,28 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               </span>
             )}
           </div>
-          <span className="text-xs font-bold uppercase tracking-wider">Sell</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'sell')}</span>
         </button>
         {isManager && (
-        <button onClick={() => setActiveTab('inventory')} aria-label="Stock" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
+        <button onClick={() => setActiveTab('inventory')} aria-label={t(settings.language, 'stock')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Stock</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'stock')}</span>
         </button>
         )}
-        <button onClick={() => { setActiveTab('expenses'); }} aria-label="Spend" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
+        <button onClick={() => { setActiveTab('expenses'); }} aria-label={t(settings.language, 'spend')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Spend</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'spend')}</span>
         </button>
         {isManager && (
-        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label="Reports" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
+        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'reports')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Reports</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'reports')}</span>
         </button>
         )}
         {isManager && (
-        <button onClick={() => setActiveTab('registers')} aria-label="Daily close-out" className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
+        <button onClick={() => setActiveTab('registers')} aria-label={t(settings.language, 'closeDay')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">Close</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'closeDay')}</span>
         </button>
         )}
       </nav>
@@ -1708,6 +1732,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <option value="General Store">General Store</option>
                 </select>
               </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Till language</label>
+                <select value={settings.language || 'english'} onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value as StoreSettings['language'] }))}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
+                  <option value="english">English</option>
+                  <option value="luganda">Luganda (sell screen)</option>
+                </select>
+                <p className="text-[10px] text-zinc-600">Luganda covers the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
+              </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Extra Modules</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1718,6 +1751,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <button onClick={() => setSettings(prev => ({ ...prev, showDesign: !prev.showDesign }))}
                     className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showDesign ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
                     <Palette className="w-3.5 h-3.5" /> Design & Print
+                  </button>
+                  <button onClick={() => setSettings(prev => ({ ...prev, showBookings: !prev.showBookings }))}
+                    className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showBookings ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                    <CalendarCheck className="w-3.5 h-3.5" /> Bookings
+                  </button>
+                  <button onClick={() => setSettings(prev => ({ ...prev, showRepairs: !prev.showRepairs }))}
+                    className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showRepairs ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                    <Wrench className="w-3.5 h-3.5" /> Repairs
                   </button>
                 </div>
                 <p className="text-[10px] text-zinc-600">Turn on the order screens you actually use. Hidden until enabled.</p>
@@ -1747,6 +1788,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     </button>
                   ))}
                 </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">MoMo fee % (MTN/Airtel cut)</label>
+                <input type="number" min="0" max="20" step="any" value={settings.momoFeePct || ''}
+                  placeholder="0 = off"
+                  onChange={(e) => setSettings(prev => ({ ...prev, momoFeePct: Math.min(20, Math.max(0, parseFloat(e.target.value) || 0)) || undefined }))}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                <p className="text-[10px] text-zinc-600">Each MoMo sale auto-books its fee as a MoMo Fees expense, so profit stays honest.</p>
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between items-baseline">
@@ -2075,6 +2124,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   className="w-full h-10 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20">
                   Print Daily Close (PDF)
                 </button>
+                <div className="border border-white/5 rounded-xl p-3 space-y-2 bg-[#0A0A0A]">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Send close to owner</label>
+                  <input type="tel" inputMode="tel" value={settings.ownerPhone || ''} placeholder="Owner WhatsApp (e.g. 0772...)"
+                    onChange={(e) => setSettings(prev => ({ ...prev, ownerPhone: e.target.value.replace(/\D/g, '').slice(0, 12) || undefined }))}
+                    className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                  <button onClick={() => {
+                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
+                    if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
+                    window.open(url, '_blank', 'noopener');
+                  }} className="w-full h-10 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60">
+                    WhatsApp today's close
+                  </button>
+                  <p className="text-[10px] text-zinc-600">Totals, cash vs MoMo, expenses, what is left — one message, no account needed.</p>
+                </div>
                 <button onClick={async () => {
                   try {
                     const b = await backupsApi.data();

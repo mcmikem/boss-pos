@@ -41,8 +41,26 @@ window.addEventListener('error', (event) => {
   }
 }, true);
 
+// Old-Android keyboard rescue: pre-Chrome-70 WebViews don't resize the layout
+// viewport when the keyboard opens, so fixed modals keep their full height
+// behind it and the focused field + Save button hide underneath. Nudging the
+// focused field into view (after the keyboard finishes opening) keeps every
+// form usable. Harmless on modern browsers (they already scrolled correctly).
+document.addEventListener('focusin', (event) => {
+  const el = event.target as HTMLElement | null;
+  if (!el) return;
+  const tag = el.tagName;
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return;
+  window.setTimeout(() => {
+    try {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch {
+      try { el.scrollIntoView(); } catch { /* ignore */ }
+    }
+  }, 350);
+});
+
 // Service worker: auto-update to the latest version on deploy
-// (reloads once when a new SW takes control, so stale lazy-loaded chunks never fail)
 if ('serviceWorker' in navigator) {
   let refreshing = false;
   let hasController = !!navigator.serviceWorker.controller;

@@ -25,3 +25,23 @@ export function todayLocalKey(): string {
   const now = new Date();
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
+
+// Whole days from today until a YYYY-MM-DD expiry date. Negative = expired,
+// 0 = expires today. NaN-safe: unparseable dates return null (no alert).
+export function daysUntilExpiry(expiryDate: string | undefined | null, todayKey?: string): number | null {
+  if (!expiryDate || !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) return null;
+  const today = todayKey || todayLocalKey();
+  const ms = Date.parse(expiryDate + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z');
+  if (!Number.isFinite(ms)) return null;
+  return Math.round(ms / 86400000);
+}
+
+// Alert tier for a product expiry: expired (passed), soon (within 30 days),
+// or ok. Services and dateless products are always ok.
+export function expiryStatus(expiryDate: string | undefined | null, todayKey?: string): 'expired' | 'soon' | 'ok' {
+  const days = daysUntilExpiry(expiryDate, todayKey);
+  if (days === null) return 'ok';
+  if (days < 0) return 'expired';
+  if (days <= 30) return 'soon';
+  return 'ok';
+}

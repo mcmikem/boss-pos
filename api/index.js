@@ -63,14 +63,21 @@ async function initDB() {
   await sql`CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
     cost DOUBLE PRECISION DEFAULT 0, price DOUBLE PRECISION DEFAULT 0,
-    stockqty INTEGER DEFAULT 0, lowstockthreshold INTEGER DEFAULT 5,
+    stockqty DOUBLE PRECISION DEFAULT 0, lowstockthreshold DOUBLE PRECISION DEFAULT 5,
     supplierid TEXT, isservice BOOLEAN DEFAULT false,
     imei TEXT, barcode TEXT, imageurl TEXT, variants TEXT
   )`;
+  // Loose goods sell fractional (2.5 kg, 0.5 m): stock columns were INTEGER
+  // in early schemas. Convert in place; whole-number stock is unaffected.
+  try { await sql`ALTER TABLE products ALTER COLUMN stockqty TYPE DOUBLE PRECISION USING stockqty::double precision`; } catch {}
+  try { await sql`ALTER TABLE products ALTER COLUMN lowstockthreshold TYPE DOUBLE PRECISION USING lowstockthreshold::double precision`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN imageurl TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN variants TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN recipe TEXT`; } catch {}
   try { await sql`ALTER TABLE products ADD COLUMN saleunit TEXT`; } catch {}
+  // Nearest-expiring batch per product (pharmacies, eateries). Plain date
+  // text; the till warns before it passes, wastage logs it after.
+  try { await sql`ALTER TABLE products ADD COLUMN expirydate TEXT DEFAULT ''`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS suppliers (
     id TEXT PRIMARY KEY, name TEXT NOT NULL,
     contactperson TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT ''
@@ -136,6 +143,24 @@ async function initDB() {
     status TEXT DEFAULT 'pending', notes TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
   try { await sql`ALTER TABLE design_orders ADD COLUMN transportcost DOUBLE PRECISION DEFAULT 0`; } catch {}
+  // Salon appointment book + workshop/electronics repair intake. Same shape
+  // discipline as tailoring_orders: plain text + doubles + client_write_id.
+  await sql`CREATE TABLE IF NOT EXISTS bookings (
+    id TEXT PRIMARY KEY, customername TEXT NOT NULL, customerphone TEXT DEFAULT '',
+    service TEXT NOT NULL, staffname TEXT DEFAULT '',
+    date TEXT NOT NULL, time TEXT DEFAULT '',
+    durationmin DOUBLE PRECISION DEFAULT 30,
+    price DOUBLE PRECISION DEFAULT 0, deposit DOUBLE PRECISION DEFAULT 0,
+    status TEXT DEFAULT 'booked', notes TEXT DEFAULT '', createdat TEXT NOT NULL
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS repair_jobs (
+    id TEXT PRIMARY KEY, customername TEXT NOT NULL, customerphone TEXT DEFAULT '',
+    itemlabel TEXT NOT NULL, issue TEXT DEFAULT '',
+    price DOUBLE PRECISION DEFAULT 0, deposit DOUBLE PRECISION DEFAULT 0,
+    partscost DOUBLE PRECISION DEFAULT 0,
+    status TEXT DEFAULT 'received', expecteddate TEXT DEFAULT '',
+    completeddate TEXT, notes TEXT DEFAULT '', createdat TEXT NOT NULL
+  )`;
   await sql`CREATE TABLE IF NOT EXISTS cash_transfers (
     id TEXT PRIMARY KEY, fromcategory TEXT NOT NULL, tocategory TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
@@ -184,7 +209,7 @@ async function initDB() {
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
-  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'bookings', 'repair_jobs', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -193,6 +218,8 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_cashtrans_cwid ON cash_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_tailoring_cwid ON tailoring_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_design_cwid ON design_orders(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_cwid ON bookings(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_repairjobs_cwid ON repair_jobs(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_crediteats_cwid ON credit_eats(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_cwid ON production_register(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_wastage_cwid ON wastage_log(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -307,6 +334,14 @@ function text(v, max) {
 function num(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// Stock and sale quantities allow up to 3 decimals (2.5 kg tomatoes, 0.5 m
+// fabric). Rounded at the boundary so 0.1 + 0.2 never becomes 0.30000000004.
+function qty3(v) {
+  const n = parseFloat(v);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * 1000) / 1000;
 }
 
 // Render an image Buffer to a uniform 320x320 square JPEG thumbnail (centre
@@ -553,8 +588,8 @@ async function seedDatabase() {
     { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
     ...EATERY_MENU,
   ];
-  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','variants','saleunit'],
-    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, variants: p.variants ? JSON.stringify(p.variants) : null, saleunit: p.saleUnit || null })));
+  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','expirydate','variants','saleunit'],
+    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, expirydate: p.expiryDate || null, variants: p.variants ? JSON.stringify(p.variants) : null, saleunit: p.saleUnit || null })));
 
   const expenses = [
     { id:'exp-1',timestamp:'2026-07-15T08:30:00Z',description:'Phone accessories restock',amount:85000,category:'Stock Purchase' },
@@ -993,12 +1028,13 @@ app.post('/api/products', asHandler(async (req, res) => {
   const category = text(p.category, 100);
   const imei = text(p.imei, 100) || null;
   const barcode = text(p.barcode, 100) || null;
+  const expiryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(p.expiryDate || '')) ? String(p.expiryDate) : null;
   const id = p.id || 'p-' + randomUUID();
   // Base64 images from the offline canvas fallback are converted to /uploads
   // rows here, so nothing data: stays in the DB (or the JSON payloads).
   const imageUrl = await resolveImageUrl(p.imageUrl);
   const nowIso = new Date().toISOString();
-  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,imageUrl,variants,recipe,saleUnit,updated_at) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${Math.max(0, Math.round(num(p.stockQty)))},${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${imageUrl},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null},${p.saleUnit || null},${nowIso})`;
+  await sql`INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imei,barcode,expirydate,imageUrl,variants,recipe,saleUnit,updated_at) VALUES (${id},${name},${category},${num(p.cost)},${num(p.price)},${qty3(p.stockQty)},${qty3(p.lowStockThreshold) || 5},${p.supplierId||null},${p.isService||false},${imei},${barcode},${expiryDate},${imageUrl},${p.variants ? JSON.stringify(p.variants) : null},${p.recipe ? JSON.stringify(p.recipe) : null},${p.saleUnit || null},${nowIso})`;
   if (!p.isService && (p.stockQty || 0) > 0) {
     await logStockMovement(sql, { productId: id, productName: name, delta: p.stockQty || 0, type: 'create', qtyAfter: p.stockQty || 0, note: 'Product created' });
   }
@@ -1015,6 +1051,7 @@ app.put('/api/products/:id', asHandler(async (req, res) => {
   const category = text(p.category, 100);
   const imei = text(p.imei, 100) || null;
   const barcode = text(p.barcode, 100) || null;
+  const expiryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(p.expiryDate || '')) ? String(p.expiryDate) : null;
   const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
   if (!old.length) return res.status(404).json({ error: 'Product not found' });
 
@@ -1034,7 +1071,7 @@ app.put('/api/products/:id', asHandler(async (req, res) => {
 
   const imageUrl = await resolveImageUrl(p.imageUrl);
   const nowIso = new Date().toISOString();
-  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${Math.max(0, Math.round(num(p.stockQty)))},lowStockThreshold=${Math.max(0, Math.round(num(p.lowStockThreshold)))||5},supplierId=${p.supplierId||null},isService=${p.isService||false},saleUnit=${p.saleUnit || null},imei=${imei},barcode=${barcode},imageUrl=${imageUrl},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null},updated_at=${nowIso},deleted=false WHERE id=${req.params.id}`;
+  await sql`UPDATE products SET name=${name},category=${category},cost=${num(p.cost)},price=${num(p.price)},stockQty=${qty3(p.stockQty)},lowStockThreshold=${qty3(p.lowStockThreshold) || 5},supplierId=${p.supplierId||null},isService=${p.isService||false},saleUnit=${p.saleUnit || null},imei=${imei},barcode=${barcode},expirydate=${expiryDate},imageUrl=${imageUrl},variants=${p.variants ? JSON.stringify(p.variants) : null},recipe=${p.recipe ? JSON.stringify(p.recipe) : null},updated_at=${nowIso},deleted=false WHERE id=${req.params.id}`;
   if (!p.isService) {
     const prev = old.length ? (old[0].stockqty || 0) : 0;
     const next = p.stockQty || 0;
@@ -1179,8 +1216,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
       const r = await sql`
         WITH checkstock AS (
           SELECT sub."productId"::text AS pid,
-                 p.stockqty < COALESCE(sub.qty::int, 0) AS oversold
-          FROM jsonb_to_recordset(${itemsJson}::jsonb) AS sub("productId" text, qty int)
+                 p.stockqty < COALESCE(sub.qty::float, 0) AS oversold
+          FROM jsonb_to_recordset(${itemsJson}::jsonb) AS sub("productId" text, qty float)
           JOIN products p ON p.id = sub."productId" AND p.isService = false
         ),
         ins AS (
@@ -1191,8 +1228,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
           RETURNING id, items
         ),
         stock AS (
-          UPDATE products p SET stockQty = p.stockQty - COALESCE(sub.qty::int, 0)
-          FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub("productId" text, qty int)
+          UPDATE products p SET stockQty = p.stockQty - COALESCE(sub.qty::float, 0)
+          FROM ins, jsonb_to_recordset(ins.items::jsonb) AS sub("productId" text, qty float)
           WHERE p.id = sub."productId" AND p.isService = false
           RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
         )
@@ -1259,7 +1296,7 @@ app.delete('/api/sales/:id', asHandler(async (req, res) => {
     ),
     stock AS (
       UPDATE products p SET stockQty = p.stockQty + COALESCE(sub.qty, 0)
-      FROM del, jsonb_to_recordset(del.items::jsonb) AS sub("productId" text, qty int)
+      FROM del, jsonb_to_recordset(del.items::jsonb) AS sub("productId" text, qty float)
       WHERE p.id = sub."productId" AND p.isService = false
       RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
     )
@@ -1286,7 +1323,7 @@ app.post('/api/sales/:id/refund', asHandler(async (req, res) => {
     ),
     stock AS (
       UPDATE products p SET stockQty = p.stockQty + sub.qty
-      FROM upd, jsonb_to_recordset(upd.items::jsonb) AS sub("productId" text, qty int)
+      FROM upd, jsonb_to_recordset(upd.items::jsonb) AS sub("productId" text, qty float)
       WHERE p.id = sub."productId" AND p.isService = false
       RETURNING p.id, p.name, p.stockqty, sub.qty AS qty
     )
@@ -1740,6 +1777,74 @@ app.delete('/api/design-orders/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === BOOKINGS (salon / barbershop appointment book) ===
+app.get('/api/bookings', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM bookings ORDER BY date DESC, time DESC`;
+  res.json(rows.map(mapBooking));
+}));
+
+app.post('/api/bookings', asHandler(async (req, res) => {
+  const o = req.body;
+  const customerName = text(o.customerName, 150);
+  const customerPhone = text(o.customerPhone, 50);
+  const service = text(o.service, 150);
+  const staffName = text(o.staffName, 80);
+  const notes = text(o.notes, 500);
+  const inserted = await sql`INSERT INTO bookings (id,customername,customerphone,service,staffname,date,time,durationmin,price,deposit,status,notes,createdat,client_write_id)
+    VALUES (${o.id},${customerName},${customerPhone},${service},${staffName},${o.date},${o.time || ''},${Math.max(5, Math.round(num(o.durationMin)) || 30)},${num(o.price)},${num(o.deposit)},${o.status || 'booked'},${notes},${o.createdAt},${o.clientWriteId || null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM bookings WHERE client_write_id=${o.clientWriteId}`;
+    return res.json(existing.length ? mapBooking(existing[0]) : o);
+  }
+  res.json(o);
+}));
+
+app.put('/api/bookings/:id', asHandler(async (req, res) => {
+  const o = req.body;
+  await sql`UPDATE bookings SET customername=${text(o.customerName, 150)},customerphone=${text(o.customerPhone, 50)},service=${text(o.service, 150)},staffname=${text(o.staffName, 80)},date=${o.date},time=${o.time || ''},durationmin=${Math.max(5, Math.round(num(o.durationMin)) || 30)},price=${num(o.price)},deposit=${num(o.deposit)},status=${o.status || 'booked'},notes=${text(o.notes, 500)} WHERE id=${req.params.id}`;
+  res.json(o);
+}));
+
+app.delete('/api/bookings/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM bookings WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
+// === REPAIR JOBS (workshop / electronics intake) ===
+app.get('/api/repair-jobs', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM repair_jobs ORDER BY createdat DESC`;
+  res.json(rows.map(mapRepairJob));
+}));
+
+app.post('/api/repair-jobs', asHandler(async (req, res) => {
+  const o = req.body;
+  const customerName = text(o.customerName, 150);
+  const customerPhone = text(o.customerPhone, 50);
+  const itemLabel = text(o.itemLabel, 150);
+  const issue = text(o.issue, 500);
+  const notes = text(o.notes, 500);
+  const inserted = await sql`INSERT INTO repair_jobs (id,customername,customerphone,itemlabel,issue,price,deposit,partscost,status,expecteddate,completeddate,notes,createdat,client_write_id)
+    VALUES (${o.id},${customerName},${customerPhone},${itemLabel},${issue},${num(o.price)},${num(o.deposit)},${num(o.partsCost)},${o.status || 'received'},${o.expectedDate || ''},${o.completedDate || null},${notes},${o.createdAt},${o.clientWriteId || null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM repair_jobs WHERE client_write_id=${o.clientWriteId}`;
+    return res.json(existing.length ? mapRepairJob(existing[0]) : o);
+  }
+  res.json(o);
+}));
+
+app.put('/api/repair-jobs/:id', asHandler(async (req, res) => {
+  const o = req.body;
+  await sql`UPDATE repair_jobs SET customername=${text(o.customerName, 150)},customerphone=${text(o.customerPhone, 50)},itemlabel=${text(o.itemLabel, 150)},issue=${text(o.issue, 500)},price=${num(o.price)},deposit=${num(o.deposit)},partscost=${num(o.partsCost)},status=${o.status || 'received'},expecteddate=${o.expectedDate || ''},completeddate=${o.completedDate || null},notes=${text(o.notes, 500)} WHERE id=${req.params.id}`;
+  res.json(o);
+}));
+
+app.delete('/api/repair-jobs/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM repair_jobs WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 // === CREDIT EATS (Ababanjibwa Sente) API ===
 app.get('/api/credit-eats', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM credit_eats ORDER BY date DESC, createdat DESC`;
@@ -2029,7 +2134,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM supplier_prices`,
@@ -2040,6 +2145,8 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM cash_transfers`,
     sql`SELECT * FROM tailoring_orders`,
     sql`SELECT * FROM design_orders`,
+    sql`SELECT * FROM bookings`,
+    sql`SELECT * FROM repair_jobs`,
     sql`SELECT * FROM stock_movements`,
     sql`SELECT * FROM credit_eats`,
     sql`SELECT * FROM production_register`,
@@ -2059,6 +2166,8 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     cashTransfers: transfers.map(mapTransfer),
     tailoringOrders: tailoring.map(mapTailoringOrder),
     designOrders: design.map(mapDesignOrder),
+    bookings: bookings.map(mapBooking),
+    repairJobs: repairJobs.map(mapRepairJob),
     stockMovements: stockMoves.map(mapStockMovement),
     creditEats: creditEats.map(mapCreditEat),
     productionRegisters: productionRegisters.map(mapProductionRegister),
@@ -2087,10 +2196,11 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
   const productRows = (d.products || []).map(p => ({
     id: p.id, name: text(p.name, 150), category: text(p.category, 100),
     cost: num(p.cost), price: num(p.price),
-    stockqty: Math.max(0, Math.round(num(p.stockQty))),
-    lowstockthreshold: Math.max(0, Math.round(num(p.lowStockThreshold))) || 5,
+    stockqty: qty3(p.stockQty),
+    lowstockthreshold: qty3(p.lowStockThreshold) || 5,
     supplierid: p.supplierId || null, isservice: !!p.isService,
     imei: text(p.imei, 100) || null, barcode: text(p.barcode, 100) || null,
+    expirydate: /^\d{4}-\d{2}-\d{2}$/.test(String(p.expiryDate || '')) ? String(p.expiryDate) : null,
     imageurl: p.imageUrl ? String(p.imageUrl).slice(0, 60000) : null,
     variants: p.variants ? JSON.stringify(p.variants) : null,
     recipe: p.recipe ? JSON.stringify(p.recipe) : null,
@@ -2158,6 +2268,25 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     createdat: o.createdAt,
   }));
 
+  const bookingRows = (d.bookings || []).map(o => ({
+    id: o.id, customername: text(o.customerName, 150), customerphone: text(o.customerPhone, 50) || '',
+    service: text(o.service, 150), staffname: text(o.staffName, 80) || '',
+    date: o.date, time: o.time || '',
+    durationmin: Math.max(5, Math.round(num(o.durationMin)) || 30),
+    price: num(o.price), deposit: num(o.deposit),
+    status: o.status || 'booked', notes: text(o.notes, 500) || '',
+    createdat: o.createdAt,
+  }));
+
+  const repairJobRows = (d.repairJobs || []).map(o => ({
+    id: o.id, customername: text(o.customerName, 150), customerphone: text(o.customerPhone, 50) || '',
+    itemlabel: text(o.itemLabel, 150), issue: text(o.issue, 500) || '',
+    price: num(o.price), deposit: num(o.deposit), partscost: num(o.partsCost),
+    status: o.status || 'received', expecteddate: o.expectedDate || '',
+    completeddate: o.completedDate || null, notes: text(o.notes, 500) || '',
+    createdat: o.createdAt,
+  }));
+
   const stockMoveRows = (d.stockMovements || []).map(m => ({
     id: m.id, product_id: m.productId || null, product_name: text(m.productName, 150),
     delta: (Math.round(m.delta) || 0), type: text(m.type, 30),
@@ -2196,7 +2325,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
   const counts = {};
   await Promise.all([
     batchUpsert('settings', 'key', ['key', 'value'], settingsRows).then(n => counts.settings = n),
-    batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'saleunit', 'imei', 'barcode', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
+    batchUpsert('products', 'id', ['id', 'name', 'category', 'cost', 'price', 'stockqty', 'lowstockthreshold', 'supplierid', 'isservice', 'saleunit', 'imei', 'barcode', 'expirydate', 'imageurl', 'variants', 'recipe'], productRows).then(n => counts.products = n),
     batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
     batchUpsert('supplier_prices', 'id', ['id', 'supplier_id', 'product_id', 'price', 'updated_at'], supplierPriceRows).then(n => counts.supplierPrices = n),
     batchUpsert('staff', 'id', ['id', 'name', 'role', 'pin_hash', 'active', 'created_at'], staffRows).then(n => counts.staff = n),
@@ -2206,6 +2335,8 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
     batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
     batchUpsert('design_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'ordertype', 'designbrief', 'qty', 'size', 'materialcost', 'laborcost', 'transportcost', 'unitprice', 'totalamount', 'depositpaid', 'targetmarginpct', 'status', 'notes', 'createdat'], designRows).then(n => counts.designOrders = n),
+    batchUpsert('bookings', 'id', ['id', 'customername', 'customerphone', 'service', 'staffname', 'date', 'time', 'durationmin', 'price', 'deposit', 'status', 'notes', 'createdat'], bookingRows).then(n => counts.bookings = n),
+    batchUpsert('repair_jobs', 'id', ['id', 'customername', 'customerphone', 'itemlabel', 'issue', 'price', 'deposit', 'partscost', 'status', 'expecteddate', 'completeddate', 'notes', 'createdat'], repairJobRows).then(n => counts.repairJobs = n),
     batchUpsert('stock_movements', 'id', ['id', 'product_id', 'product_name', 'delta', 'type', 'qty_after', 'sale_id', 'note', 'createdat'], stockMoveRows).then(n => counts.stockMovements = n),
     batchUpsert('credit_eats', 'id', ['id', 'customername', 'date', 'item', 'category', 'qty', 'unitprice', 'total', 'paidamount', 'paid', 'createdat'], creditEatRows).then(n => counts.creditEats = n),
     batchUpsert('production_register', 'id', ['id', 'date', 'item', 'category', 'product_id', 'qty', 'costeach', 'total', 'createdat'], productionRows).then(n => counts.productionRegisters = n),
@@ -2219,7 +2350,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
 
 // === BACKUPS (automatic daily snapshots) ===
 async function gatherExport() {
-  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM supplier_prices`,
@@ -2230,6 +2361,8 @@ async function gatherExport() {
     sql`SELECT * FROM cash_transfers`,
     sql`SELECT * FROM tailoring_orders`,
     sql`SELECT * FROM design_orders`,
+    sql`SELECT * FROM bookings`,
+    sql`SELECT * FROM repair_jobs`,
     sql`SELECT * FROM stock_movements`,
     sql`SELECT * FROM credit_eats`,
     sql`SELECT * FROM production_register`,
@@ -2249,6 +2382,8 @@ async function gatherExport() {
     cashTransfers: transfers.map(mapTransfer),
     tailoringOrders: tailoring.map(mapTailoringOrder),
     designOrders: design.map(mapDesignOrder),
+    bookings: bookings.map(mapBooking),
+    repairJobs: repairJobs.map(mapRepairJob),
     stockMovements: stockMoves.map(mapStockMovement),
     creditEats: creditEats.map(mapCreditEat),
     productionRegisters: productionRegisters.map(mapProductionRegister),
@@ -2445,6 +2580,7 @@ function mapProduct(r) {
     supplierId: r.supplierid, isService: !!r.isservice,
     saleUnit: r.saleunit || undefined,
     imei: r.imei, barcode: r.barcode,
+    expiryDate: r.expirydate || undefined,
     // Never ship data: URIs in list payloads — they balloon 3G boots. The
     // offline canvas fallback still works client-side, and base64 that reaches
     // the server is converted to /uploads rows (see resolveImageUrl).
@@ -2482,6 +2618,29 @@ function mapDesignOrder(r) {
     depositPaid: r.depositpaid || 0, targetMarginPct: r.targetmarginpct || 50,
     status: r.status, notes: r.notes || '',
     createdAt: r.createdat,
+  };
+}
+
+function mapBooking(r) {
+  return {
+    id: r.id, customerName: r.customername, customerPhone: r.customerphone || '',
+    service: r.service, staffName: r.staffname || '',
+    date: r.date, time: r.time || '',
+    durationMin: r.durationmin || 30,
+    price: r.price || 0, deposit: r.deposit || 0,
+    status: r.status, notes: r.notes || '',
+    createdAt: r.createdat,
+  };
+}
+
+function mapRepairJob(r) {
+  return {
+    id: r.id, customerName: r.customername, customerPhone: r.customerphone || '',
+    itemLabel: r.itemlabel, issue: r.issue || '',
+    price: r.price || 0, deposit: r.deposit || 0, partsCost: r.partscost || 0,
+    status: r.status, expectedDate: r.expecteddate || '',
+    completedDate: r.completeddate || undefined,
+    notes: r.notes || '', createdAt: r.createdat,
   };
 }
 

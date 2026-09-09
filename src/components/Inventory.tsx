@@ -3,16 +3,20 @@ import {
   Search, Plus, AlertTriangle, Edit, Package, Save, X,
   PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat
 } from 'lucide-react';
-import type { Product, ProductVariant, Supplier, SupplierPrice, Recipe, RecipeIngredient } from '../types';
+import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Recipe, RecipeIngredient } from '../types';
 import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
 import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
+import { parseQty } from '../utils/units';
+import { expiryStatus, daysUntilExpiry } from '../utils/dates';
+import { staleProducts } from '../utils/stale';
 import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, supplierWhatsAppUrl } from '../utils/suppliers';
 
 interface InventoryProps {
   products: Product[];
   suppliers: Supplier[];
   supplierPrices: SupplierPrice[];
+  sales: Sale[];
   shopName: string;
   categories: string[];
   onAddProduct: (product: Product) => void;
@@ -31,6 +35,7 @@ export default function Inventory({
   products,
   suppliers,
   supplierPrices,
+  sales,
   shopName,
   categories,
   onAddProduct,
@@ -63,6 +68,11 @@ export default function Inventory({
   const [newSupplierId, setNewSupplierId] = useState('');
   const [newImei, setNewImei] = useState('');
   const [newBarcode, setNewBarcode] = useState('');
+  const [newExpiry, setNewExpiry] = useState('');
+  // Bale-day bulk entry: rapid name + price rows, details later.
+  const [showBulk, setShowBulk] = useState(false);
+  const [bulkCategory, setBulkCategory] = useState('');
+  const [bulkRows, setBulkRows] = useState<{ name: string; price: string }[]>([{ name: '', price: '' }]);
   const [newImageUrl, setNewImageUrl] = useState('');
   const [newSaleUnit, setNewSaleUnit] = useState('');
   const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
@@ -76,6 +86,7 @@ export default function Inventory({
   const [editSupplierId, setEditSupplierId] = useState('');
   const [editImei, setEditImei] = useState('');
   const [editBarcode, setEditBarcode] = useState('');
+  const [editExpiry, setEditExpiry] = useState('');
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editIsService, setEditIsService] = useState(false);
   const [editSaleUnit, setEditSaleUnit] = useState('');
@@ -192,6 +203,15 @@ export default function Inventory({
     return products.filter(p => p.stockQty <= p.lowStockThreshold && !p.isService);
   }, [products]);
 
+  // Dead money: stocked items with no sale in 30+ days (mitumba one-offs,
+  // slow gadgets). Suggests clearance, the mirror of low-stock alerts.
+  const staleList = useMemo(() => staleProducts(products, sales), [products, sales]);
+  const staleDaysById = useMemo(() => {
+    const m = new Map<string, number | null>();
+    for (const s of staleList) m.set(s.product.id, s.daysSince);
+    return m;
+  }, [staleList]);
+
   const processedProducts = useMemo(() => {
     let list = products.filter(p => {
       const q = searchQuery.toLowerCase();
@@ -222,6 +242,7 @@ export default function Inventory({
     setEditSupplierId(product.supplierId || '');
     setEditImei(product.imei || '');
     setEditBarcode(product.barcode || '');
+    setEditExpiry(product.expiryDate || '');
     setEditImageUrl(product.imageUrl || '');
     setEditIsService(product.isService || false);
     setEditSaleUnit(product.saleUnit || '');
@@ -261,7 +282,7 @@ export default function Inventory({
 
     const costNum = parseFloat(editCost) || 0;
     const priceNum = parseFloat(editPrice) || 0;
-    const thresholdNum = parseInt(editThreshold, 10) || 0;
+    const thresholdNum = parseQty(editThreshold) || 0;
 
     if (costNum >= priceNum) {
       triggerToast(`Warning: Cost (${formatCurrency(costNum)}) is same or more than Price (${formatCurrency(priceNum)})!`, 'info');
@@ -273,10 +294,10 @@ export default function Inventory({
         finalStock = Math.max(0, stockAdjustment);
         triggerToast(`Set stock to ${finalStock}`, 'success');
       } else if (adjustmentType === 'add') {
-        finalStock += stockAdjustment;
+        finalStock = Math.round((finalStock + stockAdjustment) * 1000) / 1000;
         triggerToast(`Added ${stockAdjustment} units!`, 'success');
       } else {
-        finalStock = Math.max(0, finalStock - stockAdjustment);
+        finalStock = Math.max(0, Math.round((finalStock - stockAdjustment) * 1000) / 1000);
         triggerToast(`Removed ${stockAdjustment} units`, 'info');
       }
     }
@@ -301,6 +322,7 @@ export default function Inventory({
       stockQty: finalStock,
       imei: editImei || undefined,
       barcode: editBarcode || undefined,
+      expiryDate: /^\d{4}-\d{2}-\d{2}$/.test(editExpiry) ? editExpiry : undefined,
       imageUrl: editImageUrl || undefined,
       isService: editIsService,
       saleUnit: editSaleUnit.trim() || undefined,
@@ -338,8 +360,8 @@ export default function Inventory({
 
     const costNum = parseFloat(newCost) || 0;
     const priceNum = parseFloat(newPrice) || 0;
-    const stockNum = parseInt(newStock, 10) || 0;
-    const thresholdNum = parseInt(newThreshold, 10) || 0;
+    const stockNum = parseQty(newStock) || 0;
+    const thresholdNum = parseQty(newThreshold) || 0;
 
     const cleanVariants = newVariants
       .filter(v => v.label.trim() !== '')
@@ -359,8 +381,9 @@ export default function Inventory({
       stockQty: stockNum,
       lowStockThreshold: thresholdNum,
       supplierId: newSupplierId || undefined,
-      imei: newImei || undefined,
-      barcode: newBarcode || undefined,
+        imei: newImei || undefined,
+        barcode: newBarcode || undefined,
+        expiryDate: /^\d{4}-\d{2}-\d{2}$/.test(newExpiry) ? newExpiry : undefined,
       imageUrl: newImageUrl || undefined,
       saleUnit: newSaleUnit.trim() || undefined,
       variants: cleanVariants.length ? cleanVariants : undefined,
@@ -370,7 +393,7 @@ export default function Inventory({
     onAddProduct(newProd);
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
-    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewImageUrl(''); setNewSaleUnit('');
+    setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewExpiry(''); setNewImageUrl(''); setNewSaleUnit('');
     setNewVariants([]);
     triggerToast(`Added "${newProd.name}"`, 'success');
   };
@@ -533,6 +556,11 @@ export default function Inventory({
           <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          <button onClick={() => { setBulkCategory(categories[0] || ''); setBulkRows([{ name: '', price: '' }]); setShowBulk(true); }}
+            className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            title="Bale day: add many products fast, details later">
+            <Plus className="w-4 h-4" /> Bulk
+          </button>
           <span className="text-xs font-bold text-zinc-500 uppercase">Sort</span>
           <select value={sortBy} onChange={(e: any) => setSortBy(e.target.value)}
             className="bg-[#141414] border border-white/5 text-gold-brand text-xs rounded-2xl px-3 h-12 outline-none focus:border-gold-brand font-bold">
@@ -543,21 +571,28 @@ export default function Inventory({
         </div>
       </section>
 
-      <section className="grid grid-cols-2 gap-4">
-        <div className="boss-card p-4 border-l-4 border-l-zinc-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Total Products</p>
+      <section className="grid grid-cols-3 gap-3">
+        <div className="boss-card p-3 border-l-4 border-l-zinc-500 flex flex-col justify-between">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Products</p>
           <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-3xl font-black text-white font-display">{products.length}</span>
-            <span className="text-xs text-zinc-500 font-bold uppercase">items</span>
+            <span className="text-2xl font-black text-white font-display">{products.length}</span>
           </div>
         </div>
-        <div className="boss-card p-4 border-l-4 border-l-rose-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-rose-400 uppercase tracking-widest">Low Stock Items</p>
+        <div className="boss-card p-3 border-l-4 border-l-rose-500 flex flex-col justify-between">
+          <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">Low Stock</p>
           <div className="flex items-center gap-2 mt-2">
-            <span className={`text-3xl font-black font-display ${lowStockProducts.length > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-500'}`}>
+            <span className={`text-2xl font-black font-display ${lowStockProducts.length > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-500'}`}>
               {lowStockProducts.length}
             </span>
-            {lowStockProducts.length > 0 && <AlertTriangle className="w-5 h-5 text-rose-400 animate-bounce" />}
+            {lowStockProducts.length > 0 && <AlertTriangle className="w-4 h-4 text-rose-400 animate-bounce" />}
+          </div>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-amber-500 flex flex-col justify-between" title="Stocked items with no sale in 30+ days — dead money, consider clearance">
+          <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Stale</p>
+          <div className="flex items-center gap-2 mt-2">
+            <span className={`text-2xl font-black font-display ${staleList.length > 0 ? 'text-amber-400' : 'text-zinc-500'}`}>
+              {staleList.length}
+            </span>
           </div>
         </div>
       </section>
@@ -572,6 +607,8 @@ export default function Inventory({
           {processedProducts.map(product => {
             const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
             const isOutOfStock = product.stockQty <= 0 && !product.isService;
+            const exp = !product.isService ? expiryStatus(product.expiryDate) : 'ok';
+            const expDays = exp !== 'ok' ? daysUntilExpiry(product.expiryDate) : null;
 
             return (
               <div key={product.id} onClick={() => handleOpenEdit(product)}
@@ -611,11 +648,25 @@ export default function Inventory({
                   <div>
                     <p className="text-[13px] font-bold text-zinc-100 font-display tabular-nums">{formatCurrency(product.price)}</p>
                     <p className="text-[11px] text-zinc-500 font-medium mt-0.5 tabular-nums">{formatCurrency(effectiveCost(product))}</p>
-                    {(() => {
+                      {(() => {
                       const best = bestQuoteFor(supplierPrices, product.id);
                       return best ? (
                         <p className="text-[10px] text-emerald-400 font-bold mt-0.5 tabular-nums">Best supply {formatCurrency(best.price)}</p>
                       ) : null;
+                    })()}
+                    {exp === 'expired' ? (
+                      <p className="text-[10px] text-rose-400 font-black mt-0.5 uppercase">Expired — pull from shelf</p>
+                    ) : exp === 'soon' ? (
+                      <p className="text-[10px] text-amber-400 font-bold mt-0.5 tabular-nums">Expires in {expDays}d ({product.expiryDate})</p>
+                    ) : null}
+                    {(() => {
+                      if (product.isService || !staleDaysById.has(product.id)) return null;
+                      const d = staleDaysById.get(product.id);
+                      return (
+                        <p className="text-[10px] text-amber-500/90 font-bold mt-0.5 uppercase" title="No sale in 30+ days — consider a clearance price">
+                          Stale{d === null ? '' : ` ${d}d`} — clear it?
+                        </p>
+                      );
                     })()}
                   </div>
                   <Edit className="w-4 h-4 text-zinc-600 group-hover:text-gold-brand transition-colors" />
@@ -630,6 +681,65 @@ export default function Inventory({
         className="fixed bottom-24 right-4 z-40 w-14 h-14 bg-gold-brand text-black rounded-2xl shadow-2xl flex items-center justify-center active:scale-95 transition-transform border border-white/10">
         <Plus className="w-8 h-8" />
       </button>
+
+      {/* BULK ADD MODAL (bale day: names + prices fast, details later) */}
+      {showBulk && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="boss-card w-full max-w-lg p-6 bg-zinc-950 border border-white/5 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-3 border-b border-white/5">
+              <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-gold-brand" /> Bulk Add
+              </h3>
+              <button onClick={() => setShowBulk(false)} className="text-zinc-500 hover:text-white p-1 cursor-pointer" aria-label="Close bulk add">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500">One row per item — name + selling price. Stock starts at 1, cost 0. Open each later for full details.</p>
+            <div>
+              <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Category for all rows</label>
+              <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none font-bold">
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              {bulkRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input value={row.name} placeholder={`Item ${i + 1} name`}
+                    onChange={(e) => {
+                      const next = bulkRows.map((r, j) => j === i ? { ...r, name: e.target.value } : r);
+                      if (i === next.length - 1 && e.target.value.trim()) next.push({ name: '', price: '' });
+                      setBulkRows(next);
+                    }}
+                    className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-11 px-3 text-sm focus:border-gold-brand focus:outline-none font-bold" />
+                  <input type="number" min="0" step="any" value={row.price} placeholder="Price"
+                    onChange={(e) => setBulkRows(prev => prev.map((r, j) => j === i ? { ...r, price: e.target.value } : r))}
+                    className="w-28 bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-11 px-3 text-sm focus:border-gold-brand focus:outline-none font-bold text-right" />
+                  {bulkRows.length > 1 && (
+                    <button onClick={() => setBulkRows(prev => prev.filter((_, j) => j !== i))} className="text-zinc-600 hover:text-rose-400 p-1.5 shrink-0 cursor-pointer" aria-label="Remove row">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => {
+              const rows = bulkRows.filter(r => r.name.trim() && (parseFloat(r.price) || 0) > 0);
+              if (rows.length === 0) { triggerToast('Add at least one name + price', 'error'); return; }
+              const now = Date.now();
+              rows.forEach((r, idx) => onAddProduct({
+                id: `p-${now}-${idx}`, name: r.name.trim(),
+                category: bulkCategory || categories[0] || 'General',
+                cost: 0, price: parseFloat(r.price) || 0, stockQty: 1, lowStockThreshold: 1,
+              }));
+              setShowBulk(false);
+              triggerToast(`${rows.length} products added — open each later for details`, 'success');
+            }} className="w-full h-12 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl">
+              Save all ({bulkRows.filter(r => r.name.trim() && (parseFloat(r.price) || 0) > 0).length})
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ADD PRODUCT MODAL */}
       {isAddingNew && (
@@ -710,12 +820,12 @@ export default function Inventory({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Stock Quantity</label>
-                  <input type="number" value={newStock} onChange={(e) => setNewStock(e.target.value)}
+                  <input type="number" step="any" value={newStock} onChange={(e) => setNewStock(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
                 </div>
                 <div>
                   <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Alert when below</label>
-                  <input type="number" value={newThreshold} onChange={(e) => setNewThreshold(e.target.value)}
+                  <input type="number" step="any" value={newThreshold} onChange={(e) => setNewThreshold(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
                 </div>
               </div>
@@ -735,6 +845,14 @@ export default function Inventory({
                   <input type="text" placeholder="Optional" value={newBarcode} onChange={(e) => setNewBarcode(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">
+                  Expires on (drugs, milk, chemicals — warns 30 days ahead)
+                </label>
+                <input type="date" value={newExpiry} onChange={(e) => setNewExpiry(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
               </div>
 
               <div>
@@ -962,6 +1080,14 @@ export default function Inventory({
               </div>
             </div>
 
+            <div>
+              <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">
+                Expires on (drugs, milk, chemicals — warns 30 days ahead)
+              </label>
+              <input type="date" value={editExpiry} onChange={(e) => setEditExpiry(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+            </div>
+
             <div className="bg-zinc-900/60 rounded-xl p-3 border border-zinc-800/60">
               <div className="flex justify-between items-center mb-1">
                 <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
@@ -1018,8 +1144,8 @@ export default function Inventory({
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-zinc-500 font-bold uppercase">{adjustmentType === 'set' ? 'New total' : 'Qty:'}</span>
-                <input type="number" min="0" value={stockAdjustment === 0 ? '' : stockAdjustment} placeholder={adjustmentType === 'set' ? '40' : '0'}
-                  onChange={(e) => setStockAdjustment(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                <input type="number" min="0" step="any" value={stockAdjustment === 0 ? '' : stockAdjustment} placeholder={adjustmentType === 'set' ? '40' : '0'}
+                  onChange={(e) => setStockAdjustment(parseQty(e.target.value))}
                   className="w-24 bg-zinc-950 border border-zinc-800 text-gold-light rounded text-center text-xs h-8 focus:border-gold-brand focus:outline-none font-bold" />
                 <span className="text-xs text-zinc-400 font-bold uppercase">(Current: {editingProduct.stockQty})</span>
               </div>

@@ -1,5 +1,43 @@
 import { Sale, Expense, Product } from '../types';
 
+export interface CloseTotals {
+  day: string;
+  saleCount: number;
+  revenue: number;
+  cash: number;
+  momo: number;
+  expenses: number;
+  net: number;
+}
+
+// Day totals shared by the print-out and the owner WhatsApp summary.
+export function closeTotals(dateStr: string, sales: Sale[], expenses: Expense[]): CloseTotals {
+  const day = dateStr || new Date().toISOString().slice(0, 10);
+  const daySales = sales.filter(s => (s.timestamp || '').slice(0, 10) === day && !s.refunded);
+  const dayExpenses = expenses.filter(e => (e.timestamp || '').slice(0, 10) === day);
+  const revenue = daySales.reduce((a, s) => a + s.total, 0);
+  const cash = daySales.filter(s => s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0);
+  const momo = daySales.filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money').reduce((a, s) => a + s.total, 0);
+  const cogs = daySales.reduce((a, s) => a + s.items.reduce((b, it) => b + (it.unitCost || 0) * it.qty, 0), 0);
+  const expTotal = dayExpenses.reduce((a, e) => a + e.amount, 0);
+  return { day, saleCount: daySales.length, revenue, cash, momo, expenses: expTotal, net: revenue - cogs - expTotal };
+}
+
+// One-message close-out for the owner on WhatsApp: what came in, in what
+// money, what went out, what is left. Numbers only, no jargon.
+export function buildCloseSummary(shopName: string, t: CloseTotals, sellerName?: string): string {
+  const n = (v: number) => Math.round(v).toLocaleString();
+  const lines = [
+    `Daily close — ${shopName} (${t.day})`,
+    `Sales: ${t.saleCount} · ${n(t.revenue)} UGX`,
+    `Cash: ${n(t.cash)} · MoMo: ${n(t.momo)}`,
+    `Expenses: ${n(t.expenses)}`,
+    `Left (after stock + expenses): ${n(t.net)} UGX`,
+  ];
+  if (sellerName) lines.push(`Closed by ${sellerName}`);
+  return lines.join('\n');
+}
+
 export function printDailyClose(dateStr: string, sales: Sale[], expenses: Expense[], products: Product[]) {
   const day = dateStr || new Date().toISOString().slice(0,10);
   const daySales = sales.filter(s => (s.timestamp || '').slice(0,10) === day && !s.refunded);

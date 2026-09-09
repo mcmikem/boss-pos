@@ -35,6 +35,7 @@ export interface Product {
   saleUnit?: string; // per-unit pricing label, e.g. "page", "copy", "meter" -> "500 / page"
   imei?: string;
   barcode?: string;
+  expiryDate?: string; // YYYY-MM-DD of the nearest-expiring batch; drives expiry alerts
   variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
   recipe?: Recipe; // ingredient cost breakdown for a dish; COGS is derived from this
   updatedAt?: string; // server conflict-detection timestamp
@@ -224,6 +225,58 @@ export interface DesignOrder {
   createdAt: string;
 }
 
+// Contractor quotation: a priced cart snapshot that is NOT a sale. Stored on
+// this till only (localStorage) — quotes are drafts until converted.
+export interface Quote {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  items: SaleItem[];
+  discount: number;
+  total: number;
+  createdAt: string;
+}
+
+// Salon / barbershop appointment book: who is coming, when, for what, and
+// what is already paid. Informational like tailoring deposits — the till
+// still rings the actual sale at the chair.
+export interface Booking {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  service: string;
+  staffName?: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
+  durationMin?: number; // service length; overlap math, default 30
+  price: number;
+  deposit: number;
+  status: 'booked' | 'done' | 'cancelled';
+  notes: string;
+  createdAt: string;
+  clientWriteId?: string;
+}
+
+// Workshop / electronics repair intake: item in, fault, price, deposit, and a
+// received → in_progress → ready → collected flow. Same deposit pattern as
+// tailoring orders, without garment-specific fields.
+export interface RepairJob {
+  id: string;
+  customerName: string;
+  customerPhone: string;
+  itemLabel: string;
+  issue: string;
+  price: number;
+  deposit: number;
+  partsCost: number;
+  status: 'received' | 'in_progress' | 'ready' | 'collected';
+  expectedDate: string;
+  completedDate?: string;
+  notes: string;
+  createdAt: string;
+  clientWriteId?: string;
+}
+
 export interface AppTheme {
   id: string;
   name: string;
@@ -259,6 +312,10 @@ export interface StoreSettings {
   hasPin?: boolean;
   showTailoring?: boolean;
   showDesign?: boolean;
+  showBookings?: boolean;
+  showRepairs?: boolean;
+  momoFeePct?: number; // MTN/Airtel cut auto-booked as expense per MoMo sale
+  ownerPhone?: string; // WhatsApp number for the daily close summary
   sheetsUrl?: string;
   efris?: EfrisConfig;
   branches?: string[];
