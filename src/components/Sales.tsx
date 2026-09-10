@@ -5,7 +5,7 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
   CalendarCheck, Wrench, FileText
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister } from '../types';
 import { nextOrderNumber } from '../api';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
@@ -25,6 +25,7 @@ import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisua
 const TailoringOrders = lazy(() => import('./TailoringOrders'));
 const DesignOrders = lazy(() => import('./DesignOrders'));
 const EateryPricing = lazy(() => import('./EateryPricing'));
+const MorningProduction = lazy(() => import('./MorningProduction'));
 const Bookings = lazy(() => import('./Bookings'));
 const RepairJobs = lazy(() => import('./RepairJobs'));
 const Quotes = lazy(() => import('./Quotes'));
@@ -82,6 +83,9 @@ interface SalesProps {
   staffConfigured?: boolean;
   onOpenStaffSwitcher?: () => void;
   tillBranch?: string;
+  productionRegisters?: ProductionRegister[];
+  onAddProduction?: (p: ProductionRegister) => void;
+  onDeleteProduction?: (id: string) => void;
 }
 
 const localOrderNumber = () => {
@@ -94,7 +98,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
@@ -102,6 +106,7 @@ export default function Sales({
   const [showBookings, setShowBookings] = useState<boolean>(false);
   const [showRepairs, setShowRepairs] = useState<boolean>(false);
   const [showEateryPricing, setShowEateryPricing] = useState<boolean>(false);
+  const [showProduction, setShowProduction] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -594,7 +599,7 @@ export default function Sales({
         <div className="relative -mx-4 min-w-0 max-w-[calc(100%+2rem)] overflow-hidden px-4 sm:mx-0 sm:max-w-none sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
-            <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
+            <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowProduction(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
               className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                 selectedCategory === 'All'
                   ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
@@ -607,7 +612,7 @@ export default function Sales({
                 const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
                 return (
-                  <button key={cat} onClick={() => { setSelectedCategory(cat); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
+                  <button key={cat} onClick={() => { setSelectedCategory(cat); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowProduction(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
                     className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                       isActive
                         ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
@@ -621,11 +626,18 @@ export default function Sales({
           </section>
         </div>
 
-        {selectedCategory === 'Eatery' && !showEateryPricing && (
+        {selectedCategory === 'Eatery' && !showEateryPricing && !showProduction && (
           <button onClick={() => setShowEateryPricing(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <ChefHat className="w-4 h-4" />
             Eatery Pricing & Recipes
+          </button>
+        )}
+        {selectedCategory === 'Eatery' && !showEateryPricing && !showProduction && onAddProduction && onDeleteProduction && (
+          <button onClick={() => setShowProduction(true)}
+            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
+            <ChefHat className="w-4 h-4" />
+            Morning Production
           </button>
         )}
 
@@ -690,6 +702,18 @@ export default function Sales({
             </button>
             <Suspense fallback={subManagerFallback}>
               <EateryPricing products={products} onUpdateProduct={onUpdateProduct}
+                formatCurrency={formatCurrency} triggerToast={triggerToast} />
+            </Suspense>
+          </div>
+        ) : showProduction && onAddProduction && onDeleteProduction ? (
+          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">
+            <button onClick={() => setShowProduction(false)}
+              className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
+              <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
+            </button>
+            <Suspense fallback={subManagerFallback}>
+              <MorningProduction products={products} productionRegisters={productionRegisters}
+                onAddProduction={onAddProduction} onDeleteProduction={onDeleteProduction}
                 formatCurrency={formatCurrency} triggerToast={triggerToast} />
             </Suspense>
           </div>

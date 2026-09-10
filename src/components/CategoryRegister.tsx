@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Users, ChefHat, PackageX, Plus, Trash2, X,
+  Users, PackageX, Plus, Trash2, X,
   Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft
 } from 'lucide-react';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
+import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
 
 interface CategoryRegisterProps {
   segments: string[];
@@ -17,8 +18,6 @@ interface CategoryRegisterProps {
   momoTransfers: MomoTransfer[];
   onAddCreditEat: (e: CreditEat) => void;
   onPayCreditEat: (id: string, amount: number) => void;
-  onAddProduction: (p: ProductionRegister) => void;
-  onDeleteProduction: (id: string) => void;
   onAddWastage: (w: WastageLog) => void;
   onDeleteWastage: (id: string) => void;
   onAddMomoTransfer: (t: MomoTransfer) => void;
@@ -52,7 +51,7 @@ function formatDay(iso: string): string {
 export default function CategoryRegister({
   segments, products, sales, creditEats, productionRegisters, wastageLogs,
   momoTransfers,
-  onAddCreditEat, onPayCreditEat, onAddProduction, onDeleteProduction,
+  onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
 }: CategoryRegisterProps) {
@@ -71,6 +70,14 @@ export default function CategoryRegister({
   const catProduction = useMemo(() => productionRegisters.filter(p => p.category === selected), [productionRegisters, selected]);
   const catWastage = useMemo(() => wastageLogs.filter(w => w.category === selected), [wastageLogs, selected]);
 
+  // Daily production + the made-sold-lost balance only exist for categories
+  // that MAKE goods fresh each morning (Eatery). Other categories sell
+  // buy-resell stock or make-to-order jobs — but keep showing legacy rows if
+  // any were logged before the gate, so no history silently disappears.
+  const isDailyMake = isDailyMakeCategory(selected);
+  const showProduction = isDailyMake || catProduction.length > 0;
+  const workflowHint = CATEGORY_WORKFLOW_HINT[selected];
+
   const [showCreditForm, setShowCreditForm] = useState(false);
   const [creditName, setCreditName] = useState('');
   const [creditDate, setCreditDate] = useState(todayStr());
@@ -78,14 +85,6 @@ export default function CategoryRegister({
   const [creditCustomItem, setCreditCustomItem] = useState('');
   const [creditQty, setCreditQty] = useState('1');
   const [creditPrice, setCreditPrice] = useState('');
-
-  const [showProdForm, setShowProdForm] = useState(false);
-  const [prodDate, setProdDate] = useState(todayStr());
-  const [prodItem, setProdItem] = useState('');
-  const [prodCustomItem, setProdCustomItem] = useState('');
-  const [prodProductId, setProdProductId] = useState<string | null>(null);
-  const [prodQty, setProdQty] = useState('');
-  const [prodCost, setProdCost] = useState('');
 
   const [showWasteForm, setShowWasteForm] = useState(false);
   const [wasteDate, setWasteDate] = useState(todayStr());
@@ -119,7 +118,6 @@ export default function CategoryRegister({
     }
   }, [histFilter]);
 
-  const filteredProduction = useMemo(() => catProduction.filter(p => timeRange.filter(p.date)), [catProduction, timeRange]);
   const filteredWastage = useMemo(() => catWastage.filter(w => timeRange.filter(w.date)), [catWastage, timeRange]);
 
   // Today's collected cash per category (excludes credit/book and refunds).
@@ -222,31 +220,8 @@ export default function CategoryRegister({
     setPayId(null); setPayAmount('');
   };
 
-  // ---- Production ----
-  const prodTotal = (q: string, c: string) => Math.round((parseInt(q, 10) || 0) * (parseFloat(c) || 0));
+  // ---- Production (read-only here: morning log lives on Sell → Eatery) ----
   const todayProdCost = catProduction.filter(p => p.date === todayStr()).reduce((s, p) => s + p.total, 0);
-
-  const handleSubmitProduction = () => {
-    const item = activeItem(catProducts.map(p => p.name), prodCustomItem, prodItem);
-    if (!item) { triggerToast('Select the item', 'error'); return; }
-    const qty = parseInt(prodQty, 10) || 0;
-    if (qty <= 0) { triggerToast('Enter the number made', 'error'); return; }
-    const cost = parseFloat(prodCost) || 0;
-    if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
-    onAddProduction({
-      id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      date: prodDate,
-      item,
-      category: selected,
-      productId: prodProductId || undefined,
-      qty,
-      costEach: cost,
-      total: Math.round(qty * cost),
-    });
-    triggerToast(`Production logged: ${qty} × ${item}`, 'success');
-    setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
-    setShowProdForm(false);
-  };
 
   // ---- Wastage ----
   const todayWastage = catWastage.filter(w => w.date === todayStr()).reduce((s, w) => s + w.lossAmount, 0);
@@ -348,7 +323,7 @@ export default function CategoryRegister({
         </div>
         <div>
           <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">Registers</h2>
-          <p className="text-xs text-zinc-500 font-bold">Credit • Daily production • Losses</p>
+          <p className="text-xs text-zinc-500 font-bold">{showProduction ? 'Credit • Daily balance • Losses' : 'Credit • Losses • Money out'}</p>
         </div>
       </div>
       {onBack && (
@@ -371,6 +346,9 @@ export default function CategoryRegister({
           </button>
         ))}
       </div>
+      {!isDailyMake && workflowHint && (
+        <p className="text-[11px] text-zinc-500 font-bold -mt-3">{workflowHint}</p>
+      )}
 
       {/* History time filter */}
       <div className="flex items-center justify-between gap-2">
@@ -391,10 +369,12 @@ export default function CategoryRegister({
 
       {/* Today summary */}
       <section className="grid grid-cols-3 gap-2">
+        {showProduction && (
         <div className="boss-card p-3 border-l-4 border-l-amber-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>
           <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayProdCost)}</p>
         </div>
+        )}
         <div className="boss-card p-3 border-l-4 border-l-rose-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Lost today</p>
           <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
@@ -475,7 +455,8 @@ export default function CategoryRegister({
         </div>
       </section>
 
-      {/* ============ DAILY BALANCE / CLOSE-OUT ============ */}
+      {/* ============ DAILY BALANCE / CLOSE-OUT (daily-make only: made-sold-lost means nothing without production) ============ */}
+      {showProduction && (
       <section className="boss-card p-5 rounded-2xl">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
@@ -542,6 +523,7 @@ export default function CategoryRegister({
           </>
         )}
       </section>
+      )}
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
       <section className="boss-card p-5 rounded-2xl">
@@ -642,93 +624,7 @@ export default function CategoryRegister({
         )}
       </section>
 
-      {/* ============ 2. DAILY PRODUCTION ============ */}
-      <section className="boss-card p-5 rounded-2xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <ChefHat className="w-4 h-4 text-amber-400" /> Daily Production
-          </h3>
-          <button onClick={() => setShowProdForm(v => !v)}
-            className="flex items-center gap-1 text-[10px] bg-amber-600/20 text-amber-400 border border-amber-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showProdForm ? 'Close' : 'Register'}
-          </button>
-        </div>
-
-        {showProdForm && (
-          <div className="bg-zinc-950/60 border border-amber-600/20 rounded-xl p-4 space-y-3 mb-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="sm:col-span-2">
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Made</label>
-                <select value={prodItem} onChange={e => selectOnChange(e.target.value, setProdCustomItem, setProdItem, setProdCost, setProdProductId)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold" autoFocus>
-                  <option value="">Select item...</option>
-                  {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — cost {formatCurrency(p.cost)}</option>)}
-                  <option value="__custom">Other / custom item...</option>
-                </select>
-                {prodItem === '__custom' && (
-                  <input type="text" value={prodCustomItem} onChange={e => setProdCustomItem(e.target.value)}
-                    placeholder="Type the item name..." autoFocus
-                    className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-                )}
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Date</label>
-                <input type="date" value={prodDate} onChange={e => setProdDate(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Number Made</label>
-                <input type="number" min="1" value={prodQty} onChange={e => setProdQty(e.target.value)}
-                  placeholder="e.g. 100" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cost Price Each</label>
-                <input type="number" min="0" value={prodCost} onChange={e => setProdCost(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-bold text-zinc-400 uppercase">
-                Total cost: <span className="text-amber-400 font-black text-base">{formatCurrency(prodTotal(prodQty, prodCost))}</span>
-              </p>
-              <button onClick={handleSubmitProduction}
-                className="h-11 px-5 bg-amber-600 hover:bg-amber-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> Save Production
-              </button>
-            </div>
-          </div>
-        )}
-
-        {catProduction.length === 0 ? (
-          <div className="text-center py-8">
-            <ChefHat className="w-10 h-10 text-amber-500 mx-auto mb-2 opacity-40" />
-            <p className="text-xs text-zinc-500 font-bold uppercase">No production registered in {selected}</p>
-          </div>
-        ) : (
-          <div className="space-y-2 max-h-80 overflow-y-auto">
-            {filteredProduction.map(p => (
-              <div key={p.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-black text-white truncate">{p.item}</p>
-                  <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(p.date)}</p>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="text-right">
-                    <p className="text-sm font-black text-amber-400 font-display">{formatCurrency(p.total)}</p>
-                    <p className="text-[10px] text-zinc-500 font-bold">{p.qty} × {formatCurrency(p.costEach)}</p>
-                  </div>
-                  <button onClick={() => { onDeleteProduction(p.id); triggerToast('Production entry deleted', 'info'); }}
-                    className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ============ 3. REMAINING / EXPIRED (LOSES) ============ */}
+      {/* ============ 2. REMAINING / EXPIRED (LOSES) ============ */}
       <section className="boss-card p-5 rounded-2xl">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
@@ -831,7 +727,7 @@ export default function CategoryRegister({
         )}
       </section>
 
-      {/* ============ 4. MONEY OUT — mobile money / owner / float ============ */}
+      {/* ============ 3. MONEY OUT — mobile money / owner / float ============ */}
       <section className="boss-card p-5 rounded-2xl">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">

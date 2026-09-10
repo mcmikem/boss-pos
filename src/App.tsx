@@ -1431,6 +1431,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onSaveCustomProduct={handleSaveCustomProduct}
             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
             tillBranch={tillBranch}
+            productionRegisters={productionRegisters}
+            onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
           />
           </ErrorBoundary>
         );
@@ -1484,8 +1486,6 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             momoTransfers={momoTransfers}
             onAddCreditEat={handleAddCreditEat}
             onPayCreditEat={handlePayCreditEat}
-            onAddProduction={handleAddProduction}
-            onDeleteProduction={handleDeleteProduction}
             onAddWastage={handleAddWastage}
             onDeleteWastage={handleDeleteWastage}
             onAddMomoTransfer={handleAddMomoTransfer}
