@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuoteText } from './quotes';
+import { buildQuoteText, buildInvoiceText, quoteDocRef } from './quotes';
 import type { Quote } from '../types';
 
 const quote = (over: Partial<Quote> = {}): Quote => ({
@@ -34,5 +34,21 @@ describe('buildQuoteText', () => {
     expect(msg).not.toContain('For:');
     expect(msg).not.toContain('Discount:');
     expect(msg).toContain('TOTAL:');
+  });
+});
+
+describe('buildInvoiceText', () => {
+  it('frames the same lines as a demand for payment', () => {
+    const msg = buildInvoiceText('Katwe Hardware', quote());
+    expect(msg).toContain('Invoice');
+    expect(msg).toContain('Cement × 20');
+    expect(msg).toContain('TOTAL: 700,000 UGX');
+    expect(msg).toContain('Payment due on receipt');
+    expect(msg).not.toContain('Valid 7 days');
+  });
+
+  it('shares a stable document reference', () => {
+    expect(quoteDocRef(quote())).toBe(quoteDocRef(quote()));
+    expect(quoteDocRef(quote())).toMatch(/^#[A-Z0-9]+$/);
   });
 });

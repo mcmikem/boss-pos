@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { X, Search, FileText, MessageCircle, ShoppingCart } from 'lucide-react';
+import { X, Search, FileText, MessageCircle, ShoppingCart, Printer } from 'lucide-react';
 import type { Quote } from '../types';
 import { buildQuoteText } from '../utils/quotes';
 import { supplierWhatsAppUrl } from '../utils/suppliers';
+import QuoteDocument from './QuoteDocument';
 
 interface QuotesProps {
   quotes: Quote[];
@@ -18,6 +19,7 @@ interface QuotesProps {
 export default function Quotes({ quotes, shopName, formatCurrency, triggerToast, onConvert, onDelete }: QuotesProps) {
   const [search, setSearch] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [docQuote, setDocQuote] = useState<Quote | null>(null);
 
   const q = search.toLowerCase().trim();
   const filtered = quotes.filter(x =>
@@ -67,6 +69,10 @@ export default function Quotes({ quotes, shopName, formatCurrency, triggerToast,
               className="flex-1 h-9 bg-gold-brand text-black rounded-xl text-[11px] font-black uppercase flex items-center justify-center gap-1 cursor-pointer">
               <ShoppingCart className="w-3.5 h-3.5" /> Sell
             </button>
+            <button onClick={() => setDocQuote(quote)}
+              className="flex-1 h-9 bg-zinc-800 border border-white/10 text-zinc-200 rounded-xl text-[11px] font-black uppercase flex items-center justify-center gap-1 cursor-pointer">
+              <Printer className="w-3.5 h-3.5" /> Print
+            </button>
             <button onClick={() => share(quote)}
               className="flex-1 h-9 bg-emerald-950/40 border border-emerald-800/50 text-emerald-300 rounded-xl text-[11px] font-black uppercase flex items-center justify-center gap-1 cursor-pointer">
               <MessageCircle className="w-3.5 h-3.5" /> Send
@@ -85,6 +91,11 @@ export default function Quotes({ quotes, shopName, formatCurrency, triggerToast,
           </div>
         </div>
       ))}
+      {docQuote && (
+        <QuoteDocument quote={docQuote} shopName={shopName}
+          formatCurrency={formatCurrency} triggerToast={triggerToast}
+          onClose={() => setDocQuote(null)} />
+      )}
     </div>
   );
 }
