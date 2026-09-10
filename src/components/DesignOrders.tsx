@@ -532,7 +532,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
 
       {/* ===== CREATE/EDIT PANEL (slide-up) ===== */}
       {showPanel && (
-        <div className="fixed inset-0 z-50 flex flex-col">
+        <div className="fixed inset-0 z-[80] flex flex-col">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowPanel(false)} />
           <div className="relative mt-auto bg-[#141414] border-t border-zinc-800 rounded-t-3xl max-h-[92vh] flex flex-col shadow-2xl animate-slide-up">
             <div className="flex justify-center pt-2 pb-1">
@@ -894,7 +894,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
               </section>
             </div>
 
-            <div className="p-5 pt-3 border-t border-white/5 flex gap-2">
+            <div className="p-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] border-t border-white/5 flex gap-2">
               <button onClick={() => setShowPanel(false)}
                 className="flex-1 h-12 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-zinc-900 transition-all cursor-pointer">
                 Cancel
