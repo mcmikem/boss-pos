@@ -174,6 +174,17 @@ html {
   justify-content: center;
 }
 
+/* Big-text mode (Settings → Display): all Tailwind type is rem-based, so a
+   root bump scales every label/price; targets grow to match. Layout (px)
+   is untouched, so nothing reflows off-screen. */
+.large-text {
+  font-size: 112.5%;
+}
+.large-text .touch-target {
+  min-width: 52px;
+  min-height: 52px;
+}
+
 @keyframes slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

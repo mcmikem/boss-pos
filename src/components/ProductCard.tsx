@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Star } from 'lucide-react';
 import { Product, SaleItem } from '../types';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 import { effectiveCost } from '../utils/recipe';
@@ -11,9 +11,11 @@ interface ProductCardProps {
   onAddToCart: (product: Product) => void;
   onAdjustQty?: (productId: string, delta: number) => void;
   compact?: boolean;
+  pinned?: boolean;
+  onTogglePin?: (productId: string) => void;
 }
 
-const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact }: ProductCardProps) {
+const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact, pinned, onTogglePin }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
   const hasVariants = !!product.variants && product.variants.length > 0;
@@ -71,6 +73,17 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
           <div className={`absolute inset-0 w-full h-full bg-gradient-to-br ${catVis.gradient} flex items-center justify-center`}>
                               <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
                             </div>
+        )}
+        {/* Pin fast sellers to the top strip (Sell screen). stopPropagation
+            so pinning never adds to cart. */}
+        {onTogglePin && (
+          <button onClick={(e) => { e.stopPropagation(); onTogglePin(product.id); }}
+            aria-label={pinned ? 'Unpin from fast sellers' : 'Pin as fast seller'}
+            className={`absolute top-2 left-2 w-8 h-8 rounded-lg border flex items-center justify-center shadow-md transition-all active:scale-90 cursor-pointer ${
+              pinned ? 'bg-gold-brand border-black/20 text-black' : 'bg-black/70 backdrop-blur-md border-white/15 text-zinc-400'
+            }`}>
+            <Star className={`w-4 h-4 ${pinned ? 'fill-black' : ''}`} />
+          </button>
         )}
         {/* Mistake 1 fix: badges sit on ANY product photo (dark, bright, busy), so
             they get a solid container + outline + shadow — never bare text/icons

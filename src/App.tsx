@@ -114,8 +114,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [lockLog, setLockLog] = useState<LockEvent[]>(() => {
     try { return readLockLog(); } catch { return []; }
   });
+  // First-run setup checklist: hidden forever once dismissed or complete.
+  const [setupDismissed, setSetupDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_setup_done') === '1'; } catch { return false; }
+  });
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
+  useEffect(() => {
+    try { document.documentElement.classList.toggle('large-text', !!settings.largeText); } catch {}
+  }, [settings.largeText]);
   const [staffName, setStaffName] = useState<string>(() => {
     try { return localStorage.getItem('boss_pos_staff') || ''; } catch { return ''; }
   });
@@ -648,7 +655,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (staffConfigured && activeRole !== 'manager') return;
     const ALLOWED = new Set([
       'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate','momoFeePct','ownerPhone',
-      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches',
+      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText',
     ]);
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
@@ -1419,6 +1426,52 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       case 'sales':
         return (
           <ErrorBoundary key="sales">
+          {isManager && !setupDismissed && (() => {
+            const installed = typeof window !== 'undefined' && (
+              window.matchMedia('(display-mode: standalone)').matches ||
+              (window.navigator as unknown as { standalone?: boolean }).standalone === true
+            );
+            const steps = [
+              { key: 'name', label: 'Name your shop', done: !!settings.shopName && settings.shopName !== 'My Shop', act: () => setIsSettingsOpen(true) },
+              { key: 'pin', label: 'Set a till PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
+              { key: 'stock', label: 'Add your first products', done: products.length > 0, act: () => setActiveTab('inventory') },
+              { key: 'sale', label: 'Make your first sale', done: sales.length > 0 },
+              { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {} } : undefined },
+            ];
+            const doneCount = steps.filter(s => s.done).length;
+            if (doneCount >= steps.length) return null;
+            return (
+              <div className="boss-card p-4 rounded-2xl border border-gold-brand/30 mb-4">
+                <div className="flex items-center justify-between mb-1.5">
+                  <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Get set up {doneCount}/{steps.length}</h3>
+                  <button onClick={() => { try { localStorage.setItem('boss_pos_setup_done', '1'); } catch {} setSetupDismissed(true); }}
+                    aria-label="Dismiss setup checklist"
+                    className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
+                  <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((doneCount / steps.length) * 100)}%` }} />
+                </div>
+                <div className="space-y-1.5">
+                  {steps.map(s => (
+                    <div key={s.key} className="flex items-center gap-2">
+                      <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-black ${
+                        s.done ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40' : 'bg-[#0A0A0A] text-zinc-500 border border-white/10'
+                      }`}>{s.done ? '✓' : '•'}</span>
+                      <span className={`flex-1 min-w-0 text-xs font-bold uppercase tracking-wider truncate ${s.done ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{s.label}</span>
+                      {!s.done && s.act && (
+                        <button onClick={s.act}
+                          className="h-8 px-3 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer shrink-0">
+                          Go
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <Sales 
             products={products} onAddSale={handleAddSale}
             onUpdateProduct={handleUpdateProduct}
@@ -1495,6 +1548,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onSetEodCapital={(cat, value) => setSettings(prev => ({ ...prev, eodCapital: { ...(prev.eodCapital || {}), [cat]: value } }))}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
+            onPrintClose={() => printDailyClose(new Date().toISOString().slice(0, 10), sales, expenses, products)}
+            onSendClose={() => {
+              const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
+              if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
+              window.open(url, '_blank', 'noopener');
+            }}
           />
           </Suspense>
           </ErrorBoundary>
@@ -2077,6 +2136,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   }}
                     className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-gold-brand/40 transition-all cursor-pointer">
                     {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
+                  </button>
+                  <button onClick={() => setSettings(prev => ({ ...prev, largeText: !prev.largeText }))}
+                    title="Bigger text and buttons for sunlight and tired eyes"
+                    className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${settings.largeText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                    {settings.largeText ? 'Big text: On' : 'Big text: Off'}
                   </button>
                 </div>
               {isManager && (

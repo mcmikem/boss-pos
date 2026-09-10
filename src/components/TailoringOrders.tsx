@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
+import Sheet from './Sheet';
 import type { TailoringOrder } from '../types';
 import { tailoringOrderApi } from '../api';
 import { localDayKey, todayLocalKey } from '../utils/dates';
@@ -378,28 +379,19 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
 
       {/* ===== CREATE/EDIT PANEL (slide-up) ===== */}
       {showPanel && (
-        <div className="fixed inset-0 z-[80] flex flex-col">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowPanel(false)} />
-          <div className="relative mt-auto bg-[#141414] border-t border-zinc-800 rounded-t-3xl max-h-[92vh] flex flex-col shadow-2xl animate-slide-up">
-            {/* Handle */}
-            <div className="flex justify-center pt-2 pb-1">
-              <div className="w-10 h-1 rounded-full bg-zinc-700" />
-            </div>
-
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 pb-3 border-b border-white/5">
-              <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
-                <Scissors className="w-4 h-4 text-amber-400" />
-                {editId ? 'Edit Order' : 'New Order'}
-              </h3>
-              <button onClick={() => setShowPanel(false)}
-                className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-all cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Scrollable content */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5">
+        <Sheet onClose={() => setShowPanel(false)}
+          title={editId ? 'Edit Order' : 'New Order'}
+          icon={<Scissors className="w-4 h-4 text-amber-400" />}
+          footer={<>
+            <button onClick={() => setShowPanel(false)}
+              className="flex-1 h-12 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-zinc-900 transition-all cursor-pointer">
+              Cancel
+            </button>
+            <button onClick={handleSave}
+              className="flex-1 h-12 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+              {editId ? 'Update' : 'Create Order'}
+            </button>
+          </>}>
               {/* CUSTOMER */}
               <section>
                 <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
@@ -541,23 +533,9 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
                   <input type="text" value={f.notes} onChange={e => setF(p => ({ ...p, notes: e.target.value }))}
                     placeholder="Fabric, color, requests..."
                     className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-                </div>
-              </section>
             </div>
-
-            {/* Footer — pinned above the bottom nav (sheet sits at z-80) */}
-            <div className="p-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] border-t border-white/5 flex gap-2">
-              <button onClick={() => setShowPanel(false)}
-                className="flex-1 h-12 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-zinc-900 transition-all cursor-pointer">
-                Cancel
-              </button>
-              <button onClick={handleSave}
-                className="flex-1 h-12 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                {editId ? 'Update' : 'Create Order'}
-              </button>
-            </div>
-          </div>
-        </div>
+          </section>
+        </Sheet>
       )}
 
       {/* FAB */}

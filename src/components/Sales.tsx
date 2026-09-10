@@ -3,7 +3,7 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText
+  CalendarCheck, Wrench, FileText, Star
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister } from '../types';
 import { nextOrderNumber } from '../api';
@@ -101,6 +101,23 @@ export default function Sales({
   products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('boss_pos_pinned') || '[]'); } catch { return []; }
+  });
+  const togglePin = (id: string) => setPinnedIds(prev => {
+    const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+    try { localStorage.setItem('boss_pos_pinned', JSON.stringify(next)); } catch {}
+    return next;
+  });
+  const pinnedProducts = useMemo(
+    () => pinnedIds.map(id => products.find(p => p.id === id)).filter((p): p is Product => !!p),
+    [pinnedIds, products]
+  );
+  // Trade tools appear when their category actually stocks products — no
+  // manual Settings toggle hunt required (toggle still forces them on).
+  const hasTailoringStock = useMemo(() => products.some(p => p.category === 'Tailoring'), [products]);
+  const hasDesignStock = useMemo(() => products.some(p => p.category === 'Graphics' || p.category === 'Printing'), [products]);
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
   const [showDesignOrders, setShowDesignOrders] = useState<boolean>(false);
   const [showBookings, setShowBookings] = useState<boolean>(false);
@@ -595,6 +612,19 @@ export default function Sales({
           </button>
         )}
 
+        {/* Fast sellers strip — rush-hour one-tap selling */}
+        {pinnedProducts.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label="Fast sellers">
+            {pinnedProducts.map(p => (
+              <button key={p.id} onClick={() => handleAddToCart(p)}
+                className="flex items-center gap-1.5 pl-2.5 pr-3 py-2.5 rounded-xl bg-gold-brand/10 border border-gold-brand/40 text-gold-light text-xs font-black whitespace-nowrap active:scale-95 transition-all cursor-pointer shrink-0 min-h-[44px]">
+                <Star className="w-3.5 h-3.5 fill-gold-brand text-gold-brand" />
+                {p.name} • {formatCurrency(p.price)}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Categories */}
         <div className="relative -mx-4 min-w-0 max-w-[calc(100%+2rem)] overflow-hidden px-4 sm:mx-0 sm:max-w-none sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
@@ -627,21 +657,23 @@ export default function Sales({
         </div>
 
         {selectedCategory === 'Eatery' && !showEateryPricing && !showProduction && (
+          <div className="mt-3 grid grid-cols-2 gap-2">
           <button onClick={() => setShowEateryPricing(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
+            className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <ChefHat className="w-4 h-4" />
-            Eatery Pricing & Recipes
+            Pricing & Recipes
           </button>
-        )}
-        {selectedCategory === 'Eatery' && !showEateryPricing && !showProduction && onAddProduction && onDeleteProduction && (
+          {onAddProduction && onDeleteProduction && (
           <button onClick={() => setShowProduction(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
+            className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <ChefHat className="w-4 h-4" />
             Morning Production
           </button>
+          )}
+          </div>
         )}
 
-        {settings?.showTailoring && selectedCategory === 'Tailoring' && !showTailoringOrders && (
+        {(settings?.showTailoring || hasTailoringStock) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
           <button onClick={() => setShowTailoringOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Scissors className="w-4 h-4" />
@@ -649,7 +681,7 @@ export default function Sales({
           </button>
         )}
 
-        {settings?.showDesign && selectedCategory === 'Graphics' && !showDesignOrders && (
+        {(settings?.showDesign || hasDesignStock) && selectedCategory === 'Graphics' && !showDesignOrders && (
           <button onClick={() => setShowDesignOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Palette className="w-4 h-4" />
@@ -766,6 +798,8 @@ export default function Sales({
                   formatCurrency={formatCurrency}
                   onAddToCart={handleAddToCart}
                   onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
+                  pinned={pinnedIds.includes(product.id)}
+                  onTogglePin={togglePin}
                 />
               ))}
               {filteredProducts.length === 0 && (
@@ -1040,6 +1074,23 @@ export default function Sales({
                 <input type="number" placeholder={t(lang, 'cashReceived')} value={customCashReceived}
                   onChange={(e) => setCustomCashReceived(e.target.value)}
                   className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
+                <div className="flex flex-wrap gap-1.5">
+                  {(() => {
+                    if (total <= 0) return null;
+                    const s = new Set<number>();
+                    s.add(total);
+                    [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) s.add(n); });
+                    s.add(Math.ceil(total / 5000) * 5000);
+                    return Array.from(s).filter(a => a >= total).sort((a, b) => a - b).slice(0, 4).map(amt => (
+                      <button key={amt} onClick={() => setCustomCashReceived(String(amt))}
+                        className={`px-3 py-1.5 text-xs font-black rounded-lg border transition-all min-h-[36px] cursor-pointer active:scale-95 ${
+                          parseFloat(customCashReceived) === amt ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/5'
+                        }`}>
+                        {amt === total ? t(lang, 'exact') : amt.toLocaleString()}
+                      </button>
+                    ));
+                  })()}
+                </div>
                 {customCashReceived && (
                   <div className="flex justify-between items-center">
                       {parseFloat(customCashReceived) >= total ? (

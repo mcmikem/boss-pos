@@ -28,6 +28,8 @@ interface CategoryRegisterProps {
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBack?: () => void;
+  onPrintClose?: () => void;
+  onSendClose?: () => void;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -54,6 +56,7 @@ export default function CategoryRegister({
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
+  onPrintClose, onSendClose,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -77,6 +80,22 @@ export default function CategoryRegister({
   const isDailyMake = isDailyMakeCategory(selected);
   const showProduction = isDailyMake || catProduction.length > 0;
   const workflowHint = CATEGORY_WORKFLOW_HINT[selected];
+
+  // Close-the-day ritual ticks, kept per day + department so a refresh or a
+  // shared till never loses the evening's progress.
+  const closeDayKey = `${todayStr()}::${selected}`;
+  const [closeTicks, setCloseTicks] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try { setCloseTicks(JSON.parse(localStorage.getItem(`boss_pos_close_${closeDayKey}`) || '{}')); } catch { setCloseTicks({}); }
+  }, [closeDayKey]);
+  const toggleTick = (k: string) => setCloseTicks(prev => {
+    const next = { ...prev, [k]: !prev[k] };
+    try { localStorage.setItem(`boss_pos_close_${closeDayKey}`, JSON.stringify(next)); } catch {}
+    return next;
+  });
+  const scrollToSection = (id: string) => {
+    try { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+  };
 
   const [showCreditForm, setShowCreditForm] = useState(false);
   const [creditName, setCreditName] = useState('');
@@ -225,6 +244,7 @@ export default function CategoryRegister({
 
   // ---- Wastage ----
   const todayWastage = catWastage.filter(w => w.date === todayStr()).reduce((s, w) => s + w.lossAmount, 0);
+  const todayLossCount = catWastage.filter(w => w.date === todayStr()).length;
 
   // ---- Money Out (Mobile Money / Owner / Float for tomorrow) ----
   const collectedToday = todayCollectedByCategory[selected] || 0;
@@ -350,6 +370,60 @@ export default function CategoryRegister({
         <p className="text-[11px] text-zinc-500 font-bold -mt-3">{workflowHint}</p>
       )}
 
+      {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
+      {(() => {
+        const steps = [
+          { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalShrinkage} unmatched`, target: 'close-balance' },
+          { key: 'losses', label: 'Log today\u2019s losses', hint: `${todayLossCount} logged \u2022 ${formatCurrency(todayWastage)}`, target: 'close-losses' },
+          { key: 'money', label: 'Move today\u2019s money', hint: `${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`, target: 'close-money' },
+        ];
+        const done = steps.filter(s => closeTicks[s.key]).length;
+        return (
+          <section className="boss-card p-4 rounded-2xl border border-gold-brand/20">
+            <div className="flex items-center justify-between mb-1.5">
+              <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Close the day \u2014 {selected}</h3>
+              <span className="text-[11px] font-black text-gold-brand tabular-nums">{done}/3</span>
+            </div>
+            <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
+              <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((done / steps.length) * 100)}%` }} />
+            </div>
+            <div className="space-y-1.5">
+              {steps.map((s, i) => (
+                <div key={s.key} className="flex items-center gap-2">
+                  <button onClick={() => toggleTick(s.key)} aria-label={`Mark ${s.label} done`}
+                    className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 transition-all active:scale-90 cursor-pointer ${
+                      closeTicks[s.key] ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/10 text-transparent'
+                    }`}>
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => scrollToSection(s.target)}
+                    className="flex-1 min-w-0 text-left bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 py-2 transition-all cursor-pointer">
+                    <span className="text-xs font-black text-zinc-100 uppercase tracking-wider">{i + 1}. {s.label}</span>
+                    <span className="block text-[10px] text-zinc-500 font-bold mt-0.5">{s.hint} \u2014 tap to jump</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+            {(onPrintClose || onSendClose) && (
+              <div className="flex gap-2 mt-3">
+                {onPrintClose && (
+                  <button onClick={onPrintClose}
+                    className="flex-1 h-11 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-xl text-xs font-black uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                    Print close (PDF)
+                  </button>
+                )}
+                {onSendClose && (
+                  <button onClick={onSendClose}
+                    className="flex-1 h-11 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60 transition-all cursor-pointer">
+                    WhatsApp owner
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        );
+      })()}
+
       {/* History time filter */}
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest shrink-0">History</p>
@@ -457,7 +531,7 @@ export default function CategoryRegister({
 
       {/* ============ DAILY BALANCE / CLOSE-OUT (daily-make only: made-sold-lost means nothing without production) ============ */}
       {showProduction && (
-      <section className="boss-card p-5 rounded-2xl">
+      <section id="close-balance" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
             <CalendarDays className="w-4 h-4 text-gold-brand" /> Daily Balance & Close-Out
@@ -625,7 +699,7 @@ export default function CategoryRegister({
       </section>
 
       {/* ============ 2. REMAINING / EXPIRED (LOSES) ============ */}
-      <section className="boss-card p-5 rounded-2xl">
+      <section id="close-losses" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
             <PackageX className="w-4 h-4 text-rose-400" /> Remaining / Expired (Losses)
@@ -728,7 +802,7 @@ export default function CategoryRegister({
       </section>
 
       {/* ============ 3. MONEY OUT — mobile money / owner / float ============ */}
-      <section className="boss-card p-5 rounded-2xl">
+      <section id="close-money" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
             <Smartphone className="w-4 h-4 text-cyan-400" /> Money Out (who took it & where)

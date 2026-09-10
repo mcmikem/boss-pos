@@ -320,6 +320,7 @@ export interface StoreSettings {
   efris?: EfrisConfig;
   branches?: string[];
   eodCapital?: Record<string, number>;
+  largeText?: boolean; // accessibility: bigger type + targets (Settings → Display)
   lastSheetOk?: boolean;
   lastSheetAt?: string;
   lastSheetError?: string;
