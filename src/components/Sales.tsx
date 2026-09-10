@@ -524,7 +524,7 @@ export default function Sales({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 relative min-w-0 overflow-x-hidden lg:h-[calc(100vh-140px)] lg:overflow-hidden pb-2" id="sales-tab-content">
       
       {/* LEFT COLUMN */}
-      <div className="lg:col-span-8 flex flex-col h-full lg:overflow-hidden space-y-3">
+      <div className="lg:col-span-8 flex flex-col h-full min-h-0 lg:overflow-hidden space-y-3">
           <div className="flex flex-wrap gap-2 items-center">
             <div className="relative basis-full min-w-0 sm:basis-auto sm:flex-1">
             <input
@@ -675,7 +675,7 @@ export default function Sales({
 
         {/* Tailor orders view */}
         {showTailoringOrders ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="tailoring-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="tailoring-scroll-container">
             <button onClick={() => setShowTailoringOrders(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -685,7 +685,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showDesignOrders ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="design-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="design-scroll-container">
             <button onClick={() => setShowDesignOrders(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -695,7 +695,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showEateryPricing ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-pricing-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-pricing-scroll-container">
             <button onClick={() => setShowEateryPricing(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -706,7 +706,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showProduction && onAddProduction && onDeleteProduction ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">
             <button onClick={() => setShowProduction(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -718,7 +718,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showBookings ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="bookings-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="bookings-scroll-container">
             <button onClick={() => setShowBookings(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -728,7 +728,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showRepairs ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="repairs-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="repairs-scroll-container">
             <button onClick={() => setShowRepairs(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -738,7 +738,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showQuotes ? (
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="quotes-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="quotes-scroll-container">
             <button onClick={() => setShowQuotes(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -752,7 +752,7 @@ export default function Sales({
           </div>
         ) : (
         /* Products */
-        <div className="flex-1 overflow-y-auto pr-1 space-y-4 pb-2 scrollbar-thin" id="catalog-scroll-container">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-2 scrollbar-thin" id="catalog-scroll-container">
           <section className="space-y-2">
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
               {selectedCategory === 'All' ? 'All Products' : selectedCategory}
@@ -799,7 +799,7 @@ export default function Sales({
       {/* RIGHT COLUMN: CART (Desktop) */}
       <div className="lg:col-span-4 hidden lg:block h-full min-h-0 overflow-hidden">
         <div className="boss-card p-4 flex flex-col h-full min-h-0" id="desktop-cart">
-          <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
+          <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4 shrink-0">
             <div className="flex items-center gap-2 text-gold-brand">
               <ShoppingCart className="w-5 h-5" />
               <h3 className="text-xs font-bold uppercase tracking-widest font-display text-white">
@@ -830,9 +830,10 @@ export default function Sales({
           </div>
 
           {cart.length > 0 && (
-            // Scrolls internally on short screens so payment/discount can never
-            // push the Complete Sale button out of reach.
-            <div className="mt-4 pt-4 border-t border-white/5 space-y-2 shrink-0 min-h-0 overflow-y-auto">
+            // Capped + internally scrollable: on short PC screens the payment
+            // block can never shove the total + Complete Sale button out of
+            // the clipped column.
+            <div className="mt-4 pt-4 border-t border-white/5 space-y-2 shrink-0 min-h-0 max-h-[42%] overflow-y-auto">
               <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
               <div className="grid grid-cols-4 gap-1.5">
                 {/* Mistake 10 fix: one icon style, one neutral color — active state
