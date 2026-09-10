@@ -1115,7 +1115,7 @@ const colorsMap: { [key: string]: string } = {
 
       {showSupplierModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="boss-card w-full max-w-md p-6 bg-zinc-950 border border-white/5 space-y-4">
+          <div className="boss-card w-full max-w-md p-6 bg-zinc-950 border border-white/5 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-white/5">
               <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
                 <Truck className="w-5 h-5 text-gold-brand" /> {editingSupplier ? 'Edit' : 'Add'} Supplier

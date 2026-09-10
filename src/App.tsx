@@ -1656,7 +1656,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         {renderContent()}
       </main>
 
-      <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-50 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
+      {/* Bottom nav sits at z-40 (below every modal/sheet/backdrop) so no
+          form footer can ever hide behind it. Page content has no z-index,
+          so the nav still floats above scrolling content. */}
+      <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-40 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
         <button onClick={() => setActiveTab('sales')} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />

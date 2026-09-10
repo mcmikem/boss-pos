@@ -797,8 +797,8 @@ export default function Sales({
       </div>
 
       {/* RIGHT COLUMN: CART (Desktop) */}
-      <div className="lg:col-span-4 hidden lg:block h-full overflow-hidden">
-        <div className="boss-card p-4 flex flex-col h-full" id="desktop-cart">
+      <div className="lg:col-span-4 hidden lg:block h-full min-h-0 overflow-hidden">
+        <div className="boss-card p-4 flex flex-col h-full min-h-0" id="desktop-cart">
           <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
             <div className="flex items-center gap-2 text-gold-brand">
               <ShoppingCart className="w-5 h-5" />
@@ -814,7 +814,7 @@ export default function Sales({
             )}
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-1 space-y-3 scrollbar">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 scrollbar">
             {cart.map(renderCartItem)}
             {cart.length === 0 && (
               <div className="h-full flex flex-col justify-center items-center text-center py-6 px-2 space-y-4">
@@ -830,7 +830,9 @@ export default function Sales({
           </div>
 
           {cart.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-white/5 space-y-2">
+            // Scrolls internally on short screens so payment/discount can never
+            // push the Complete Sale button out of reach.
+            <div className="mt-4 pt-4 border-t border-white/5 space-y-2 shrink-0 min-h-0 overflow-y-auto">
               <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
               <div className="grid grid-cols-4 gap-1.5">
                 {/* Mistake 10 fix: one icon style, one neutral color — active state
@@ -942,7 +944,7 @@ export default function Sales({
             </div>
           )}
 
-          <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
+          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 shrink-0">
             {discountNum > 0 && (
               <div className="flex justify-between text-zinc-500 text-sm font-medium">
                 <span>{t(lang, 'subtotal')}</span>
@@ -1051,7 +1053,7 @@ export default function Sales({
           </div>
           {/* Improvement 2: sticky bottom action — total + CTA stay visible while
               the sheet scrolls, so the cashier can act the moment they decide. */}
-          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 sticky bottom-0 bg-[#141414] pb-1">
+          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 sticky bottom-0 bg-[#141414] pb-[max(0.25rem,env(safe-area-inset-bottom))]">
             <div className="flex justify-between items-center">
               <span className="text-[13px] font-semibold text-zinc-300">{t(lang, 'total')}</span>
               <span className="text-2xl font-bold text-gold-brand font-display tabular-nums">{formatCurrency(total)}</span>
