@@ -411,7 +411,7 @@ export default function Dashboard({
       {/* RECEIPT MODAL */}
       {selectedSaleForModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl relative overflow-x-hidden overflow-y-auto animate-in fade-in zoom-in-95 duration-150 max-h-[92vh]">
             <div className="absolute -right-16 -top-16 w-36 h-36 rounded-full bg-gold-brand/10 blur-2xl pointer-events-none"></div>
 
             <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-4">

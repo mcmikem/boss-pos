@@ -208,7 +208,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           </button>
         </div>
 
-        <div className="bg-white text-black font-mono rounded-xl p-4 overflow-y-auto min-h-[240px]">
+        <div className="bg-white text-black font-mono rounded-xl p-4 overflow-y-auto flex-1 min-h-[120px]">
           <div className="text-center">
             <h1 className="text-sm font-black uppercase tracking-wider">{settings.shopName || 'My Shop'}</h1>
             <p className="text-[10px] text-zinc-600">Uganda • POS</p>

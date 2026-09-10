@@ -1735,7 +1735,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               className="w-full h-10 mb-4 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60">
               <RefreshCw className={`w-4 h-4 ${updatingApp ? 'animate-spin' : ''}`} /> {updatingApp ? 'Checking…' : 'Update app to newest version'}
             </button>
-            <div className="space-y-4 flex-1 overflow-y-auto pr-1">
+            <div className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1">
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Name</label>
                 <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'My Shop' }))}

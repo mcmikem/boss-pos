@@ -24,7 +24,7 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[120] flex items-center justify-center p-4">
-      <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl">
+      <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
           <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
             <User className="w-4 h-4 text-gold-brand" /> Who is selling?
@@ -35,7 +35,7 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-2 mb-4">
+        <div className="grid grid-cols-2 gap-2 mb-4 max-h-[32vh] overflow-y-auto">
           {staff.map((s) => (
             <button key={s.id} onClick={() => { setSelectedId(s.id); setPin(''); }}
               className={`h-14 rounded-xl border text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${

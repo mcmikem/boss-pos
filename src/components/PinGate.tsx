@@ -70,7 +70,7 @@ export default function PinGate({ onUnlock, shopName }: PinGateProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-[#0A0A0A] z-[200] flex flex-col items-center justify-center p-6">
+    <div className="fixed inset-0 bg-[#0A0A0A] z-[200] flex flex-col items-center justify-center p-6 overflow-y-auto">
       <div className="w-16 h-16 rounded-full bg-gold-brand/10 border border-gold-brand/30 flex items-center justify-center mb-6">
         <Lock className="w-7 h-7 text-gold-brand" />
       </div>

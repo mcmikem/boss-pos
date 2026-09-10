@@ -19,7 +19,7 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isComplet
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-      <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl">
+      <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
         <h3 className="text-sm font-black text-white uppercase tracking-wider text-center mb-2">{t(lang, 'confirmSale')}</h3>
         <div className="bg-[#0A0A0A] border border-white/5 rounded-xl p-4 space-y-2 mb-4">
           <div className="flex justify-between text-xs">
