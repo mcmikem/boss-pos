@@ -6,6 +6,7 @@ import {
 import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Recipe, RecipeIngredient } from '../types';
 import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
+import StocktakePanel from './StocktakePanel';
 import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
 import { parseQty } from '../utils/units';
 import { expiryStatus, daysUntilExpiry } from '../utils/dates';
@@ -71,6 +72,7 @@ export default function Inventory({
   const [newExpiry, setNewExpiry] = useState('');
   // Bale-day bulk entry: rapid name + price rows, details later.
   const [showBulk, setShowBulk] = useState(false);
+  const [showStocktake, setShowStocktake] = useState(false);
   const [bulkCategory, setBulkCategory] = useState('');
   const [bulkRows, setBulkRows] = useState<{ name: string; price: string }[]>([{ name: '', price: '' }]);
   const [newImageUrl, setNewImageUrl] = useState('');
@@ -549,6 +551,12 @@ export default function Inventory({
 
   return (
     <div className="space-y-6" id="inventory-tab-content">
+      {showStocktake ? (
+        <StocktakePanel products={products} onUpdateProduct={onUpdateProduct}
+          formatCurrency={formatCurrency} triggerToast={triggerToast}
+          onBack={() => setShowStocktake(false)} />
+      ) : (
+      <>
       <section className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
         <div className="relative flex-1">
           <input type="text" placeholder="Search products..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
@@ -560,6 +568,11 @@ export default function Inventory({
             className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
             title="Bale day: add many products fast, details later">
             <Plus className="w-4 h-4" /> Bulk
+          </button>
+          <button onClick={() => setShowStocktake(true)}
+            className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-cyan-400/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            title="Count the shelves and reconcile with system stock">
+            <ListChecks className="w-4 h-4" /> Count
           </button>
           <span className="text-xs font-bold text-zinc-500 uppercase">Sort</span>
           <select value={sortBy} onChange={(e: any) => setSortBy(e.target.value)}
@@ -1191,6 +1204,8 @@ export default function Inventory({
           onClose={() => setShowCategoryManager(false)}
           triggerToast={triggerToast}
         />
+      )}
+      </>
       )}
     </div>
   );

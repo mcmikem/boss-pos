@@ -6,6 +6,7 @@ import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTri
 import type { Sale, CreditEat, Product } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
+import { stockoutLosses } from '../utils/stockout';
 
 interface MorningBriefProps {
   sales: Sale[];
@@ -30,12 +31,14 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     const yesterday = localDayKey(new Date(Date.now() - 86400000).toISOString());
     const t = revenueOnDay(sales, today, localDayKey);
     const y = revenueOnDay(sales, yesterday, localDayKey);
+    const stockout = stockoutLosses(products, sales, 7, today);
     return {
       today: t,
       delta: dayDelta(t.revenue, y.revenue),
       owed: outstandingCredit(creditEats),
       low: lowStockCount(products),
       expiring: expiringCount(products, todayLocalKey()),
+      stockout,
     };
   }, [sales, products, creditEats]);
 
@@ -102,6 +105,15 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
           <span className="text-[11px] font-bold text-amber-300 uppercase">
             {brief.expiring} item{brief.expiring !== 1 ? 's' : ''} expired or expiring soon — check stock
+          </span>
+        </button>
+      )}
+      {brief.stockout.total > 0 && (
+        <button onClick={() => onNavigate('inventory')}
+          className="mt-2 w-full flex items-center gap-2 bg-rose-950/30 border border-rose-800/40 rounded-xl px-3 py-2.5 text-left transition-all active:scale-[0.99] cursor-pointer">
+          <PackageX className="w-4 h-4 text-rose-400 shrink-0" />
+          <span className="text-[11px] font-bold text-rose-300 uppercase">
+            Out of {brief.stockout.lines[0]?.product.name}{brief.stockout.lines.length > 1 ? ` +${brief.stockout.lines.length - 1} more` : ''} — losing ~{formatCurrency(brief.stockout.total)}/day
           </span>
         </button>
       )}
