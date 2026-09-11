@@ -92,54 +92,15 @@ const LU: Record<SellKey, string> = {
   off: 'ezikendedde',
 };
 
-// Everyday Swahili as spoken in shops across Uganda.
-const SW: Record<SellKey, string> = {
-  sell: 'Uza',
-  stock: 'Stoki',
-  spend: 'Tumia',
-  reports: 'Ripoti',
-  closeDay: 'Funga',
-  searchItems: 'Tafuta bidhaa...',
-  searchAll: 'Tafuta jina, aina, au barcode...',
-  all: 'Zote',
-  payment: 'Malipo',
-  cash: 'Pesa',
-  credit: 'Deni',
-  customerName: 'Jina la mteja',
-  customerNameEx: 'e.g. John Mukasa',
-  discount: 'Punguzo',
-  roundTo100: 'Kamilisha 100',
-  clear: 'Futa',
-  cashReceived: 'Pesa zilizopokelewa:',
-  amount: 'Kiasi',
-  exact: 'Sawa',
-  change: 'Chenji:',
-  stillNeed: 'Inayobaki:',
-  subtotal: 'Jumla ndogo',
-  total: 'Jumla',
-  completeSale: 'Maliza mauzo',
-  confirmSale: 'Thibitisha mauzo',
-  items: 'bidhaa',
-  itemsLabel: 'Bidhaa',
-  cancel: 'Ghairi',
-  confirm: 'Thibitisha',
-  saving: 'Inahifadhi...',
-  backToProducts: 'Rudi kwa bidhaa',
-  checkout: 'Malipo',
-  closeBtn: 'Funga',
-  off: 'punguzo',
-};
-
 export function normalizeLang(v: unknown): SellLang {
   if (v === 'luganda' || v === 'swahili') return v;
   return 'english';
 }
 
 // t('luganda', 'total') -> 'Omugatte'. Unknown language or key falls back
-// to English so the till never renders a blank label.
+// to English so the till never renders a blank label. (Swahili was dropped:
+// it is barely used in Ugandan shops, so it only cluttered the selector.)
 export function t(lang: unknown, key: SellKey): string {
-  const l = normalizeLang(lang);
-  if (l === 'luganda') return LU[key] || EN[key];
-  if (l === 'swahili') return SW[key] || EN[key];
+  if (normalizeLang(lang) === 'luganda') return LU[key] || EN[key];
   return EN[key];
 }

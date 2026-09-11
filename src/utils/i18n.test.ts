@@ -25,14 +25,7 @@ describe('t', () => {
     expect(t('english', 'total')).toBe('Total');
     expect(t(undefined, 'total')).toBe('Total');
     expect(t('french', 'total')).toBe('Total');
-  });
-
-  it('returns Swahili for the sell-screen keys', () => {
-    expect(t('swahili', 'sell')).toBe('Uza');
-    expect(t('swahili', 'total')).toBe('Jumla');
-    expect(t('swahili', 'completeSale')).toBe('Maliza mauzo');
-    expect(t('swahili', 'credit')).toBe('Deni');
-    expect(t('swahili', 'confirm')).toBe('Thibitisha');
+    expect(t('swahili', 'total')).toBe('Total');
   });
 
   it('never returns an empty label', () => {
@@ -46,7 +39,6 @@ describe('t', () => {
     ];
     for (const key of keys) {
       expect(t('luganda', key).length).toBeGreaterThan(0);
-      expect(t('swahili', key).length).toBeGreaterThan(0);
       expect(t('english', key).length).toBeGreaterThan(0);
     }
   });

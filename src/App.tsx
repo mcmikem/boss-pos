@@ -1840,9 +1840,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
                   <option value="english">English</option>
                   <option value="luganda">Luganda (sell screen)</option>
-                  <option value="swahili">Swahili (sell screen)</option>
                 </select>
-                <p className="text-[10px] text-zinc-600">Luganda and Swahili cover the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
+                <p className="text-[10px] text-zinc-600">Luganda covers the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Extra Modules</label>
