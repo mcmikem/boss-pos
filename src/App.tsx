@@ -24,6 +24,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
 import MorningBrief from './components/MorningBrief';
+import { AdminDashboard } from './components/AdminDashboard';
 import StaffSwitcher from './components/StaffSwitcher';
 import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
 import SyncProductsButton from './components/SyncProductsButton';
@@ -1631,6 +1632,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleRetry = () => window.location.reload();
+
+  // Hidden super-agent console: not linked anywhere in the till UI, needs
+  // the server SUPER_ADMIN_SECRET. Bypasses the till lock on purpose.
+  if (typeof window !== 'undefined' && window.location.hash === '#admin') {
+    return <AdminDashboard />;
+  }
 
   if (authState === 'locked') {
     return <PinGate onUnlock={handleUnlock} shopName={settings.shopName} />;
