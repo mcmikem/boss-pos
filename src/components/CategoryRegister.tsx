@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText
 } from 'lucide-react';
+import StatementModal from './StatementModal';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
@@ -24,6 +25,7 @@ interface CategoryRegisterProps {
   onAddMomoTransfer: (t: MomoTransfer) => void;
   onDeleteMomoTransfer: (id: string) => void;
   staffName?: string;
+  shopName?: string;
   eodCapital?: Record<string, number>;
   onSetEodCapital?: (category: string, value: number) => void;
   formatCurrency: (val: number) => string;
@@ -57,7 +59,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  staffName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
+  staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
   onPrintClose, onSendClose, features,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
@@ -189,6 +191,7 @@ export default function CategoryRegister({
 
   const [payId, setPayId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
+  const [statementFor, setStatementFor] = useState<string | null>(null);
 
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
@@ -690,10 +693,16 @@ export default function CategoryRegister({
                     <p className="text-[10px] text-zinc-500 font-bold">due of {formatCurrency(c.total)}</p>
                   </div>
                 </div>
+                <div className="flex gap-2 mt-2">
                 <button onClick={() => { setPayId(c.id); setPayAmount(String(c.total - c.paidAmount)); }}
-                  className="mt-2 w-full h-9 bg-emerald-600/15 text-emerald-400 border border-emerald-600/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/25 cursor-pointer">
+                  className="flex-1 h-9 bg-emerald-600/15 text-emerald-400 border border-emerald-600/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/25 cursor-pointer">
                   Record Payment
                 </button>
+                <button onClick={() => setStatementFor(c.customerName)} title={`Print ${c.customerName}'s statement`}
+                  className="h-9 px-3 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:border-gold-brand/40 hover:text-gold-brand cursor-pointer flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5" /> Bill
+                </button>
+                </div>
               </div>
             )})}
           </div>
@@ -945,6 +954,12 @@ export default function CategoryRegister({
       </section>
 
       {/* Payment modal */}
+      {statementFor && (
+        <StatementModal customerName={statementFor}
+          entries={catCreditEats.filter(e => e.customerName === statementFor)}
+          shopName={shopName || 'My Shop'}
+          formatCurrency={formatCurrency} onClose={() => setStatementFor(null)} />
+      )}
       {payId && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-[#141414] border border-white/10 rounded-2xl w-full max-w-sm p-6 shadow-2xl">

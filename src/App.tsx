@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { t } from './utils/i18n';
@@ -14,6 +14,7 @@ import { verifyPinAgainstHash } from './utils/crypto';
 import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
 import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
+import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
 import { initSentry } from './utils/sentry';
@@ -192,7 +193,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [efrisToken, setEfrisToken] = useState('');
   const [efrisHasToken, setEfrisHasToken] = useState(false);
   const [efrisSaving, setEfrisSaving] = useState(false);
-  const [outboxPreview, setOutboxPreview] = useState<{ path: string; method: string; age: string }[]>([]);
+  const [outboxPreview, setOutboxPreview] = useState<{ id: string; path: string; method: string; age: string }[]>([]);
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [reconcileResult, setReconcileResult] = useState<{ salesChecked: number; totalMismatches: number; negativeStock: { id: string; name: string; qty: number }[] } | null>(null);
@@ -545,7 +546,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           const m = Math.round((Date.now() - queuedAt)/60000);
           return m < 1 ? 'now' : m < 60 ? `${m}m` : `${Math.round(m/60)}h`;
         };
-        setOutboxPreview(list.slice(0, 8).map(e => ({ path: e.path, method: e.method, age: fmt(e.queuedAt) })));
+        setOutboxPreview(list.slice(0, 8).map(e => ({ id: e.id, path: e.path, method: e.method, age: fmt(e.queuedAt) })));
       } catch {}
     };
     load();
@@ -1565,6 +1566,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onAddMomoTransfer={handleAddMomoTransfer}
             onDeleteMomoTransfer={handleDeleteMomoTransfer}
             staffName={staffName || undefined}
+            shopName={settings.shopName}
             eodCapital={settings.eodCapital}
             onSetEodCapital={(cat, value) => setSettings(prev => ({ ...prev, eodCapital: { ...(prev.eodCapital || {}), [cat]: value } }))}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
@@ -1838,8 +1840,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
                   <option value="english">English</option>
                   <option value="luganda">Luganda (sell screen)</option>
+                  <option value="swahili">Swahili (sell screen)</option>
                 </select>
-                <p className="text-[10px] text-zinc-600">Luganda covers the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
+                <p className="text-[10px] text-zinc-600">Luganda and Swahili cover the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Extra Modules</label>
@@ -2231,10 +2234,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <div className="rounded-xl border border-amber-800/30 bg-amber-950/20 overflow-hidden">
                     <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 border-b border-amber-800/20">Queue — {pendingCount} pending</div>
                     <div className="divide-y divide-white/5 max-h-32 overflow-y-auto">
-                      {outboxPreview.map((e, i) => (
-                        <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[10px] font-bold">
-                          <span className="text-zinc-300 truncate pr-2">{e.method} {e.path}</span>
+                      {outboxPreview.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between gap-2 px-3 py-1.5 text-[10px] font-bold">
+                          <span className="text-zinc-300 truncate pr-2 min-w-0">{e.method} {e.path}</span>
                           <span className="text-zinc-500 shrink-0">{e.age} ago</span>
+                          <button onClick={() => {
+                            if (!confirm(`Drop this queued change (${e.method} ${e.path})? It will never reach the server.`)) return;
+                            dropOutboxEntry(e.id);
+                            setPendingCount(outboxCount());
+                            triggerToast('Queued change dropped', 'info');
+                          }} aria-label={`Drop ${e.method} ${e.path}`}
+                            className="shrink-0 text-zinc-600 hover:text-rose-400 font-black uppercase text-[9px] px-1.5 py-1 cursor-pointer">
+                            Drop
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -2307,6 +2319,29 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4" /> Download Backup
                 </button>
+                <div>
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Accountant exports (CSV)</label>
+                  <div className="grid grid-cols-3 gap-2 mt-1.5">
+                    {([
+                      ['Sales', () => salesCsv(sales), 'sales'],
+                      ['Stock', () => productsCsv(products), 'stock'],
+                      ['Credit', () => creditCsv(creditEats), 'credit'],
+                    ] as const).map(([label, build, kind]) => (
+                      <button key={kind} onClick={() => {
+                        try {
+                          const slug = (settings.shopName || 'pos').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                          const ok = downloadBlob(new Blob([build()], { type: 'text/csv' }), `${slug}-${kind}-${new Date().toISOString().slice(0, 10)}.csv`);
+                          triggerToast(ok ? `${label} CSV downloaded` : 'Download failed on this device', ok ? 'success' : 'error');
+                        } catch {
+                          triggerToast('Export failed', 'error');
+                        }
+                      }}
+                        className="h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                        {label} CSV
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button onClick={() => restoreInputRef.current?.click()}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
                   <Download className="w-4 h-4 rotate-180" /> Restore from Backup

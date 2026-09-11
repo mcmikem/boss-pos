@@ -176,6 +176,12 @@ export function clearOutbox(): void {
   import('./utils/outboxIdb').then(m => m.idbOutboxSet('[]').catch(()=>{})).catch(()=>{});
 }
 
+// Drop a single queued change (per-row control in Settings → queue). The
+// rest of the queue is untouched and still replays on the next sync.
+export function dropOutboxEntry(id: string): void {
+  saveOutbox(getOutbox().filter(e => e.id !== id));
+}
+
 export async function flushOutbox(): Promise<number> {
   // Prefer IndexedDB (quota-free) if available, else LS
   let list: OutboxEntry[] = getOutbox();
