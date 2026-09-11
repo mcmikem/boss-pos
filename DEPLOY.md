@@ -26,16 +26,16 @@ git push -u origin main
 2. Click **"New +"** → **"Web Service"**
 3. Connect your GitHub repo
 4. Settings:
-   - **Name:** `imac-pos`
+    - **Name:** `boss-pos-ug`
    - **Runtime:** Node
    - **Build Command:** `npm install && npm run build`
    - **Start Command:** `node server.js`
 5. Click **"Create Web Service"**
 6. Wait 2-3 minutes for first deploy
-7. Your permanent URL will be: `https://imac-pos.onrender.com`
+7. Your permanent URL will be: `https://boss-pos-ug.onrender.com`
 
 ### Step 4: Install as PWA on Phones
-1. Open `https://imac-pos.onrender.com` on your phone
+1. Open `https://boss-pos-ug.onrender.com` on your phone
 2. **iPhone:** Tap Share icon → "Add to Home Screen"
 3. **Android:** Tap 3-dot menu → "Install App" or "Add to Home Screen"
 4. The app icon will appear on your home screen!
@@ -49,7 +49,7 @@ git push -u origin main
 The server keeps its own snapshots (last 30, one per 24h) and also auto-backs up opportunistically on boot/sale, so nothing needs to be set up for basic protection. To guarantee a daily run, add a cron that hits the backup endpoint with your `CRON_SECRET`:
 
 - **Vercel:** add a Cron Job (e.g. every day at 03:00 UTC) targeting `https://your-app.vercel.app/api/cron/backup` with header `Authorization: Bearer YOUR_CRON_SECRET`.
-- **Render:** use an external cron service (cron-job.org, GitHub Actions cron) hitting `https://imac-pos.onrender.com/api/cron/backup` with the same bearer header.
+- **Render:** use an external cron service (cron-job.org, GitHub Actions cron) hitting `https://boss-pos-ug.onrender.com/api/cron/backup` with the same bearer header.
 
 ### Backups — what actually happens
 - Snapshots are JSON blobs stored in the `backups` table inside Postgres itself (last 30 kept, one claimed per 24h, idempotent across cold starts). Every table is captured: products, suppliers, sales, expenses, settings, credit payments/transfer register, tailoring/design orders, stock movements, credit eats, production register, wastage log, momo transfers.

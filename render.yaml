@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: imac-pos
+    name: boss-pos-ug
     runtime: node
     plan: free
     buildCommand: npm install && npm run build

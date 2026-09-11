@@ -62,7 +62,7 @@
 
 ## Critical Context
 - Commits pushed: `eed5ac1` (HEAD, large-format calc + invoice), `87566f1` (design & print module), `d8850cd` (offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
-- Vercel prod: `https://imac-pos.vercel.app` (project `imac-pos`, CLI 51.7.0 at `/usr/local/bin/vercel`)
+- Vercel prod: `https://boss-pos-ug.vercel.app` (project `imac-pos`, CLI 51.7.0 at `/usr/local/bin/vercel`)
 - Old-Android stack already live: `@vitejs/plugin-legacy@^6.1.1` (NOT v8), `lightningcss@^1.33.0`, `deLayerCSS()` unwraps `@layer` + converts `oklch()`→`rgb()`, targets `Android >= 5 / Chrome >= 49 / iOS >= 12 / Safari >= 12`, all 107 `color-mix` guarded by `@supports`
 - `src/utils/crypto.ts`: SHA-256 via `crypto.subtle` with `cyrb53` fallback prefixed `fb_`
 - Old plaintext PINs won't match new hashes — users must clear/re-set PIN
