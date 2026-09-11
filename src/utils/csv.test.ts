@@ -18,7 +18,7 @@ describe('salesCsv', () => {
 describe('productsCsv', () => {
   it('lists stock rows', () => {
     const csv = productsCsv([{ id: 'p', name: 'Tea', category: 'Eatery', cost: 400, price: 1000, stockQty: 5, lowStockThreshold: 2 } as Product]);
-    expect(csv).toContain('Tea,Eatery,400,1000,5,2');
+    expect(csv).toContain('Tea,Eatery,400,1000,5,2,');
   });
 });
 

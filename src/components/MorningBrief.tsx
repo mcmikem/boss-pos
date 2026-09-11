@@ -2,10 +2,10 @@
 // yesterday, who still owes (credit), what is running out, what hasn't
 // synced. Manager-only, every tile jumps to the screen that fixes it.
 import { useMemo } from 'react';
-import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw } from 'lucide-react';
+import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle } from 'lucide-react';
 import type { Sale, CreditEat, Product } from '../types';
-import { localDayKey } from '../utils/dates';
-import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta } from '../utils/brief';
+import { localDayKey, todayLocalKey } from '../utils/dates';
+import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
 
 interface MorningBriefProps {
   sales: Sale[];
@@ -35,6 +35,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       delta: dayDelta(t.revenue, y.revenue),
       owed: outstandingCredit(creditEats),
       low: lowStockCount(products),
+      expiring: expiringCount(products, todayLocalKey()),
     };
   }, [sales, products, creditEats]);
 
@@ -95,6 +96,15 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
           </button>
         ))}
       </div>
+      {brief.expiring > 0 && (
+        <button onClick={() => onNavigate('inventory')}
+          className="mt-2 w-full flex items-center gap-2 bg-amber-950/30 border border-amber-800/40 rounded-xl px-3 py-2.5 text-left transition-all active:scale-[0.99] cursor-pointer">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span className="text-[11px] font-bold text-amber-300 uppercase">
+            {brief.expiring} item{brief.expiring !== 1 ? 's' : ''} expired or expiring soon — check stock
+          </span>
+        </button>
+      )}
     </section>
   );
 }

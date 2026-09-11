@@ -20,6 +20,7 @@ import Fuse from 'fuse.js';
 import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
+import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart } from '../utils/parked';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
 // bundle) stays small — important on the slow connections this app targets.
@@ -121,6 +122,43 @@ export default function Sales({
   const hasDesignStock = useMemo(() => products.some(p => p.category === 'Graphics' || p.category === 'Printing'), [products]);
   // Till-control master switches (Settings → Till control). All default ON.
   const featsOn = (k: 'fastSellers' | 'quickCash' | 'autoTools') => isOn(settings?.features, k);
+  // Suspended carts: park a half-built sale, recall it later. Till-local only.
+  const [parked, setParked] = useState<ParkedCart[]>(() => {
+    try { return loadParked(); } catch { return []; }
+  });
+  const parkCurrent = () => {
+    if (cart.length === 0) return;
+    const name = window.prompt('Park this sale under which name?', customerName || '');
+    if (name === null) return;
+    setParked(parkCart({ name: name.trim() || `Customer ${parked.length + 1}`, items: cart, paymentMethod, customerName }));
+    setCart([]);
+    triggerToast('Sale parked — recall it from the cart', 'success');
+  };
+  const recallParked = (id: string) => {
+    const entry = parked.find(p => p.id === id);
+    if (!entry) return;
+    if (cart.length > 0 && !window.confirm(`Replace the current cart with ${entry.name}'s parked sale?`)) return;
+    setCart(entry.items);
+    if (entry.paymentMethod) setPaymentMethod(entry.paymentMethod as never);
+    setCustomerName(entry.customerName || '');
+    setParked(unparkCart(id));
+    triggerToast(`Recalled ${entry.name}'s sale`, 'info');
+  };
+  const renderParkedRows = () => parked.length > 0 ? (
+    <div className="space-y-1.5">
+      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Parked ({parked.length})</p>
+      {parked.map(p => (
+        <div key={p.id} className="flex items-center gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
+          <button onClick={() => recallParked(p.id)} className="flex-1 min-w-0 text-left cursor-pointer">
+            <span className="block text-xs font-black text-white truncate">{p.name}</span>
+            <span className="block text-[10px] text-zinc-500 font-bold">{parkedCount(p)} items • {formatCurrency(parkedTotal(p))}</span>
+          </button>
+          <button onClick={() => setParked(unparkCart(p.id))} aria-label={`Drop parked sale ${p.name}`}
+            className="shrink-0 text-zinc-600 hover:text-rose-400 font-bold text-lg leading-none px-1 cursor-pointer">×</button>
+        </div>
+      ))}
+    </div>
+  ) : null;
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
   const [showDesignOrders, setShowDesignOrders] = useState<boolean>(false);
   const [showBookings, setShowBookings] = useState<boolean>(false);
@@ -844,14 +882,21 @@ export default function Sales({
               </h3>
             </div>
             {cart.length > 0 && (
+              <div className="flex items-center gap-1">
+              <button onClick={parkCurrent}
+                className="text-xs text-zinc-500 hover:text-gold-brand uppercase font-bold flex items-center gap-1.5 transition-colors touch-target cursor-pointer">
+                Park
+              </button>
               <button onClick={() => setShowClearConfirm(true)}
                 className="text-xs text-zinc-500 hover:text-rose-400 uppercase font-bold flex items-center gap-1.5 transition-colors touch-target cursor-pointer">
                 <Trash2 className="w-4 h-4" /> Clear
               </button>
+              </div>
             )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 scrollbar">
+            {renderParkedRows()}
             {cart.map(renderCartItem)}
             {cart.length === 0 && (
               <div className="h-full flex flex-col justify-center items-center text-center py-6 px-2 space-y-4">
@@ -1033,9 +1078,15 @@ export default function Sales({
             <h3 className="text-sm font-bold text-zinc-100 tracking-wide font-display flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-gold-brand" /> {t(lang, 'checkout')}
             </h3>
-            <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">{t(lang, 'closeBtn')}</button>
+            <div className="flex items-center gap-3">
+              {cart.length > 0 && (
+                <button onClick={parkCurrent} className="text-xs text-zinc-400 font-semibold hover:text-gold-brand cursor-pointer touch-target">Park</button>
+              )}
+              <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">{t(lang, 'closeBtn')}</button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] max-h-[40vh]">
+            {renderParkedRows()}
             {cart.map(item => (
               <div key={`${item.productId}::${item.variantId || ''}`} className="bg-[#0A0A0A] border border-white/5 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
                 <div className="min-w-0 flex-1">

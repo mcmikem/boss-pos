@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta } from './brief';
+import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from './brief';
 import type { Sale, CreditEat, Product } from '../types';
 
 const dayOf = (ts: string) => ts.slice(0, 10);
@@ -50,5 +50,18 @@ describe('dayDelta', () => {
     expect(dayDelta(7000, 3500)).toBe(100);
     expect(dayDelta(1000, 2000)).toBe(-50);
     expect(dayDelta(0, 0)).toBeNull();
+  });
+});
+
+describe('expiringCount', () => {
+  it('counts expired and soon items, skips services and dateless', () => {
+    const prods = [
+      { expiryDate: '2026-09-01' },
+      { expiryDate: '2026-09-20' },
+      { expiryDate: '2027-01-01' },
+      { expiryDate: '2026-09-01', isService: true },
+      {},
+    ] as Product[];
+    expect(expiringCount(prods, '2026-09-11')).toBe(2);
   });
 });

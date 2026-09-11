@@ -26,8 +26,8 @@ export function salesCsv(sales: Sale[]): string {
 
 export function productsCsv(products: Product[]): string {
   return toCsv(
-    ['id', 'name', 'category', 'cost', 'price', 'stock', 'low_threshold'],
-    products.map(p => [p.id, p.name, p.category, p.cost, p.price, p.stockQty, p.lowStockThreshold ?? ''])
+    ['id', 'name', 'category', 'cost', 'price', 'stock', 'low_threshold', 'expiry'],
+    products.map(p => [p.id, p.name, p.category, p.cost, p.price, p.stockQty, p.lowStockThreshold ?? '', p.expiryDate ?? ''])
   );
 }
 
