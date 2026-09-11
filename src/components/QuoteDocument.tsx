@@ -2,10 +2,11 @@
 // pattern as the design-orders invoice: window.print with a print-only CSS
 // gate on #print-quote-doc, plus WhatsApp share of the matching text.
 import { useState } from 'react';
-import { X, Printer, MessageCircle } from 'lucide-react';
+import { X, Printer, MessageCircle, Bluetooth } from 'lucide-react';
 import type { Quote } from '../types';
 import { buildQuoteText, buildInvoiceText, quoteDocRef } from '../utils/quotes';
 import { supplierWhatsAppUrl } from '../utils/suppliers';
+import { printViaBluetooth } from '../utils/bluetoothPrint';
 
 interface QuoteDocumentProps {
   quote: Quote;
@@ -27,6 +28,17 @@ export default function QuoteDocument({ quote, shopName, formatCurrency, trigger
     const url = supplierWhatsAppUrl(quote.customerPhone, text);
     if (!url) { triggerToast('Add the customer phone number first', 'error'); return; }
     window.open(url, '_blank', 'noopener');
+  };
+
+  const printBT = async () => {
+    try {
+      const text = kind === 'quote' ? buildQuoteText(shopName, quote) : buildInvoiceText(shopName, quote);
+      const ok = await printViaBluetooth(text);
+      if (ok) triggerToast('Sent to Bluetooth printer', 'success');
+      else triggerToast('Bluetooth printer not found', 'error');
+    } catch (e) {
+      triggerToast((e as Error).message || 'Bluetooth print failed', 'error');
+    }
   };
 
   return (
@@ -115,7 +127,12 @@ export default function QuoteDocument({ quote, shopName, formatCurrency, trigger
           </div>
         </div>
 
-        <div className="print:hidden p-5 pt-3 border-t border-zinc-200 flex gap-2 bg-white rounded-b-3xl pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        <div className="print:hidden p-5 pt-3 border-t border-zinc-200 bg-white rounded-b-3xl pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-2">
+          <button onClick={printBT}
+            className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2">
+            <Bluetooth className="w-4 h-4" /> Bluetooth printer
+          </button>
+          <div className="flex gap-2">
           <button onClick={() => window.print()}
             className="flex-1 h-12 border border-zinc-800 text-zinc-800 font-bold text-xs rounded-xl uppercase tracking-wider hover:bg-zinc-100 transition-all cursor-pointer flex items-center justify-center gap-2">
             <Printer className="w-4 h-4" /> Print
@@ -128,6 +145,7 @@ export default function QuoteDocument({ quote, shopName, formatCurrency, trigger
             className="h-12 w-12 border border-zinc-300 text-zinc-400 hover:text-zinc-800 rounded-xl flex items-center justify-center transition-all cursor-pointer">
             <X className="w-5 h-5" />
           </button>
+          </div>
         </div>
       </div>
     </div>

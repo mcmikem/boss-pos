@@ -21,6 +21,7 @@ import { logPriceChange } from './utils/priceHistory';
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
+import MorningBrief from './components/MorningBrief';
 import StaffSwitcher from './components/StaffSwitcher';
 import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
 import SyncProductsButton from './components/SyncProductsButton';
@@ -820,8 +821,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     triggerToast(pin ? 'PIN set successfully' : 'PIN removed', 'success');
   };
 
-  const handleExportData = async () => {
+  // Briefing-tile sync: same force-sync as Settings, minus the inspector detail.
+  const handleForceSync = async () => {
     try {
+      const n = await flushOutbox();
+      const left = outboxCount();
+      setPendingCount(left);
+      if (n > 0) {
+        triggerToast(`Force-synced ${n} change(s)`, 'success');
+        fetchAllData().catch(() => {});
+      } else if (left > 0) triggerToast('Still queued — re-enter PIN if needed', 'error');
+      else triggerToast('Nothing pending', 'info');
+    } catch {
+      triggerToast('Sync failed', 'error');
+    }
+  };
+
+  const handleExportData = async () => {    try {
       const data = await exportApi.download();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const slug = (settings.shopName || 'pos').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -1426,6 +1442,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       case 'sales':
         return (
           <ErrorBoundary key="sales">
+          {isManager && (
+            <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
+              formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync} />
+          )}
           {isManager && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
               window.matchMedia('(display-mode: standalone)').matches ||
