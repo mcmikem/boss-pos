@@ -321,6 +321,7 @@ export interface StoreSettings {
   branches?: string[];
   eodCapital?: Record<string, number>;
   largeText?: boolean; // accessibility: bigger type + targets (Settings → Display)
+  features?: Record<string, boolean>; // Till control master switches (all default ON)
   lastSheetOk?: boolean;
   lastSheetAt?: string;
   lastSheetError?: string;

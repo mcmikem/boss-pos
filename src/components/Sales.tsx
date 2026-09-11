@@ -19,6 +19,7 @@ import ProfitAnalyzerModal from './ProfitAnalyzerModal';
 import Fuse from 'fuse.js';
 import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
+import { isOn } from '../utils/features';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
 // bundle) stays small — important on the slow connections this app targets.
@@ -118,6 +119,8 @@ export default function Sales({
   // manual Settings toggle hunt required (toggle still forces them on).
   const hasTailoringStock = useMemo(() => products.some(p => p.category === 'Tailoring'), [products]);
   const hasDesignStock = useMemo(() => products.some(p => p.category === 'Graphics' || p.category === 'Printing'), [products]);
+  // Till-control master switches (Settings → Till control). All default ON.
+  const featsOn = (k: 'fastSellers' | 'quickCash' | 'autoTools') => isOn(settings?.features, k);
   const [showTailoringOrders, setShowTailoringOrders] = useState<boolean>(false);
   const [showDesignOrders, setShowDesignOrders] = useState<boolean>(false);
   const [showBookings, setShowBookings] = useState<boolean>(false);
@@ -613,7 +616,7 @@ export default function Sales({
         )}
 
         {/* Fast sellers strip — rush-hour one-tap selling */}
-        {pinnedProducts.length > 0 && (
+        {featsOn('fastSellers') && pinnedProducts.length > 0 && (
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label="Fast sellers">
             {pinnedProducts.map(p => (
               <button key={p.id} onClick={() => handleAddToCart(p)}
@@ -673,7 +676,7 @@ export default function Sales({
           </div>
         )}
 
-        {(settings?.showTailoring || hasTailoringStock) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
+        {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
           <button onClick={() => setShowTailoringOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Scissors className="w-4 h-4" />
@@ -681,7 +684,7 @@ export default function Sales({
           </button>
         )}
 
-        {(settings?.showDesign || hasDesignStock) && selectedCategory === 'Graphics' && !showDesignOrders && (
+        {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
           <button onClick={() => setShowDesignOrders(true)}
             className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
             <Palette className="w-4 h-4" />
@@ -799,7 +802,7 @@ export default function Sales({
                   onAddToCart={handleAddToCart}
                   onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
                   pinned={pinnedIds.includes(product.id)}
-                  onTogglePin={togglePin}
+                  onTogglePin={featsOn('fastSellers') ? togglePin : undefined}
                 />
               ))}
               {filteredProducts.length === 0 && (
@@ -1074,6 +1077,7 @@ export default function Sales({
                 <input type="number" placeholder={t(lang, 'cashReceived')} value={customCashReceived}
                   onChange={(e) => setCustomCashReceived(e.target.value)}
                   className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
+                {featsOn('quickCash') && (
                 <div className="flex flex-wrap gap-1.5">
                   {(() => {
                     if (total <= 0) return null;
@@ -1091,6 +1095,7 @@ export default function Sales({
                     ));
                   })()}
                 </div>
+                )}
                 {customCashReceived && (
                   <div className="flex justify-between items-center">
                       {parseFloat(customCashReceived) >= total ? (

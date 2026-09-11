@@ -12,6 +12,7 @@ import { supplierWhatsAppUrl } from './utils/suppliers';
 import { UGX_TO_USD_RATE } from './data/constants';
 import { verifyPinAgainstHash } from './utils/crypto';
 import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
+import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
@@ -656,7 +657,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (staffConfigured && activeRole !== 'manager') return;
     const ALLOWED = new Set([
       'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate','momoFeePct','ownerPhone',
-      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText',
+      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','features',
     ]);
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
@@ -1442,11 +1443,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       case 'sales':
         return (
           <ErrorBoundary key="sales">
-          {isManager && (
+          {isManager && isOn(settings.features, 'briefing') && (
             <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync} />
           )}
-          {isManager && !setupDismissed && (() => {
+          {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
               window.matchMedia('(display-mode: standalone)').matches ||
               (window.navigator as unknown as { standalone?: boolean }).standalone === true
@@ -1574,6 +1575,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
               window.open(url, '_blank', 'noopener');
             }}
+            features={settings.features}
           />
           </Suspense>
           </ErrorBoundary>
@@ -1860,6 +1862,32 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </button>
                 </div>
                 <p className="text-[10px] text-zinc-600">Turn on the order screens you actually use. Hidden until enabled.</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Till control</label>
+                <div className="space-y-1.5">
+                  {FEATURES.map(f => {
+                    const on = isOn(settings.features, f.key);
+                    const flip = () => setSettings(prev => {
+                      const feats = { ...(prev.features || {}) };
+                      feats[f.key] = !isOn(prev.features, f.key as FeatureKey);
+                      return { ...prev, features: feats };
+                    });
+                    return (
+                      <button key={f.key} onClick={flip}
+                        className="w-full flex items-center gap-3 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 py-2.5 text-left transition-all cursor-pointer">
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-xs font-black text-white uppercase tracking-wider">{f.label}</span>
+                          <span className="block text-[10px] text-zinc-500 font-bold mt-0.5">{f.hint}</span>
+                        </span>
+                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-lg border shrink-0 ${on ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}>
+                          {on ? 'On' : 'Off'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-zinc-600">Everything is on by default — turn off what your shop doesn’t use. Choices sync to all tills.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">

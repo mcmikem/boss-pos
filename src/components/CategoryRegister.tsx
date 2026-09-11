@@ -7,6 +7,7 @@ import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, 
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
 import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
+import { isOn, type FeatureKey } from '../utils/features';
 
 interface CategoryRegisterProps {
   segments: string[];
@@ -30,6 +31,7 @@ interface CategoryRegisterProps {
   onBack?: () => void;
   onPrintClose?: () => void;
   onSendClose?: () => void;
+  features?: Record<string, boolean>;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -56,7 +58,7 @@ export default function CategoryRegister({
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
-  onPrintClose, onSendClose,
+  onPrintClose, onSendClose, features,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -371,7 +373,7 @@ export default function CategoryRegister({
       )}
 
       {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
-      {(() => {
+      {isOn(features, 'closeWizard' as FeatureKey) && (() => {
         const steps = [
           { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalShrinkage} unmatched`, target: 'close-balance' },
           { key: 'losses', label: 'Log today\u2019s losses', hint: `${todayLossCount} logged \u2022 ${formatCurrency(todayWastage)}`, target: 'close-losses' },
