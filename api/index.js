@@ -864,7 +864,7 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
     const tenantId = process.env.APP_TENANT_ID || 'imac-default';
     const t = await sql`SELECT status FROM tenants WHERE id = ${tenantId}`;
     if (t.length && t[0].status === 'suspended') {
-      return res.status(403).json({ error: 'This shop is suspended — contact BOSS POS support.', code: 'SUSPENDED' });
+      return res.status(403).json({ error: 'This shop is suspended — contact BOSS POS support on WhatsApp 0727790003.', code: 'SUSPENDED' });
     }
   } catch {}
   // Migrate a legacy unsalted sha256 PIN to the strong format on successful login.

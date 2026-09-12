@@ -802,7 +802,11 @@ function MarketerPortal({ code }: { code: string }) {
                 </div>
               </div>
             )}
-            <p className="text-center text-[10px] text-zinc-600 font-bold uppercase">Questions? Contact the BOSS POS team.</p>
+            <a href={`https://wa.me/256727790003?text=${encodeURIComponent(`Hello BOSS POS, I am marketer ${data.code} (${data.name}) — I need help.`)}`}
+              target="_blank" rel="noopener noreferrer"
+              className="block text-center h-11 leading-[44px] bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-emerald-600/30 transition-colors">
+              Questions? WhatsApp 0727790003
+            </a>
           </>
         )}
       </main>
