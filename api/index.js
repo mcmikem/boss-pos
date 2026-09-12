@@ -878,6 +878,18 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   res.json({ ok: true, token: await signToken(), hasPin: !!stored, hash: returnedHash || undefined, salt: returnedHash.split('$')[2], iterations: returnedHash.startsWith('pbkdf2$') ? PIN_ITERATIONS : undefined });
 }));
 
+// Public build stamp: the till's "Update app" button compares this against its
+// bundled __BUILD_COMMIT__ to tell "server has something newer" apart from a
+// stale service-worker cache. No auth, no financial data.
+app.get('/api/version', asHandler(async (req, res) => {
+  const full = process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'dev';
+  res.json({
+    commit: full,
+    short: full === 'dev' ? 'dev' : String(full).slice(0, 7),
+    at: process.env.VERCEL_GIT_COMMITTED_AT || null,
+  });
+}));
+
 // Public pre-auth status: only the fields the lock screen needs (no financial data).
 app.get('/api/auth/status', asHandler(async (req, res) => {
   const rows = await sql`SELECT key, value FROM settings WHERE key IN ('shopName', 'pinHash')`;

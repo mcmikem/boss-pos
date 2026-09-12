@@ -958,16 +958,41 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  // Force the installed PWA to check for a newer build and restart into it.
-  // Eases stale service-worker caches — the #1 cause of "the button still
-  // doesn't work" on phones that installed the app weeks ago.
+  // Update check in two layers. First ask the SERVER what build it runs and
+  // compare with this bundle: if the server is newer, the phone is stale and
+  // no service-worker poke can fix a deploy that never happened — drop the
+  // stale worker and hard-reload into the new build. Only if both agree do we
+  // fall back to the classic reg.update() path (mid-deploy edge cases).
   const handleCheckUpdate = async () => {
-    if (!('serviceWorker' in navigator)) {
-      triggerToast('Update not supported here — open the website in your browser', 'info');
-      return;
-    }
     setUpdatingApp(true);
+    const localBuild = typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ ? __BUILD_COMMIT__ : 'dev';
+    const localShort = localBuild === 'dev' ? 'dev' : localBuild.slice(0, 7);
     try {
+      let serverShort: string | null = null;
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' });
+        if (r.ok) serverShort = ((await r.json()).short as string) || null;
+      } catch {}
+      if (serverShort && localShort !== 'dev' && serverShort !== 'dev' && serverShort !== localShort) {
+        triggerToast(`New version on server (${serverShort}) — restarting into it…`, 'success');
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(x => x.unregister()));
+          }
+        } catch {}
+        try { localStorage.removeItem('boss_api_cache_/api/boot'); } catch {}
+        setTimeout(() => window.location.reload(), 1200);
+        return;
+      }
+      if (!('serviceWorker' in navigator)) {
+        triggerToast(
+          serverShort ? `Server ${serverShort} • you ${localShort} — open the website to update`
+            : 'Update not supported here — open the website in your browser',
+          'info',
+        );
+        return;
+      }
       const reg = await navigator.serviceWorker.getRegistration();
       if (!reg) {
         triggerToast('Not installed as an app — just open the website', 'info');
@@ -979,8 +1004,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         triggerToast('Update found — restarting the app…', 'success');
         setTimeout(() => window.location.reload(), 1500);
       } else {
-        const build = typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ !== 'dev' ? __BUILD_COMMIT__.slice(0, 7) : 'dev';
-        triggerToast(`Already the newest build (${build})`, 'success');
+        triggerToast(
+          serverShort ? `Already newest (you ${localShort} • server ${serverShort})`
+            : `Already the newest build (${localShort})`,
+          'success',
+        );
       }
     } catch {
       triggerToast('Update check failed — are you online?', 'error');
