@@ -5,7 +5,7 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
   CalendarCheck, Wrench, FileText, Star
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog } from '../types';
 import { nextOrderNumber } from '../api';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
@@ -20,6 +20,10 @@ import Fuse from 'fuse.js';
 import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
+import { findMissingProduction } from '../utils/cashflow';
+import { todayLocalKey } from '../utils/dates';
+import { expiryStatus } from '../utils/dates';
+import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart } from '../utils/parked';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
@@ -88,6 +92,8 @@ interface SalesProps {
   productionRegisters?: ProductionRegister[];
   onAddProduction?: (p: ProductionRegister) => void;
   onDeleteProduction?: (id: string) => void;
+  salesHistory?: Sale[];
+  wastageLogs?: WastageLog[];
 }
 
 const localOrderNumber = () => {
@@ -100,7 +106,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [],
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
@@ -262,6 +268,20 @@ export default function Sales({
       triggerToast(`${product.name} is out of stock!`, 'error');
       return;
     }
+    // Expiry guard: never sell expired stock; warn when expiring soon.
+    try {
+      const tier = expiryStatus(product.expiryDate);
+      if (tier === 'expired') {
+        triggerToast(`${product.name} is EXPIRED — remove it, do not sell`, 'error');
+        try {
+          pushNotice('expiry', `Blocked expired sale: ${product.name}`, 'Cashier tried to sell expired stock. Remove or write it off as a loss.', `exp-block:${product.id}:${dayKeyOf()}`);
+        } catch {}
+        return;
+      }
+      if (tier === 'soon' && !product.isService) {
+        triggerToast(`${product.name} expires soon — sell it first (FIFO)`, 'info');
+      }
+    } catch {}
     if (streetMode && (!product.variants || product.variants.length === 0) && !product.saleUnit) {
       streetSell(product);
       return;
@@ -432,6 +452,38 @@ export default function Sales({
       triggerToast(`Stock shortage — selling available only: ${oversold.join(', ')}`, 'error');
     }
 
+    // Smart guard: can't sell morning-make items (e.g. chapatis) that were
+    // never logged as made today. Ask for clarity instead of silently
+    // allowing invented sales — the classic theft hole.
+    try {
+      const missing = findMissingProduction(
+        itemsToSell.map(i => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
+        products,
+        productionRegisters,
+        [],
+        todayLocalKey(),
+        ['Eatery'],
+      );
+      if (missing.length > 0) {
+        const names = missing.map(m => `${m.productName} ×${m.qtySold}`).join(', ');
+        const ok = window.confirm(
+          `No production logged today for: ${names}.\n\nWhere did these come from — yesterday's leftover or an unlogged batch?\n\nOK = sell anyway (flagged for the boss) • Cancel = go log production first.`,
+        );
+        if (!ok) {
+          triggerToast('Sale paused — log Morning Production first', 'info');
+          return;
+        }
+        try {
+          pushNotice(
+            'no-production',
+            `Sold without production: ${names}`,
+            `Seller ${staffName || 'unknown'} sold ${names} with zero batch logged today. Confirm leftover or log the batch.`,
+            `noprod:${todayLocalKey()}:${missing.map(m => m.productId).join(',').slice(0, 80)}`,
+          );
+        } catch {}
+      }
+    } catch {}
+
     setIsCompleting(true);
     const cashPaidNum = parseFloat(customCashReceived);
     let changeMsg = '';
@@ -493,6 +545,12 @@ export default function Sales({
   // One-tap cash sale for street mode. Mirrors the core of handleCompleteSale
   // minus cart/discount/confirm/receipt — speed is the whole point.
   const streetSell = async (product: Product) => {
+    try {
+      if (expiryStatus(product.expiryDate) === 'expired') {
+        triggerToast(`${product.name} is EXPIRED — do not sell`, 'error');
+        return;
+      }
+    } catch {}
     const item: SaleItem = {
       productId: product.id, productName: product.name, qty: 1,
       unitPrice: product.price, unitCost: product.cost, lineTotal: product.price,
@@ -786,6 +844,7 @@ export default function Sales({
             </button>
             <Suspense fallback={subManagerFallback}>
               <MorningProduction products={products} productionRegisters={productionRegisters}
+                sales={salesHistory} wastageLogs={wastageLogs}
                 onAddProduction={onAddProduction} onDeleteProduction={onDeleteProduction}
                 formatCurrency={formatCurrency} triggerToast={triggerToast} />
             </Suspense>
@@ -1362,6 +1421,7 @@ export default function Sales({
         expenseCategories={expenseCategories}
         formatCurrency={formatCurrency}
         triggerToast={triggerToast}
+        onUpdateProduct={onUpdateProduct}
       />
 
       <ProfitAnalyzerModal

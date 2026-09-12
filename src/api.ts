@@ -279,12 +279,12 @@ export async function flushOutbox(): Promise<number> {
 }
 
 // Server-side PIN auth (plain PIN over HTTPS; hashing happens on the server).
-export async function authVerify(pin: string): Promise<{ token: string; hasPin: boolean; hash?: string }> {
+export async function authVerify(pin: string, timeoutMs?: number): Promise<{ token: string; hasPin: boolean; hash?: string }> {
   const res = await fetchTimeout(`${BASE}/api/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pin }),
-  }, WRITE_TIMEOUT_MS);
+  }, timeoutMs ?? WRITE_TIMEOUT_MS);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Auth failed');
   setAuthToken(data.token);
@@ -532,9 +532,12 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
 
   // Offline-first: if the device knows it's offline, queue immediately instead
   // of burning 30s on a fetch that will timeout and then queue anyway.
+  // Also invalidate the list/boot caches so an optimistic delete/update can't
+  // be resurrected by stale cache on the next boot (deleted sale reappears).
   if (!isRead && !navigator.onLine) {
     const body = (options && (options.body as string)) || '';
     enqueue(path, options?.method || 'POST', body);
+    try { clearRelatedCaches(path); } catch {}
     try {
       return JSON.parse(body) as T;
     } catch {
@@ -630,6 +633,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
         (err.status === 500 && /temporarily unavailable|Database temporarily/i.test(err.message)));
     if (!navigator.onLine || err instanceof TypeError || isTransientApiError) {
       enqueue(path, options?.method || 'POST', body);
+      try { clearRelatedCaches(path); } catch {}
       try {
         return JSON.parse(body) as T;
       } catch {

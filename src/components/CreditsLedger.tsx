@@ -111,12 +111,28 @@ export default function CreditsLedger({
                   </div>
                 </div>
               </div>
+              <div className="ml-2 flex flex-col gap-1 shrink-0">
               <button
                 onClick={() => setPaymentSaleId(record.saleId)}
-                className="ml-2 px-3 py-2 bg-green-600/20 text-green-400 border border-green-600/40 rounded-lg text-xs font-bold hover:bg-green-600/30 active:scale-95 transition-all whitespace-nowrap shrink-0"
+                className="px-3 py-2 bg-green-600/20 text-green-400 border border-green-600/40 rounded-lg text-xs font-bold hover:bg-green-600/30 active:scale-95 transition-all whitespace-nowrap"
               >
                 Record Payment
               </button>
+              <button
+                onClick={async () => {
+                  const msg = `Hello ${record.customerName}, reminder: ${record.orderNumber} balance ${formatCurrency(record.remaining)} of ${formatCurrency(record.total)} (${record.createdAt}). Please clear it when you can. Thank you!`;
+                  try {
+                    const nav = navigator as unknown as { share?: (d: { title?: string; text: string }) => Promise<void> };
+                    if (nav.share) { await nav.share({ title: 'Payment reminder', text: msg }); triggerToast('Reminder shared', 'success'); return; }
+                    await navigator.clipboard.writeText(msg);
+                    triggerToast('Reminder copied — paste into WhatsApp', 'success');
+                  } catch { triggerToast('Could not share — copy manually', 'error'); }
+                }}
+                className="px-3 py-1.5 bg-amber-950/30 text-amber-300 border border-amber-800/40 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-amber-950/50 active:scale-95 transition-all whitespace-nowrap"
+              >
+                Remind
+              </button>
+              </div>
             </div>
           ))}
         </div>

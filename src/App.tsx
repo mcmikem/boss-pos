@@ -19,11 +19,14 @@ import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
 import { initSentry } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
+import { logVoid as logVoidDay } from './utils/cashflow';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast from './components/Toast';
 import PinGate from './components/PinGate';
 import MorningBrief from './components/MorningBrief';
+import NotificationsBell from './components/NotificationsBell';
+import { pushNotice, dayKeyOf } from './utils/notifications';
 import { AdminDashboard } from './components/AdminDashboard';
 import StaffSwitcher from './components/StaffSwitcher';
 import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
@@ -64,6 +67,26 @@ const DEFAULT_SETTINGS: StoreSettings = {
   showRepairs: false,
   sheetsUrl: '',
 };
+
+// Deleted-sale tombstones: an offline DELETE is queued, but the stale
+// /api/boot cache still contains the sale — without this, the "deleted" order
+// resurrects on the next boot and looks like delete never worked. Tombstoned
+// ids are filtered out of every boot payload until the server confirms.
+const DELETED_SALES_KEY = 'boss_pos_deleted_sales';
+function readDeletedSales(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_SALES_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+function addDeletedSale(id: string): void {
+  try {
+    const s = readDeletedSales();
+    s.add(id);
+    localStorage.setItem(DELETED_SALES_KEY, JSON.stringify([...s].slice(-500)));
+  } catch {}
+}
 
 // Inline add-staff form used in Settings (first setup + later adds).
 function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'cashier', pin: string) => void }) {
@@ -225,7 +248,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setSuppliers(d.suppliers);
     setSupplierPrices(d.supplierPrices || []);
     setStaffList(d.staff || []);
-    setSales(d.sales);
+    try {
+      const tomb = readDeletedSales();
+      setSales((d.sales || []).filter(s => !tomb.has(s.id)));
+    } catch {
+      setSales(d.sales);
+    }
     setExpenses(d.expenses);
     setCreditPayments(d.creditPayments);
     setCreditEats(d.creditEats);
@@ -504,38 +532,62 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     };
   }, []);
 
-  // Low-stock / negative-stock alerts
-  const lowNotifiedRef = useRef<Set<string>>(new Set());
+  // Timed alerts via the notification bell (NOT on every PIN unlock).
+  // Rule: same product may only notify once per 24h; unlocks never re-fire.
+  // Negative stock is critical (force), low stock is batched into ONE notice.
   useEffect(() => {
     if (authState !== 'ready' || products.length === 0) return;
+    const day = dayKeyOf();
     const neg = products.filter(p => !p.isService && p.stockQty < 0);
     if (neg.length > 0) {
-      triggerToast(`${neg.length} items have NEGATIVE stock — tap to reconcile`, 'error');
-      // Auto-clamp negative stock locally until server reconcile runs
-      // (server POST /api/reconcile?fix=1 does authoritative clamp)
+      pushNotice(
+        'negative-stock',
+        `${neg.length} item${neg.length !== 1 ? 's' : ''} NEGATIVE stock`,
+        `${neg.slice(0, 3).map(p => p.name).join(', ')}${neg.length > 3 ? ` +${neg.length - 3} more` : ''} — tap bell, then Inventory → Check gaps.`,
+        `neg:${day}`,
+        { force: false },
+      );
     }
-    if (typeof Notification === 'undefined') return;
     const low = products.filter(p => !p.isService && p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty >= 0);
-    if (low.length === 0) { lowNotifiedRef.current.clear(); return; }
-    const newlyLow = low.filter(p => !lowNotifiedRef.current.has(p.id));
-    if (newlyLow.length === 0) return;
-    newlyLow.forEach(p => lowNotifiedRef.current.add(p.id));
-    const fire = () => {
-      if (Notification.permission === 'granted') {
-        low.slice(0, 3).forEach(p => {
-          try { new Notification(`Low stock: ${p.name}`, { body: `${p.stockQty} left (threshold ${p.lowStockThreshold || 5})`, icon: '/pwa-192x192.png' }); } catch {}
-        });
-        if (low.length > 3) triggerToast(`${low.length} items low on stock — check Inventory`, 'error');
-      } else if (Notification.permission !== 'denied') {
-        Notification.requestPermission().then(perm => {
-          if (perm === 'granted') fire();
-        });
-      } else {
-        if (newlyLow.length > 0) triggerToast(`${newlyLow.length} items low on stock`, 'error');
-      }
-    };
-    if (document.visibilityState === 'visible') fire();
+    if (low.length > 0) {
+      const first = low.slice(0, 3).map(p => `${p.name} (${p.stockQty})`).join(', ');
+      pushNotice(
+        'low-stock',
+        `${low.length} item${low.length !== 1 ? 's' : ''} low on stock`,
+        `${first}${low.length > 3 ? ` +${low.length - 3} more` : ''} — restock from Inventory.`,
+        `low:${day}`,
+      );
+    }
+    // No browser Notification() here on purpose: the bell holds history and
+    // never spams. The OS-level popup only fires for critical same-day
+    // negative stock when permission is already granted.
+    if (neg.length > 0 && typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.visibilityState === 'visible') {
+      try {
+        const n = pushNotice('negative-stock', 'Negative stock — reconcile', `${neg.length} items below zero.`, `neg-os:${day}`);
+        if (n) new Notification(`Negative stock (${neg.length})`, { body: 'Open the bell → Inventory → Check gaps', icon: '/pwa-192x192.png' });
+      } catch {}
+    }
   }, [products, authState]);
+
+  // Supplier drift bell (once/day): quote moved ≥20% vs cost.
+  useEffect(() => {
+    if (authState !== 'ready' || products.length === 0 || supplierPrices.length === 0) return;
+    (async () => {
+      try {
+        const { supplierDrift } = await import('./utils/cashflow');
+        const drifts = supplierDrift(products, supplierPrices, 20).slice(0, 3);
+        if (!drifts.length) return;
+        const day = dayKeyOf();
+        const first = drifts[0];
+        pushNotice(
+          'info',
+          `Supplier price moved: ${first.productName} ${first.driftPct > 0 ? '+' : ''}${first.driftPct}%`,
+          drifts.map(d => `${d.productName}: cost ${d.cost} vs quote ${d.quote}`).join(' • ').slice(0, 180),
+          `supdrift:${day}`,
+        );
+      } catch {}
+    })();
+  }, [products, supplierPrices, authState]);
 
   // Outbox inspector data for Settings
   useEffect(() => {
@@ -780,40 +832,43 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleUnlock = async (pin: string) => {
     const cachedSettings = readCached<StoreSettings>('/api/settings');
     if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
-    // Online: always try server first so we mint a fresh token (fixes 7-day TTL
-    // and revoke-all invalid token → every sale 401 → immediate re-lock loop).
-    // Only fall back to local hash if server is unreachable.
-    if (navigator.onLine) {
-      try {
-        const data = await authVerify(pin);
-        localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
-        setAuthState('ready');
-        fetchAllData().catch(() => {});
-        return;
-      } catch (err) {
-        // Network failure — fall through to local hash fallback so sales still work offline.
-        const msg = String((err as Error)?.message || '');
-        const isNetwork = /Network timeout|fetch failed|Failed to fetch/i.test(msg);
-        if (!isNetwork) {
-          // Wrong PIN or server rejected — don't fall back to stale local hash.
-          throw err;
-        }
-      }
-    }
-    // Offline or server unreachable: verify against local hash.
+    // Fast path FIRST: local hash verifies in ms, even on dead-WiFi phones
+    // where navigator.onLine lies "true" and the server round-trip hangs for
+    // 30s ("auth failed / takes long to unlock"). Unlock instantly, then mint
+    // a fresh token in the background so sales never 401.
     const local = localStorage.getItem('boss_pos_pin');
-    if (local && !local.startsWith('fb_') && await verifyPinAgainstHash(pin, local)) {
+    if (local && !local.startsWith('fb_')) {
+      try {
+        if (await verifyPinAgainstHash(pin, local)) {
+          setAuthState('ready');
+          fetchAllData().catch(() => {});
+          // Background re-mint (short timeout so dead WiFi never blocks).
+          authVerify(pin, 8000).catch(() => {});
+          return;
+        }
+      } catch {}
+      // Local hash exists but did NOT match: it may be stale after a PIN
+      // change on another till. Fall through to the server check below —
+      // but only throw "wrong PIN" after the server also rejects.
+    }
+    // Server check with a SHORT timeout for unlock (8s, not 30s). Cold DBs
+    // still wake on retry; the till never hangs on the lock screen.
+    try {
+      const data = await authVerify(pin, 8000);
+      localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
       setAuthState('ready');
       fetchAllData().catch(() => {});
-      // If we unlocked offline, try to mint token in background once back online.
-      if (navigator.onLine) authVerify(pin).catch(() => {});
       return;
+    } catch (err) {
+      const msg = String((err as Error)?.message || '');
+      const isNetwork = /Network timeout|fetch failed|Failed to fetch|Load failed/i.test(msg);
+      if (isNetwork) {
+        // Server unreachable and no usable local hash: stay locked but say
+        // exactly that (not "wrong PIN").
+        throw new Error('No connection — try again when online, or use this till\'s last PIN on its own device.');
+      }
+      throw err;
     }
-    // No local hash or mismatch — try server one last time (will throw Wrong PIN).
-    const data = await authVerify(pin);
-    localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
-    setAuthState('ready');
-    fetchAllData().catch(() => {});
   };
 
   const handleSetPin = async (pin: string) => {
@@ -1120,12 +1175,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (!sale || sale.refunded) return;
     if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
     if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)})? Stock goes back in.`)) return;
+    // Tombstone FIRST so a stale boot cache can never resurrect it.
+    addDeletedSale(saleId);
+    try { logVoidDay(saleId); } catch {}
     setSales(prev => prev.filter(s => s.id !== saleId));
     setProducts(prev => prev.map(p => {
       const it = sale.items.find(i => i.productId === p.id);
       return it && !p.isService ? { ...p, stockQty: p.stockQty + it.qty } : p;
     }));
     try { await saleApi.remove(saleId); } catch {
+      // Offline-queued deletes return optimistic success (no throw), so this
+      // path is a REAL server rejection — restore + lift the tombstone.
+      try {
+        const s = readDeletedSales();
+        s.delete(saleId);
+        localStorage.setItem(DELETED_SALES_KEY, JSON.stringify([...s]));
+      } catch {}
       setSales(prev => [sale, ...prev].sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
       setProducts(prev => prev.map(p => {
         const it = sale.items.find(i => i.productId === p.id);
@@ -1169,8 +1234,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleAddExpense = async (newExpense: Expense) => {
-    setExpenses(prev => [newExpense, ...prev]);
-    try { await expenseApi.create(newExpense); } catch {
+    // Stamp who recorded it + default source drawer for the cash equation.
+    const stamped = {
+      ...newExpense,
+      ...(staffName ? { staffName } : {}),
+      ...((newExpense as Expense & { source?: string }).source
+        ? {}
+        : { source: 'drawer' }),
+    } as Expense;
+    setExpenses(prev => [stamped, ...prev]);
+    try { await expenseApi.create(stamped); } catch {
       setExpenses(prev => prev.filter(e => e.id !== newExpense.id));
       triggerToast('Failed to save expense — not added', 'error');
     }
@@ -1366,8 +1439,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const handleAddProduction = async (p: ProductionRegister) => {
     setProductionRegisters(prev => [p, ...prev]);
+    // Morning batch adds to sellable stock so the till can actually sell what
+    // the kitchen made (previously production never touched stock, forcing
+    // oversell guards to block legitimate chapati sales).
+    if (p.productId && p.qty > 0) {
+      setProducts(prev => prev.map(prod =>
+        prod.id === p.productId && !prod.isService
+          ? { ...prod, stockQty: (prod.stockQty || 0) + p.qty }
+          : prod
+      ));
+    }
     try { await productionRegisterApi.create(p); } catch {
       setProductionRegisters(prev => prev.filter(x => x.id !== p.id));
+      if (p.productId && p.qty > 0) {
+        setProducts(prev => prev.map(prod =>
+          prod.id === p.productId && !prod.isService
+            ? { ...prod, stockQty: Math.max(0, (prod.stockQty || 0) - p.qty) }
+            : prod
+        ));
+      }
       triggerToast('Failed to save production — not added', 'error');
     }
   };
@@ -1509,6 +1599,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             tillBranch={tillBranch}
             productionRegisters={productionRegisters}
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
+            salesHistory={sales} wastageLogs={wastageLogs}
           />
           </ErrorBoundary>
         );
@@ -1543,6 +1634,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onAddExpenseCategory={handleAddExpenseCategory}
             onUpdateExpenseCategory={handleUpdateExpenseCategory}
             onDeleteExpenseCategory={handleDeleteExpenseCategory}
+            onUpdateProduct={handleUpdateProduct}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
           />
           </Suspense>
@@ -1556,6 +1648,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             segments={registersSegments}
             products={products}
             sales={sales}
+            expenses={expenses}
             creditEats={creditEats}
             productionRegisters={productionRegisters}
             wastageLogs={wastageLogs}
@@ -1589,7 +1682,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <Suspense fallback={<div className="flex items-center justify-center min-h-[50vh]"><div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" /></div>}>
           <Analytics 
             sales={sales} expenses={expenses} products={products}
-            suppliers={suppliers}
+            suppliers={suppliers} supplierPrices={supplierPrices}
             creditPayments={creditPayments}
             expenseCategories={expenseCategories}
             onAddExpense={handleAddExpense}
@@ -1625,6 +1718,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onSaveCustomProduct={handleSaveCustomProduct}
             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
             tillBranch={tillBranch}
+            productionRegisters={productionRegisters}
+            onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
+            salesHistory={sales} wastageLogs={wastageLogs}
           />
           </ErrorBoundary>
         );
@@ -1635,7 +1731,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   // Hidden super-agent console: not linked anywhere in the till UI, needs
   // the server SUPER_ADMIN_SECRET. Bypasses the till lock on purpose.
-  if (typeof window !== 'undefined' && window.location.hash === '#admin') {
+  // Marketer portal shares the bypass: <url>#marketer-BOSS-XXXX (code is secret).
+  if (typeof window !== 'undefined' && (window.location.hash === '#admin' || window.location.hash.startsWith('#marketer-'))) {
     return <AdminDashboard />;
   }
 
@@ -1729,6 +1826,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             <span className="max-w-[90px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
             {staffConfigured && <span className="text-[8px] text-zinc-600">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
           </button>
+          <NotificationsBell />
           <button onClick={() => {
             const next = theme === 'light' ? 'dark' : 'light';
             setTheme(next);
@@ -1896,6 +1994,29 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     );
                   })}
                 </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setSettings(prev => ({ ...prev, features: {} }));
+                      triggerToast('Till control reset — everything ON', 'success');
+                    }}
+                    className="flex-1 h-9 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:border-gold-brand/40 cursor-pointer"
+                  >
+                    Reset all ON
+                  </button>
+                  <button
+                    onClick={() => {
+                      try {
+                        localStorage.removeItem('boss_api_cache_/api/boot');
+                        localStorage.removeItem('boss_api_cache_/api/products');
+                      } catch {}
+                      triggerToast('Local cache cleared — reopen to reload', 'info');
+                    }}
+                    className="flex-1 h-9 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:border-gold-brand/40 cursor-pointer"
+                  >
+                    Clear cache
+                  </button>
+                </div>
                 <p className="text-[10px] text-zinc-600">Everything is on by default — turn off what your shop doesn’t use. Choices sync to all tills.</p>
               </div>
               <div className="space-y-2">
@@ -2006,6 +2127,38 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                         branches: e.target.value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).slice(0, 20),
                       }))}
                       className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                    {(settings.branches || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(settings.branches || []).map(b => (
+                          <span key={b} className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/10 rounded-lg pl-2.5 pr-1.5 py-1 text-[11px] font-bold text-zinc-200">
+                            {b}
+                            <button
+                              onClick={() => {
+                                if (!confirm(`Delete branch "${b}"? Old sales keep the name, new sales can't use it.`)) return;
+                                setSettings(prev => ({ ...prev, branches: (prev.branches || []).filter(x => x !== b) }));
+                                if (tillBranch === b) setTillBranch('');
+                                triggerToast(`Deleted branch "${b}"`, 'info');
+                              }}
+                              className="p-1 text-zinc-500 hover:text-rose-400 rounded cursor-pointer"
+                              title={`Delete ${b}`}
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                        <button
+                          onClick={() => {
+                            if (!confirm('Clear ALL branches? Tills fall back to main shop.')) return;
+                            setSettings(prev => ({ ...prev, branches: [] }));
+                            setTillBranch('');
+                            triggerToast('All branches cleared', 'info');
+                          }}
+                          className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 px-2 py-1 cursor-pointer"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                    )}
                     <p className="text-[10px] text-zinc-600 leading-relaxed">Each sale is stamped with its till's branch; Reports can filter per branch. Stock stays pooled across branches. Rename carefully — old sales keep the old name.</p>
                   </>
                 ) : (

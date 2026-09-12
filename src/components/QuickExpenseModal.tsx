@@ -12,9 +12,10 @@ interface QuickExpenseModalProps {
   expenseCategories: string[];
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onUpdateProduct?: (p: Product) => void;
 }
 
-export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, products, expenseCategories, formatCurrency, triggerToast }: QuickExpenseModalProps) {
+export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, products, expenseCategories, formatCurrency, triggerToast, onUpdateProduct }: QuickExpenseModalProps) {
   const [expenseTab, setExpenseTab] = useState('General');
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseAmt, setExpenseAmt] = useState('');
@@ -176,8 +177,30 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
       description,
       amount: amtNum,
       category,
+      source: 'drawer',
+      ...(dishProduct && isEatery && expenseEateryMode === 'dish'
+        ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
+        : {}),
     };
     onAddExpense(newExpense);
+
+    // Carry ingredient prices forward into the dish recipe so pricing, COGS
+    // and profit stay honest: what you paid today becomes tomorrow's cost.
+    if (isEatery && expenseEateryMode === 'dish' && dishProduct?.recipe && onUpdateProduct) {
+      try {
+        const paid = new Map(dishIngRs.filter(i => i.bought > 0 && i.price > 0).map(i => [i.id, i.price]));
+        if (paid.size > 0) {
+          const nextIngredients = dishProduct.recipe.ingredients.map(ing =>
+            paid.has(ing.id) ? { ...ing, unitCost: paid.get(ing.id) || ing.unitCost } : ing,
+          );
+          const changed = nextIngredients.some((n, idx) => n.unitCost !== dishProduct.recipe!.ingredients[idx].unitCost);
+          if (changed) {
+            onUpdateProduct({ ...dishProduct, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } });
+            triggerToast('Recipe costs updated from what you paid', 'info');
+          }
+        }
+      } catch {}
+    }
 
     if (isEatery && expenseEateryMode === 'dish' && dishPieces > 0) {
       triggerToast(`About ${dishPieces.toLocaleString()} pieces • ${formatCurrency(Math.round(dishCostPerPiece))} each`, 'success');

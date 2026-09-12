@@ -5,8 +5,10 @@ import {
   Settings2, Hash, Check, Edit2, ChevronDown,
   CalendarDays, Receipt, LayoutGrid, Info
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
+import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
+import { supplierDrift } from '../utils/cashflow';
 import CreditsLedger from './CreditsLedger';
+import ExpenseDetailModal from './ExpenseDetailModal';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
 import { restockQtyFor, buildRestockMessage, supplierTelUrl, supplierWhatsAppUrl } from '../utils/suppliers';
@@ -18,6 +20,7 @@ interface AnalyticsProps {
   expenses: Expense[];
   products: Product[];
   suppliers: Supplier[];
+  supplierPrices?: SupplierPrice[];
   creditPayments: CreditPayment[];
   expenseCategories: string[];
   onAddExpense: (expense: Expense) => void;
@@ -45,6 +48,7 @@ export default function Analytics({
   expenses,
   products,
   suppliers,
+  supplierPrices = [],
   creditPayments,
   expenseCategories,
   onAddExpense,
@@ -103,6 +107,8 @@ export default function Analytics({
   const DAY_VIEW_LIMIT = 10;
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [showAllDays, setShowAllDays] = useState(false);
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [expenseCatFilter, setExpenseCatFilter] = useState<string | null>(null);
   const [branchFilter, setBranchFilter] = useState<string>('All');
   const branchOptions = useMemo(() => {
     const fromSettings = (settings.branches || []).filter(Boolean);
@@ -121,9 +127,10 @@ export default function Analytics({
       return { prefix: day, filter: (ts: string) => localDayKey(ts) === day };
     }
     if (timeFilter === 'Weekly') {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return { prefix: '', filter: (ts: string) => new Date(ts) >= weekAgo };
+      // Perf: single cutoff ms + numeric compare. The old `new Date(ts) >=
+      // weekAgo` allocated 2 Dates per row per render — the weekly stall.
+      const cutoffMs = now.getTime() - 7 * 86400000;
+      return { prefix: '', filter: (ts: string) => Date.parse(ts) >= cutoffMs };
     }
     const month = localMonthKey(now.toISOString());
     return { prefix: month, filter: (ts: string) => localMonthKey(ts) === month };
@@ -138,6 +145,26 @@ export default function Analytics({
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => timeRange.filter(e.timestamp));
   }, [expenses, timeRange]);
+
+  // Where-did-it-go: per-category expense totals for this window (e.g. Food
+  // vs Electricity). Tap a row to filter the history below to that category.
+  const expenseCategoryBreakdown = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    for (const e of filteredExpenses) {
+      const cur = map.get(e.category) || { total: 0, count: 0 };
+      cur.total += e.amount || 0;
+      cur.count += 1;
+      map.set(e.category, cur);
+    }
+    return Array.from(map.entries())
+      .map(([category, v]) => ({ category, ...v }))
+      .sort((a, b) => b.total - a.total);
+  }, [filteredExpenses]);
+
+  const visibleExpenses = useMemo(() => {
+    const list = expenseCatFilter ? filteredExpenses.filter(e => e.category === expenseCatFilter) : filteredExpenses;
+    return [...list].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 60);
+  }, [filteredExpenses, expenseCatFilter]);
 
   const revenue = useMemo(() => {
     return filteredSales.reduce((acc, s) => acc + s.total, 0);
@@ -490,17 +517,28 @@ const colorsMap: { [key: string]: string } = {
   }, [categoryBreakdown, revenue]);
 
   const sellerBreakdown = useMemo(() => {
-    const map = new Map<string, { name: string; count: number; total: number }>();
-    for (const s of filteredSales) {
+    const map = new Map<string, { name: string; count: number; total: number; refunds: number; discount: number }>();
+    for (const s of sales) {
+      if (!timeRange.filter(s.timestamp)) continue;
+      if (branchFilter !== 'All' && (s.branch || '') !== branchFilter) continue;
       const key = (s.staffName || '').trim();
       if (!key) continue;
-      const cur = map.get(key) || { name: key, count: 0, total: 0 };
+      const cur = map.get(key) || { name: key, count: 0, total: 0, refunds: 0, discount: 0 };
       cur.count += 1;
-      cur.total += s.total;
+      if (s.refunded) cur.refunds += 1;
+      else cur.total += s.total;
+      cur.discount += s.discount || 0;
       map.set(key, cur);
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [filteredSales]);
+    return Array.from(map.values())
+      .map(r => ({
+        ...r,
+        risk: r.refunds >= 3 || (r.count > 0 && r.refunds / r.count >= 0.2) ? 'flag' as const
+          : (r.total > 0 && r.discount / r.total >= 0.15) || (r.count > 0 && r.refunds / r.count >= 0.1) ? 'watch' as const
+          : 'ok' as const,
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [sales, timeRange, branchFilter]);
 
   return (
     <div className="space-y-6 animate-fade-in pb-4" id="analytics-tab-content">
@@ -562,6 +600,20 @@ const colorsMap: { [key: string]: string } = {
 
       {showSuppliers ? (
         <section className="space-y-4">
+          {(() => {
+            const drifts = supplierPrices.length ? supplierDrift(products, supplierPrices, 20).slice(0, 3) : [];
+            if (!drifts.length) return null;
+            return (
+              <div className="boss-card p-4 rounded-2xl border border-amber-600/30 bg-amber-950/20">
+                <p className="text-xs font-black text-amber-300 uppercase tracking-wider mb-1">Supplier price changed?</p>
+                {drifts.map(d => (
+                  <p key={d.productId} className="text-[11px] font-bold text-zinc-300">
+                    {d.productName}: cost {formatCurrency(d.cost)} vs quote {formatCurrency(d.quote)} ({d.driftPct > 0 ? '+' : ''}{d.driftPct}%) — update cost or renegotiate.
+                  </p>
+                ))}
+              </div>
+            );
+          })()}
           <button onClick={openAddSupplier}
             className="w-full sm:w-auto px-4 h-10 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl flex items-center justify-center gap-2 hover:opacity-90 transition-all">
             <Plus className="w-4 h-4" /> Add Supplier
@@ -876,16 +928,17 @@ const colorsMap: { [key: string]: string } = {
                             <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Expenses</p>
                             <div className="space-y-1.5">
                               {day.expenses.map(exp => (
-                                <div key={exp.id} className="flex items-center justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2">
+                                <button key={exp.id} onClick={() => setSelectedExpense(exp)}
+                                  className="w-full flex items-center justify-between gap-2 bg-[#0A0A0A] border border-white/5 hover:border-rose-500/30 rounded-lg px-3 py-2 text-left transition-all cursor-pointer">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <Coins className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                                     <div className="min-w-0">
                                       <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
-                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category}</p>
+                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category} • tap for receipt</p>
                                     </div>
                                   </div>
                                   <p className="text-xs font-black text-rose-400 shrink-0">-{formatCurrency(exp.amount)}</p>
-                                </div>
+                                </button>
                               ))}
                             </div>
                           </div>
@@ -925,13 +978,18 @@ const colorsMap: { [key: string]: string } = {
               </h3>
               <div className="space-y-1.5">
                 {sellerBreakdown.map((s, i) => (
-                  <div key={s.name} className={`flex items-center justify-between gap-2 rounded-xl px-4 py-3 ${i === 0 ? 'bg-gold-brand/5 border border-gold-brand/20' : 'bg-[#0A0A0A] border border-white/5'}`}>
+                  <div key={s.name} className={`flex items-center justify-between gap-2 rounded-xl px-4 py-3 ${s.risk === 'flag' ? 'bg-rose-950/25 border border-rose-600/40' : i === 0 ? 'bg-gold-brand/5 border border-gold-brand/20' : 'bg-[#0A0A0A] border border-white/5'}`}>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${i === 0 ? 'bg-gold-brand text-black' : 'bg-zinc-800 text-zinc-300'}`}>
                         {i + 1}
                       </span>
-                      <span className="text-xs font-black text-white uppercase truncate">{s.name}</span>
-                      {i === 0 && <span className="text-[9px] font-black text-gold-brand uppercase tracking-wider border border-gold-brand/30 bg-gold-brand/10 rounded-full px-2 py-0.5">Top</span>}
+                      <span className="min-w-0">
+                        <span className="text-xs font-black text-white uppercase truncate block">{s.name}</span>
+                        {s.refunds > 0 && <span className={`text-[9px] font-bold uppercase ${s.risk === 'flag' ? 'text-rose-300' : 'text-zinc-500'}`}>{s.refunds} refunded{s.risk !== 'ok' ? ' • check' : ''}</span>}
+                      </span>
+                      {i === 0 && <span className="text-[9px] font-black text-gold-brand uppercase tracking-wider border border-gold-brand/30 bg-gold-brand/10 rounded-full px-2 py-0.5 shrink-0">Top</span>}
+                      {s.risk === 'flag' && <span className="text-[9px] font-black text-rose-300 uppercase tracking-wider border border-rose-600/40 bg-rose-950/40 rounded-full px-2 py-0.5 shrink-0">Flag</span>}
+                      {s.risk === 'watch' && <span className="text-[9px] font-black text-amber-300 uppercase tracking-wider border border-amber-600/40 bg-amber-950/40 rounded-full px-2 py-0.5 shrink-0">Watch</span>}
                     </div>
                     <div className="flex items-center gap-4 shrink-0">
                       <span className="text-[10px] font-bold text-zinc-500 uppercase">{s.count} sale{s.count !== 1 ? 's' : ''}</span>
@@ -1016,34 +1074,80 @@ const colorsMap: { [key: string]: string } = {
             </div>
           </section>
 
+          {expenseCategoryBreakdown.length > 0 && (
+            <section className="boss-card p-5 rounded-2xl">
+              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1">Where the money went ({timeFilter})</h3>
+              <p className="text-[10px] text-zinc-600 font-bold uppercase mb-3">Tap a row to filter receipts — e.g. Food vs Electricity</p>
+              <div className="space-y-2">
+                {expenseCategoryBreakdown.map(row => {
+                  const pct = totalExpenses > 0 ? Math.round((row.total / totalExpenses) * 100) : 0;
+                  const active = expenseCatFilter === row.category;
+                  return (
+                    <button
+                      key={row.category}
+                      onClick={() => setExpenseCatFilter(prev => (prev === row.category ? null : row.category))}
+                      className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 border transition-all cursor-pointer text-left ${active ? 'border-gold-brand/50 bg-gold-brand/5' : 'border-white/5 bg-black/30 hover:border-white/15'}`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-xs font-black text-white uppercase truncate">{row.category}{active ? ' ✓' : ''}</span>
+                        <span className="block text-[10px] text-zinc-500 font-bold uppercase">{row.count} receipt{row.count !== 1 ? 's' : ''} • {pct}% of spend</span>
+                      </span>
+                      <span className="text-sm font-black text-rose-400 shrink-0">-{formatCurrency(row.total)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <section className="space-y-3">
-            <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Expense History ({timeFilter})</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">
+                Expense History ({expenseCatFilter || timeFilter}) • tap for receipt
+              </h3>
+              {expenseCatFilter && (
+                <button onClick={() => setExpenseCatFilter(null)} className="text-[10px] font-black uppercase text-gold-brand cursor-pointer">Clear ✕</button>
+              )}
+            </div>
             <div className="space-y-2">
-              {filteredExpenses.map(exp => (
-                <div key={exp.id} className="boss-card flex items-center justify-between p-4 rounded-xl group">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 border border-rose-900/40 bg-rose-950/20 rounded flex items-center justify-center text-rose-400">
+              {visibleExpenses.map(exp => (
+                <button key={exp.id} onClick={() => setSelectedExpense(exp)}
+                  className="w-full boss-card flex items-center justify-between p-4 rounded-xl group text-left hover:border-rose-500/30 transition-all cursor-pointer active:scale-[0.99]">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 border border-rose-900/40 bg-rose-950/20 rounded flex items-center justify-center text-rose-400 shrink-0">
                       <Coins className="w-4 h-4" />
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-white uppercase">{exp.description}</p>
-                      <p className="text-xs text-zinc-500 font-bold mt-0.5 uppercase">{exp.category} • {new Date(exp.timestamp).toLocaleDateString()}</p>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
+                      <p className="text-xs text-zinc-500 font-bold mt-0.5 uppercase truncate">{exp.category} • {new Date(exp.timestamp).toLocaleDateString()}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(exp.amount)}</p>
-                    <button onClick={() => { onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info'); }}
-                      className="p-1.5 text-zinc-600 hover:text-rose-400 lg:opacity-0 lg:group-hover:opacity-100 transition-all rounded-lg hover:bg-rose-950/30">
+                    <span
+                      role="button" tabIndex={0} aria-label="Delete expense"
+                      onClick={(e) => { e.stopPropagation(); onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info'); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onDeleteExpense(exp.id); } }}
+                      className="p-1.5 text-zinc-600 hover:text-rose-400 lg:opacity-0 lg:group-hover:opacity-100 transition-all rounded-lg hover:bg-rose-950/30 cursor-pointer">
                       <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    </span>
                   </div>
-                </div>
+                </button>
               ))}
               {filteredExpenses.length === 0 && (
                 <div className="boss-card p-6 text-center text-zinc-500 text-xs font-bold uppercase">No expenses recorded.</div>
               )}
+              {filteredExpenses.length > visibleExpenses.length && (
+                <p className="text-[10px] text-zinc-600 font-bold uppercase text-center">Showing {visibleExpenses.length} of {filteredExpenses.length} — use Spend tab filters for more.</p>
+              )}
             </div>
           </section>
+          <ExpenseDetailModal
+            expense={selectedExpense}
+            formatCurrency={formatCurrency}
+            onClose={() => setSelectedExpense(null)}
+            onDelete={(id) => { onDeleteExpense(id); triggerToast('Deleted expense', 'info'); }}
+          />
         </>
       )}
 

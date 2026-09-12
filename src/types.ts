@@ -111,6 +111,13 @@ export interface Expense {
   description: string;
   amount: number;
   category: string;
+  // Accountability: where the money came from + who recorded it. Legacy rows
+  // omit these — assumed drawer-paid (safe default for theft detection).
+  source?: 'drawer' | 'cash' | 'momo' | 'owner' | 'bank';
+  staffName?: string;
+  note?: string;
+  linkedProductId?: string;
+  linkedProductName?: string;
 }
 
 export interface CreditEat {

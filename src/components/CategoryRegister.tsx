@@ -4,16 +4,22 @@ import {
   Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText
 } from 'lucide-react';
 import StatementModal from './StatementModal';
-import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale } from '../types';
+import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale, Expense } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
 import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
 import { isOn, type FeatureKey } from '../utils/features';
+import {
+  computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
+  moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
+} from '../utils/cashflow';
+import { pushNotice } from '../utils/notifications';
 
 interface CategoryRegisterProps {
   segments: string[];
   products: Product[];
   sales: Sale[];
+  expenses?: Expense[];
   creditEats: CreditEat[];
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
@@ -55,7 +61,7 @@ function formatDay(iso: string): string {
 }
 
 export default function CategoryRegister({
-  segments, products, sales, creditEats, productionRegisters, wastageLogs,
+  segments, products, sales, expenses = [], creditEats, productionRegisters, wastageLogs,
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
@@ -262,8 +268,53 @@ export default function CategoryRegister({
   const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
 
   // Daily capital kept for this department; profit to send = collected − capital.
-  const capForSelected = eodCapital && eodCapital[selected] ? Number(eodCapital[selected]) : 0;
+  const todayKey = todayLocalKey();
+  const capForSelected = eodCapital && eodCapital[selected] ? Number(eodCapital[selected]) : getClosingCapital(todayKey, selected, eodCapital);
   const profitToSend = Math.max(0, collectedToday - capForSelected);
+
+  // Smart drawer equation: opening (yesterday's capital carried forward) +
+  // collected − drawer expenses − moved out − closing = unaccounted (FLAG).
+  const drawerExpensesToday = useMemo(() => drawerExpensesByCategory(expenses, todayKey), [expenses, todayKey]);
+  const smartCash = useMemo(() => computeDayCash({
+    category: selected,
+    dayKey: todayKey,
+    openingCapital: getOpeningCapital(todayKey, selected, eodCapital),
+    closingCapital: capForSelected,
+    collected: collectedToday,
+    drawerExpenses: drawerExpensesToday[selected] || 0,
+    floatOut: floatOutToday,
+    cashOut: cashOutToday,
+    ownerOut: ownerOutToday,
+  }), [selected, todayKey, eodCapital, capForSelected, collectedToday, drawerExpensesToday, floatOutToday, cashOutToday, ownerOutToday]);
+
+  // Theft flags for ALL departments (once per day → bell, not spam).
+  const theftFlags = useMemo(() => buildTheftFlags({
+    dayKey: todayKey,
+    categories: segments,
+    collected: todayCollectedByCategory,
+    drawerExpenses: drawerExpensesToday,
+    moneyOut: moneyOutByCategory(momoTransfers, todayKey),
+    eodCapital,
+    sales,
+    products,
+    production: productionRegisters,
+    wastage: wastageLogs,
+    voidCount: (() => { try { return voidsOnDay(todayKey); } catch { return 0; } })(),
+  }), [todayKey, segments, todayCollectedByCategory, drawerExpensesToday, momoTransfers, eodCapital, sales, products, productionRegisters, wastageLogs]);
+
+  useEffect(() => {
+    for (const f of theftFlags.slice(0, 4)) {
+      try {
+        pushNotice(
+          f.kind === 'unaccounted' ? 'unaccounted' : f.kind === 'no-production' ? 'no-production' : 'shrinkage',
+          f.title,
+          f.detail,
+          `theft:${todayKey}:${f.kind}:${f.title}`.slice(0, 120),
+        );
+      } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey, theftFlags.length]);
 
   // Per-department view of today's money, for the reconciliation table.
   const todayMoneyOutByCat = useMemo(() => {
@@ -374,6 +425,60 @@ export default function CategoryRegister({
       {!isDailyMake && workflowHint && (
         <p className="text-[11px] text-zinc-500 font-bold -mt-3">{workflowHint}</p>
       )}
+
+      {/* Theft / accountability flags: unaccounted cash, no-production sales */}
+      {theftFlags.length > 0 && (
+        <section className="space-y-2">
+          {theftFlags.slice(0, 4).map((f, i) => (
+            <div
+              key={`${f.kind}-${i}`}
+              className={`rounded-2xl border p-4 flex items-start gap-3 ${
+                f.severity === 'critical'
+                  ? 'bg-rose-950/30 border-rose-600/40'
+                  : 'bg-amber-950/25 border-amber-600/30'
+              }`}
+            >
+              <AlertTriangle className={`w-5 h-5 shrink-0 mt-0.5 ${f.severity === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
+              <div className="min-w-0">
+                <p className={`text-xs font-black uppercase tracking-wider ${f.severity === 'critical' ? 'text-rose-300' : 'text-amber-300'}`}>
+                  {f.severity === 'critical' ? 'Flag — ' : 'Check — '}{f.title}
+                </p>
+                <p className="text-[11px] text-zinc-300 font-bold mt-1 leading-relaxed">{f.detail}</p>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Smart drawer card: opening (carried) → collected → expenses → moved → capital → unaccounted */}
+      <section className={`boss-card p-4 rounded-2xl border ${smartCash.status === 'missing' ? 'border-rose-600/50' : smartCash.status === 'balanced' ? 'border-emerald-800/40' : 'border-white/5'}`}>
+        <h3 className="text-xs font-black text-white uppercase tracking-widest mb-1">
+          Drawer math — {selected} today
+        </h3>
+        <p className="text-[10px] text-zinc-500 font-bold uppercase mb-3">
+          Opening {formatCurrency(smartCash.openingCapital)} (yesterday's capital) + Sold {formatCurrency(smartCash.collected)}
+          {smartCash.drawerExpenses > 0 && <> − Expenses {formatCurrency(smartCash.drawerExpenses)}</>} − Moved {formatCurrency(smartCash.movedOut)} − Capital {formatCurrency(smartCash.closingCapital)}
+        </p>
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-black/30 rounded-xl p-2.5">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Opening</p>
+            <p className="text-sm font-black text-zinc-200">{formatCurrency(smartCash.openingCapital)}</p>
+          </div>
+          <div className="bg-black/30 rounded-xl p-2.5">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Sold today</p>
+            <p className="text-sm font-black text-cyan-300">{formatCurrency(smartCash.collected)}</p>
+          </div>
+          <div className="bg-black/30 rounded-xl p-2.5">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Still unexplained</p>
+            <p className={`text-sm font-black ${smartCash.status === 'balanced' ? 'text-emerald-400' : smartCash.status === 'missing' ? 'text-rose-400' : 'text-amber-300'}`}>
+              {formatCurrency(Math.abs(smartCash.unaccounted))}
+            </p>
+          </div>
+        </div>
+        <p className={`text-[11px] font-bold uppercase mt-2.5 ${smartCash.status === 'balanced' ? 'text-emerald-300' : smartCash.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}>
+          {smartCash.status === 'balanced' ? '✓ Every shilling accounted for.' : smartCash.message}
+        </p>
+      </section>
 
       {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
       {isOn(features, 'closeWizard' as FeatureKey) && (() => {
@@ -702,6 +807,22 @@ export default function CategoryRegister({
                   className="h-9 px-3 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:border-gold-brand/40 hover:text-gold-brand cursor-pointer flex items-center gap-1">
                   <FileText className="w-3.5 h-3.5" /> Bill
                 </button>
+                <button
+                  onClick={async () => {
+                    const due = c.total - c.paidAmount;
+                    const msg = `Hello ${c.customerName}, reminder from ${shopName || 'our shop'}: ${c.qty}× ${c.item} (${formatDay(c.date)}) — balance ${formatCurrency(due)} of ${formatCurrency(c.total)}. Please clear it when you can. Thank you!`;
+                    try {
+                      const nav = navigator as unknown as { share?: (d: { title?: string; text: string }) => Promise<void> };
+                      if (nav.share) { await nav.share({ title: 'Payment reminder', text: msg }); triggerToast('Reminder shared', 'success'); return; }
+                      await navigator.clipboard.writeText(msg);
+                      triggerToast('Reminder copied — paste into WhatsApp', 'success');
+                    } catch { triggerToast('Could not share — copy manually', 'error'); }
+                  }}
+                  title={`Remind ${c.customerName}`}
+                  className="h-9 px-3 bg-amber-950/30 border border-amber-800/40 text-amber-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-amber-950/50 cursor-pointer"
+                >
+                  Remind
+                </button>
                 </div>
               </div>
             )})}
@@ -843,20 +964,27 @@ export default function CategoryRegister({
           </div>
         </div>
 
-        {/* Daily capital for this department: eateries keep tomorrow's capital,
-            only the profit above it is sent. Other departments set 0. */}
+        {/* Daily capital: yesterday's closing auto-carries as today's opening.
+            Set tonight's keep-aside — tomorrow opens with it. */}
         {onSetEodCapital && (
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3 mb-3">
             <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
-              Daily capital to keep for tomorrow — {selected}
+              Capital chain — {selected} (opening {formatCurrency(smartCash.openingCapital)} → closing for tomorrow)
             </label>
             <div className="flex items-center gap-2">
               <input type="number" min="0" step="1000" inputMode="numeric"
                 value={capForSelected || ''}
-                onChange={(e) => onSetEodCapital(selected, Math.max(0, parseInt(e.target.value || '0', 10) || 0))}
-                placeholder="0"
+                onChange={(e) => {
+                  const v = Math.max(0, parseInt(e.target.value || '0', 10) || 0);
+                  try { setClosingCapital(todayKey, selected, v); } catch {}
+                  onSetEodCapital(selected, v);
+                }}
+                placeholder="e.g. 10000 kept in drawer"
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-10 px-3 text-sm outline-none focus:border-gold-brand font-bold" />
             </div>
+            <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">
+              Yesterday left {formatCurrency(smartCash.openingCapital)} → today opens with it. Buy ingredients from it and the drawer math above tracks where it went.
+            </p>
             {collectedToday > 0 && capForSelected > 0 && (
               <p className="text-[10px] text-gold-brand font-bold uppercase mt-1.5">
                 Keep {formatCurrency(capForSelected)} as capital → send profit of approx {formatCurrency(profitToSend)}

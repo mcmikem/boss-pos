@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, TrendingDown } from 'lucide-react';
 import type { Expense, Product } from '../types';
 import QuickExpenseModal from './QuickExpenseModal';
+import ExpenseDetailModal from './ExpenseDetailModal';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
 interface ExpensesProps {
@@ -13,6 +14,7 @@ interface ExpensesProps {
   onAddExpenseCategory: (name: string) => void;
   onUpdateExpenseCategory: (oldName: string, newName: string) => void;
   onDeleteExpenseCategory: (name: string) => void;
+  onUpdateProduct?: (p: Product) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -41,11 +43,14 @@ export default function Expenses({
   expenses, expenseCategories, products,
   onAddExpense, onDeleteExpense,
   onAddExpenseCategory, onUpdateExpenseCategory, onDeleteExpenseCategory,
+  onUpdateProduct,
   formatCurrency, triggerToast,
 }: ExpensesProps) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showCatManager, setShowCatManager] = useState(false);
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [catNew, setCatNew] = useState('');
   const [editingCat, setEditingCat] = useState<string | null>(null);
   const [editingCatVal, setEditingCatVal] = useState('');
@@ -72,8 +77,11 @@ export default function Expenses({
   }, [timeFilter]);
 
   const filteredExpenses = useMemo(() => {
-    return expenses.filter(e => timeRange.filter(e.timestamp));
-  }, [expenses, timeRange]);
+    return expenses
+      .filter(e => timeRange.filter(e.timestamp))
+      .filter(e => !categoryFilter || e.category === categoryFilter)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }, [expenses, timeRange, categoryFilter]);
 
   const totalSpent = useMemo(() => {
     return filteredExpenses.reduce((acc, e) => acc + e.amount, 0);
@@ -172,9 +180,9 @@ export default function Expenses({
         </div>
       </section>
 
-      {/* What's taking most */}
+      {/* What's taking most — tap a row to drill into that category */}
       <section className="boss-card p-5 rounded-2xl">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-1">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
             <TrendingDown className="w-4 h-4 text-rose-400" /> Where the money goes
           </h3>
@@ -183,6 +191,7 @@ export default function Expenses({
             <Settings2 className="w-3.5 h-3.5" /> Manage Categories
           </button>
         </div>
+        <p className="text-[10px] text-zinc-600 font-bold uppercase mb-4">Tap a category to see only its receipts — e.g. how much went to Food or Electricity</p>
         {categoryBreakdown.length === 0 ? (
           <div className="text-center py-8">
             <Coins className="w-10 h-10 text-zinc-700 mx-auto mb-2" />
@@ -194,12 +203,18 @@ export default function Expenses({
               const pct = totalSpent > 0 ? Math.round((cat.total / totalSpent) * 100) : 0;
               const barPct = Math.max(6, Math.round((cat.total / maxCategoryTotal) * 100));
               const color = BREAKDOWN_COLORS[idx % BREAKDOWN_COLORS.length];
+              const active = categoryFilter === cat.category;
               return (
-                <div key={cat.category}>
+                <button
+                  key={cat.category}
+                  onClick={() => setCategoryFilter(prev => (prev === cat.category ? null : cat.category))}
+                  className={`w-full text-left rounded-xl px-2 py-1.5 -mx-2 transition-all cursor-pointer ${active ? 'bg-white/[0.04] ring-1 ring-gold-brand/40' : 'hover:bg-white/[0.02]'}`}
+                  title={`Show only ${cat.category}`}
+                >
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`w-2.5 h-2.5 rounded-full ${color} shrink-0`}></span>
-                      <span className="text-xs font-bold text-white uppercase truncate">{cat.category}</span>
+                      <span className="text-xs font-bold text-white uppercase truncate">{cat.category}{active ? ' ✓' : ''}</span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs font-black text-zinc-300 font-mono">{pct}%</span>
@@ -209,23 +224,34 @@ export default function Expenses({
                   <div className="h-2 bg-zinc-900 rounded-full overflow-hidden">
                     <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${barPct}%` }} />
                   </div>
-                  <p className="text-[10px] text-zinc-600 font-bold mt-0.5 uppercase">{cat.count} entry{cat.count !== 1 ? 's' : ''}</p>
-                </div>
+                  <p className="text-[10px] text-zinc-600 font-bold mt-0.5 uppercase">{cat.count} entry{cat.count !== 1 ? 's' : ''} • tap to {active ? 'show all' : 'filter'}</p>
+                </button>
               );
             })}
           </div>
         )}
       </section>
 
-      {/* History */}
+      {/* History — every row opens the full receipt as it was sent */}
       <section className="space-y-3">
-        <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Expense History ({timeFilter === 'all' ? 'all' : timeRange.label})</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">
+            Expense History ({categoryFilter || (timeFilter === 'all' ? 'all' : timeRange.label)}) • tap a row for details
+          </h3>
+          {categoryFilter && (
+            <button onClick={() => setCategoryFilter(null)}
+              className="text-[10px] font-black uppercase text-gold-brand hover:text-gold-light cursor-pointer shrink-0 ml-2">
+              Clear {categoryFilter} ✕
+            </button>
+          )}
+        </div>
         {filteredExpenses.length === 0 ? (
           <div className="boss-card p-6 text-center text-zinc-500 text-xs font-bold uppercase">No expenses recorded.</div>
         ) : (
           <div className="space-y-2">
             {filteredExpenses.slice(0, 100).map(exp => (
-              <div key={exp.id} className="boss-card flex items-center justify-between p-4 rounded-xl group">
+              <button key={exp.id} onClick={() => setSelectedExpense(exp)}
+                className="w-full boss-card flex items-center justify-between p-4 rounded-xl group text-left hover:border-rose-500/30 transition-all cursor-pointer active:scale-[0.99]">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 border border-rose-900/40 bg-rose-950/20 rounded flex items-center justify-center text-rose-400 shrink-0">
                     <Coins className="w-4 h-4" />
@@ -233,22 +259,35 @@ export default function Expenses({
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
                     <p className="text-xs text-zinc-500 font-bold mt-0.5 uppercase truncate">
-                      {exp.category} • {new Date(exp.timestamp).toLocaleDateString()}
+                      {exp.category} • {new Date(exp.timestamp).toLocaleDateString()} • tap for receipt
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(exp.amount)}</p>
-                  <button onClick={() => { onDeleteExpense(exp.id); triggerToast('Deleted expense', 'info'); }}
-                    className="p-1.5 text-zinc-600 hover:text-rose-400 transition-all rounded-lg hover:bg-rose-950/30 cursor-pointer touch-target">
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Delete expense"
+                    onClick={(e) => { e.stopPropagation(); onDeleteExpense(exp.id); triggerToast('Deleted expense', 'info'); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onDeleteExpense(exp.id); } }}
+                    className="p-1.5 text-zinc-600 hover:text-rose-400 transition-all rounded-lg hover:bg-rose-950/30 cursor-pointer touch-target"
+                  >
                     <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  </span>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
       </section>
+
+      <ExpenseDetailModal
+        expense={selectedExpense}
+        formatCurrency={formatCurrency}
+        onClose={() => setSelectedExpense(null)}
+        onDelete={(id) => { onDeleteExpense(id); triggerToast('Deleted expense', 'info'); }}
+      />
 
       {/* Category manager */}
       {showCatManager && (
@@ -325,6 +364,7 @@ export default function Expenses({
         expenseCategories={expenseCategories}
         formatCurrency={formatCurrency}
         triggerToast={triggerToast}
+        onUpdateProduct={onUpdateProduct}
       />
     </div>
   );

@@ -2,13 +2,16 @@
 // What the kitchen made this morning (adds to stock for today's selling).
 // The Close tab only reads this data for the evening balance check.
 import { useMemo, useState } from 'react';
-import { ChefHat, Check, Trash2 } from 'lucide-react';
-import type { Product, ProductionRegister } from '../types';
+import { ChefHat, Check, Trash2, ArrowRight } from 'lucide-react';
+import type { Product, ProductionRegister, Sale, WastageLog } from '../types';
 import { todayLocalKey } from '../utils/dates';
+import { leftoverFor, prevDayKey } from '../utils/cashflow';
 
 interface MorningProductionProps {
   products: Product[];
   productionRegisters: ProductionRegister[];
+  sales?: Sale[];
+  wastageLogs?: WastageLog[];
   onAddProduction: (p: ProductionRegister) => void;
   onDeleteProduction: (id: string) => void;
   formatCurrency: (val: number) => string;
@@ -16,7 +19,7 @@ interface MorningProductionProps {
 }
 
 export default function MorningProduction({
-  products, productionRegisters, onAddProduction, onDeleteProduction,
+  products, productionRegisters, sales = [], wastageLogs = [], onAddProduction, onDeleteProduction,
   formatCurrency, triggerToast,
 }: MorningProductionProps) {
   const eateryProducts = useMemo(() => products.filter(p => p.category === 'Eatery'), [products]);
@@ -33,6 +36,14 @@ export default function MorningProduction({
     [productionRegisters, today]
   );
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
+
+  // Yesterday's leftovers carry as today's opening — kitchen makes less.
+  const yesterdayKey = prevDayKey(today);
+  const leftovers = useMemo(
+    () => (sales.length ? leftoverFor(products, productionRegisters, sales, wastageLogs, yesterdayKey) : []),
+    [products, productionRegisters, sales, wastageLogs, yesterdayKey]
+  );
+  const carryable = leftovers.filter(r => r.leftover > 0).slice(0, 5);
 
   const handleSelect = (value: string) => {
     setProdItem(value);
@@ -84,6 +95,38 @@ export default function MorningProduction({
         <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>
         <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayCost)}</p>
       </div>
+
+      {carryable.length > 0 && (
+        <div className="bg-cyan-950/25 border border-cyan-800/40 rounded-xl p-3 space-y-2">
+          <p className="text-[10px] font-black text-cyan-300 uppercase tracking-widest">
+            Yesterday's leftover → today's opening
+          </p>
+          {carryable.map(r => (
+            <div key={r.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white truncate">{r.productName}</p>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                  Made {r.made} • Sold {r.sold} • Lost {r.lost} → left {r.leftover}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setProdItem(r.productName);
+                  const prod = eateryProducts.find(p => p.id === r.productId);
+                  setProdProductId(prod ? prod.id : null);
+                  if (prod) setProdCost(String(prod.cost || ''));
+                  setProdQty('');
+                  triggerToast(`${r.productName}: ${r.leftover} carried — adjust today's batch down`, 'info');
+                }}
+                className="shrink-0 h-9 px-3 bg-cyan-600/20 border border-cyan-600/40 text-cyan-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-cyan-600/30 cursor-pointer flex items-center gap-1"
+              >
+                Use <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          <p className="text-[10px] text-zinc-500 font-bold uppercase">Tap Use to prefill — make less today, sell leftover first.</p>
+        </div>
+      )}
 
       <div className="bg-zinc-950/60 border border-amber-600/20 rounded-xl p-4 space-y-3">
         <div>

@@ -316,6 +316,38 @@ async function initDB() {
   if (subExists.length === 0) {
     await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', 'basic')`;
   }
+  // --------------------------------------------
+  // Marketer growth engine: who brought which shop, what they earned.
+  // Tables are created idempotently; commission math lives in the admin
+  // payment hook below (record payment -> auto-accrue referrer cut).
+  // --------------------------------------------
+  await sql`CREATE TABLE IF NOT EXISTS marketers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    code VARCHAR(32) NOT NULL UNIQUE,
+    commission_pct DOUBLE PRECISION NOT NULL DEFAULT 10,
+    active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW()
+  )`;
+  await sql`CREATE TABLE IF NOT EXISTS referrals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(255) NOT NULL,
+    marketer_id UUID REFERENCES marketers(id) ON DELETE SET NULL,
+    shop_name TEXT DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    commission_due DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+  )`;
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_tenant ON referrals(tenant_id)`; } catch {}
+  await sql`CREATE TABLE IF NOT EXISTS marketer_payouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    marketer_id UUID NOT NULL REFERENCES marketers(id) ON DELETE CASCADE,
+    amount DOUBLE PRECISION NOT NULL,
+    method TEXT DEFAULT '',
+    reference TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT NOW()
+  )`;
   // Auto-backup bookkeeping (epoch ms; 0 = never).
   await sql`INSERT INTO settings (key, value) VALUES ('lastAutoBackupAt', '0') ON CONFLICT (key) DO NOTHING`;
 }
@@ -826,6 +858,15 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   if (attempts.length > 0) {
     await sql`DELETE FROM auth_attempts WHERE id=${key}`;
   }
+  // Suspended shops cannot unlock (fail-open: any lookup error lets the till
+  // through rather than locking a paying shop out on a DB hiccup).
+  try {
+    const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+    const t = await sql`SELECT status FROM tenants WHERE id = ${tenantId}`;
+    if (t.length && t[0].status === 'suspended') {
+      return res.status(403).json({ error: 'This shop is suspended — contact BOSS POS support.', code: 'SUSPENDED' });
+    }
+  } catch {}
   // Migrate a legacy unsalted sha256 PIN to the strong format on successful login.
   let returnedHash = stored || '';
   if (stored && !stored.startsWith('pbkdf2$')) {
@@ -866,6 +907,8 @@ app.use((req, res, next) => {
   // Super-admin routes authenticate with their separate admin token below,
   // rather than a shop till PIN token.
   if (req.path.startsWith('/api/admin/')) return next();
+  // Public marketer portal: the referral code in the URL is the secret.
+  if (req.path.startsWith('/api/m/')) return next();
   if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
     requireAuth(req, res, next).catch(next);
     return;
@@ -2987,14 +3030,295 @@ app.post('/api/admin/shop/:tenantId/cancel', requireSuperAdmin, asHandler(async 
 }));
 
 // POST /api/admin/shop/:tenantId/payment - record manual payment (super admin)
+// Side effect: auto-accrues the referrer's commission cut (if the shop was
+// referred by a marketer) so payouts always match recorded revenue.
 app.post('/api/admin/shop/:tenantId/payment', requireSuperAdmin, asHandler(async (req, res) => {
   const { amount, method, reference } = req.body || {};
   const tenantId = req.params.tenantId;
-  if (amount && method) {
-    await sql`INSERT INTO payment_log (id, tenant_id, amount, method, reference, created_at) VALUES (gen_random_uuid(), ${tenantId}, ${amount}, ${method}, ${reference || ''}, NOW()) ON CONFLICT (id) DO NOTHING`;
+  const num = Number(amount) || 0;
+  if (num > 0 && method) {
+    await sql`INSERT INTO payment_log (id, tenant_id, amount, method, reference, created_at) VALUES (gen_random_uuid(), ${tenantId}, ${num}, ${method}, ${reference || ''}, NOW()) ON CONFLICT (id) DO NOTHING`;
+    try {
+      const refs = await sql`SELECT r.id, r.marketer_id, m.commission_pct FROM referrals r JOIN marketers m ON m.id = r.marketer_id WHERE r.tenant_id = ${tenantId} AND m.active = true`;
+      for (const r of refs) {
+        const cut = Math.round(num * (Number(r.commission_pct) || 0) / 100);
+        if (cut > 0) {
+          await sql`UPDATE referrals SET commission_due = COALESCE(commission_due, 0) + ${cut}, status = 'active' WHERE id = ${r.id}`;
+        }
+      }
+      if (refs.length) await audit('admin.commission', `Accrued referral cut on ${tenantId} payment ${num}`);
+    } catch (e) { console.error('Commission accrual failed:', e.message); }
   }
   const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
   res.json({ tenant: tenant[0] });
+}));
+
+// --------------------------------------------
+// SUPER-ADMIN SHOP CONSOLE — onboard, register and change anything in a
+// shop's settings. Auth: x-admin-token (same gate as all /api/admin/*).
+// Scope note: each deployment is one isolated shop DB (fleet = one Neon DB
+// + one Vercel project per shop), so these endpoints manage THIS shop's
+// settings + its tenant/subscription rows — open the shop's own URL + #admin.
+// --------------------------------------------
+
+const ADMIN_EDITABLE_SETTINGS = new Set([
+  'shopName', 'themeId', 'vibe', 'defaultPaymentMethod', 'dailyGoalNum',
+  'shopType', 'language', 'usdRate', 'categories', 'expenseCategories',
+  'momoFeePct', 'ownerPhone', 'sheetsUrl', 'branches', 'eodCapital',
+  'largeText', 'features', 'showTailoring', 'showDesign', 'showBookings',
+  'showRepairs', 'efris',
+]);
+const ADMIN_BLOCKED_SETTINGS = new Set([
+  'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
+  'clientWriteId', 'deviceId', 'hasPin', 'efrisToken',
+]);
+
+// GET /api/admin/shop/settings - full editable settings dump for support
+app.get('/api/admin/shop/settings', requireSuperAdmin, asHandler(async (req, res) => {
+  const rows = await sql`SELECT key, value FROM settings`;
+  const settings = {};
+  for (const r of rows) {
+    if (ADMIN_BLOCKED_SETTINGS.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
+    try { settings[r.key] = JSON.parse(r.value); } catch { settings[r.key] = r.value; }
+  }
+  const pinRows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
+  settings.hasPin = !!(pinRows.length && pinRows[0].value);
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const tenants = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  const subs = await sql`SELECT status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  res.json({ settings, tenant: tenants[0] || null, subscription: subs[0] || null });
+}));
+
+// PUT /api/admin/shop/settings - change any editable setting (audited)
+app.put('/api/admin/shop/settings', requireSuperAdmin, asHandler(async (req, res) => {
+  const body = req.body || {};
+  const rows = Object.entries(body.settings || body)
+    .filter(([k, v]) => ADMIN_EDITABLE_SETTINGS.has(k) && v !== undefined)
+    .map(([k, v]) => ({
+      key: String(k).slice(0, 100),
+      value: typeof v === 'string' ? v.slice(0, 10000) : (JSON.stringify(v) ?? 'null').slice(0, 10000),
+    }));
+  if (rows.length === 0) return res.status(400).json({ error: 'No editable settings keys in body' });
+  await batchUpsert('settings', 'key', ['key', 'value'], rows);
+  if (body.shopName) {
+    const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+    try { await sql`UPDATE tenants SET name = ${String(body.shopName).slice(0, 100)} WHERE id = ${tenantId}`; } catch {}
+  }
+  await audit('admin.settings', `Super admin updated: ${rows.map(r => r.key).join(', ')}`);
+  res.json({ success: true, updated: rows.map(r => r.key) });
+}));
+
+// POST /api/admin/shop/onboard - register a shop on this deployment:
+// tenant + subscription + shopName/ownerPhone + till PIN, in one call.
+app.post('/api/admin/shop/onboard', requireSuperAdmin, asHandler(async (req, res) => {
+  const { shopName, plan, pin, ownerPhone, marketerCode } = req.body || {};
+  const cleanName = String(shopName || '').trim().slice(0, 100);
+  if (!cleanName) return res.status(400).json({ error: 'shopName is required' });
+  const cleanPlan = ['basic', 'starter', 'growth', 'scale', 'pro', 'enterprise'].includes(String(plan)) ? String(plan) : 'basic';
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const existing = await sql`SELECT id FROM tenants WHERE id = ${tenantId}`;
+  if (existing.length === 0) {
+    await sql`INSERT INTO tenants (id, name, plan, status) VALUES (${tenantId}, ${cleanName}, ${cleanPlan}, 'active')`;
+  } else {
+    await sql`UPDATE tenants SET name = ${cleanName}, plan = ${cleanPlan}, status = 'active' WHERE id = ${tenantId}`;
+  }
+  const subExists = await sql`SELECT id FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  if (subExists.length === 0) {
+    await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${cleanPlan})`;
+  } else {
+    await sql`UPDATE subscriptions SET status = 'active', plan = ${cleanPlan} WHERE tenant_id = ${tenantId}`;
+  }
+  await sql`INSERT INTO settings (key, value) VALUES ('shopName', ${JSON.stringify(cleanName)}) ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(cleanName)}`;
+  if (ownerPhone !== undefined) {
+    const digits = String(ownerPhone || '').replace(/\D/g, '').slice(0, 12);
+    await sql`INSERT INTO settings (key, value) VALUES ('ownerPhone', ${JSON.stringify(digits)}) ON CONFLICT (key) DO UPDATE SET value = ${JSON.stringify(digits)}`;
+  }
+  let pinSet = false;
+  if (pin !== undefined && pin !== null && String(pin) !== '') {
+    if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ error: 'PIN must be exactly 4 digits' });
+    const salt = randomBytes(16).toString('hex');
+    const value = pinHashFormat(salt, hashPinStrong(String(pin), salt));
+    await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value = ${value}`;
+    await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key = 'authVersion'`;
+    pinSet = true;
+  }
+  // One-step referral: attribute the new shop to a marketer code at onboard.
+  let referredBy = null;
+  const cleanCode = String(marketerCode || '').trim().toUpperCase();
+  if (cleanCode) {
+    try {
+      const m = await sql`SELECT id, active FROM marketers WHERE code = ${cleanCode}`;
+      if (m.length && m[0].active) {
+        await sql`INSERT INTO referrals (tenant_id, marketer_id, shop_name, status) VALUES (${tenantId}, ${m[0].id}, ${cleanName}, 'pending') ON CONFLICT (tenant_id) DO UPDATE SET marketer_id = ${m[0].id}, shop_name = ${cleanName}`;
+        referredBy = cleanCode;
+      }
+    } catch (e) { console.error('Onboard referral failed:', e.message); }
+  }
+  await audit('admin.onboard', `Onboarded "${cleanName}" plan=${cleanPlan}${pinSet ? ' +PIN' : ''}${referredBy ? ` ref=${referredBy}` : ''}`);
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  res.json({ success: true, tenant: tenant[0], pinSet, referredBy });
+}));
+
+// POST /api/admin/shop/pin - reset or clear the till PIN (audited)
+app.post('/api/admin/shop/pin', requireSuperAdmin, asHandler(async (req, res) => {
+  const { pin } = req.body || {};
+  if (pin !== '' && !/^\d{4}$/.test(String(pin || ''))) return res.status(400).json({ error: 'PIN must be exactly 4 digits (or empty to clear)' });
+  if (pin === '') {
+    await sql`DELETE FROM settings WHERE key = 'pinHash'`;
+    await audit('admin.pin', 'Super admin cleared the till PIN');
+  } else {
+    const salt = randomBytes(16).toString('hex');
+    const value = pinHashFormat(salt, hashPinStrong(String(pin), salt));
+    await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value = ${value}`;
+    await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key = 'authVersion'`;
+    await audit('admin.pin', 'Super admin reset the till PIN');
+  }
+  res.json({ success: true, hasPin: pin !== '' });
+}));
+
+// POST /api/admin/shop/status - suspend / reactivate a shop (audited)
+app.post('/api/admin/shop/status', requireSuperAdmin, asHandler(async (req, res) => {
+  const { status } = req.body || {};
+  if (!['active', 'suspended'].includes(String(status))) return res.status(400).json({ error: "status must be 'active' or 'suspended'" });
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  await sql`UPDATE tenants SET status = ${String(status)} WHERE id = ${tenantId}`;
+  await sql`UPDATE subscriptions SET status = ${String(status) === 'active' ? 'active' : 'suspended'} WHERE tenant_id = ${tenantId}`;
+  await audit('admin.status', `Shop ${status}`);
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  res.json({ success: true, tenant: tenant[0] });
+}));
+
+// GET /api/admin/shop/overview - support triage: today's trade + health
+app.get('/api/admin/shop/overview', requireSuperAdmin, asHandler(async (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const sales = await sql`SELECT COUNT(*)::int AS n, COALESCE(SUM(total), 0)::numeric AS revenue FROM sales WHERE timestamp >= ${today}`;
+  const refunded = await sql`SELECT COUNT(*)::int AS n FROM sales WHERE refunded = true AND timestamp >= ${today}`;
+  const expenses = await sql`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount), 0)::numeric AS total FROM expenses WHERE timestamp >= ${today}`;
+  const products = await sql`SELECT COUNT(*)::int AS n FROM products WHERE deleted = false`;
+  const low = await sql`SELECT COUNT(*)::int AS n FROM products WHERE deleted = false AND isservice = false AND stockqty <= COALESCE(lowstockthreshold, 5)`;
+  const neg = await sql`SELECT COUNT(*)::int AS n FROM products WHERE deleted = false AND isservice = false AND stockqty < 0`;
+  const staff = await sql`SELECT COUNT(*)::int AS n FROM staff`;
+  const bkp = await sql`SELECT created_at FROM backups ORDER BY created_at DESC LIMIT 1`;
+  const recentAudit = await sql`SELECT id, at, action, detail FROM audit_log ORDER BY at DESC LIMIT 10`;
+  res.json({
+    day: today,
+    salesToday: Number(sales[0]?.n || 0),
+    revenueToday: Number(sales[0]?.revenue || 0),
+    refundedToday: Number(refunded[0]?.n || 0),
+    expensesToday: Number(expenses[0]?.n || 0),
+    expensesTotalToday: Number(expenses[0]?.total || 0),
+    products: Number(products[0]?.n || 0),
+    lowStock: Number(low[0]?.n || 0),
+    negativeStock: Number(neg[0]?.n || 0),
+    staff: Number(staff[0]?.n || 0),
+    lastBackupAt: bkp[0]?.created_at || null,
+    recentActivity: recentAudit,
+  });
+}));
+
+// --------------------------------------------
+// MARKETERS — CRUD, referrals, payouts, public portal
+// --------------------------------------------
+
+function marketerCode() {
+  return 'BOSS-' + randomBytes(3).toString('hex').toUpperCase();
+}
+
+// GET /api/admin/marketers - list with earned/paid/balance + shop count
+app.get('/api/admin/marketers', requireSuperAdmin, asHandler(async (req, res) => {
+  const ms = await sql`SELECT id, name, phone, code, commission_pct, active, created_at FROM marketers ORDER BY created_at DESC`;
+  const refs = await sql`SELECT marketer_id, tenant_id, shop_name, status, COALESCE(commission_due, 0)::numeric AS due FROM referrals`;
+  const payouts = await sql`SELECT marketer_id, COALESCE(SUM(amount), 0)::numeric AS paid FROM marketer_payouts GROUP BY marketer_id`;
+  const paidMap = new Map(payouts.map(p => [p.marketer_id, Number(p.paid || 0)]));
+  res.json({
+    marketers: ms.map(m => {
+      const mine = refs.filter(r => r.marketer_id === m.id);
+      const earned = mine.reduce((a, r) => a + Number(r.due || 0), 0);
+      const paid = paidMap.get(m.id) || 0;
+      return {
+        id: m.id, name: m.name, phone: m.phone, code: m.code,
+        commissionPct: Number(m.commission_pct || 0), active: !!m.active,
+        createdAt: m.created_at, shops: mine.length, earned, paid, balance: earned - paid,
+      };
+    }),
+  });
+}));
+
+// POST /api/admin/marketers - register a marketer (unique referral code)
+app.post('/api/admin/marketers', requireSuperAdmin, asHandler(async (req, res) => {
+  const { name, phone, commissionPct } = req.body || {};
+  const cleanName = String(name || '').trim().slice(0, 100);
+  if (!cleanName) return res.status(400).json({ error: 'name is required' });
+  const pct = Math.min(50, Math.max(0, Number(commissionPct) || 10));
+  const code = marketerCode();
+  const rows = await sql`INSERT INTO marketers (name, phone, code, commission_pct) VALUES (${cleanName}, ${String(phone || '').slice(0, 30)}, ${code}, ${pct}) RETURNING id, name, phone, code, commission_pct, active, created_at`;
+  await audit('admin.marketer', `Registered marketer ${cleanName} (${code}) @ ${pct}%`);
+  res.json({ marketer: rows[0] });
+}));
+
+// PUT /api/admin/marketers/:id - edit rate / details / active flag
+app.put('/api/admin/marketers/:id', requireSuperAdmin, asHandler(async (req, res) => {
+  const { name, phone, commissionPct, active } = req.body || {};
+  const cur = await sql`SELECT id FROM marketers WHERE id = ${req.params.id}`;
+  if (!cur.length) return res.status(404).json({ error: 'Marketer not found' });
+  if (name !== undefined) await sql`UPDATE marketers SET name = ${String(name).slice(0, 100)} WHERE id = ${req.params.id}`;
+  if (phone !== undefined) await sql`UPDATE marketers SET phone = ${String(phone).slice(0, 30)} WHERE id = ${req.params.id}`;
+  if (commissionPct !== undefined) await sql`UPDATE marketers SET commission_pct = ${Math.min(50, Math.max(0, Number(commissionPct) || 0))} WHERE id = ${req.params.id}`;
+  if (active !== undefined) await sql`UPDATE marketers SET active = ${!!active} WHERE id = ${req.params.id}`;
+  await audit('admin.marketer', `Updated marketer ${req.params.id}`);
+  const rows = await sql`SELECT id, name, phone, code, commission_pct, active, created_at FROM marketers WHERE id = ${req.params.id}`;
+  res.json({ marketer: rows[0] });
+}));
+
+// GET /api/admin/referrals - all shop attributions
+app.get('/api/admin/referrals', requireSuperAdmin, asHandler(async (req, res) => {
+  const rows = await sql`SELECT r.id, r.tenant_id, r.shop_name, r.status, r.commission_due, r.created_at, m.name AS marketer_name, m.code AS marketer_code FROM referrals r LEFT JOIN marketers m ON m.id = r.marketer_id ORDER BY r.created_at DESC`;
+  res.json({ referrals: rows });
+}));
+
+// POST /api/admin/referrals - attribute a shop to a marketer code
+app.post('/api/admin/referrals', requireSuperAdmin, asHandler(async (req, res) => {
+  const { tenantId, shopName, marketerCode: code } = req.body || {};
+  const cleanCode = String(code || '').trim().toUpperCase();
+  if (!cleanCode) return res.status(400).json({ error: 'marketerCode is required' });
+  const m = await sql`SELECT id, active FROM marketers WHERE code = ${cleanCode}`;
+  if (!m.length) return res.status(404).json({ error: 'Unknown marketer code' });
+  if (!m[0].active) return res.status(400).json({ error: 'Marketer is deactivated' });
+  const tid = String(tenantId || process.env.APP_TENANT_ID || 'imac-default');
+  await sql`INSERT INTO referrals (tenant_id, marketer_id, shop_name, status) VALUES (${tid}, ${m[0].id}, ${String(shopName || '').slice(0, 100)}, 'pending') ON CONFLICT (tenant_id) DO UPDATE SET marketer_id = ${m[0].id}, shop_name = ${String(shopName || '').slice(0, 100)}`;
+  await audit('admin.referral', `Attributed ${tid} to ${cleanCode}`);
+  res.json({ success: true });
+}));
+
+// POST /api/admin/marketers/:id/payout - pay out earned commission
+app.post('/api/admin/marketers/:id/payout', requireSuperAdmin, asHandler(async (req, res) => {
+  const { amount, method, reference } = req.body || {};
+  const num = Math.round(Number(amount) || 0);
+  if (num <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const m = await sql`SELECT id FROM marketers WHERE id = ${req.params.id}`;
+  if (!m.length) return res.status(404).json({ error: 'Marketer not found' });
+  await sql`INSERT INTO marketer_payouts (marketer_id, amount, method, reference) VALUES (${req.params.id}, ${num}, ${String(method || '').slice(0, 50)}, ${String(reference || '').slice(0, 100)})`;
+  await audit('admin.payout', `Paid ${num} to marketer ${req.params.id}`);
+  res.json({ success: true, amount: num });
+}));
+
+// GET /api/m/:code - PUBLIC marketer portal (code is the secret): earnings,
+// shops brought, payout history. No auth — share the link with the marketer.
+app.get('/api/m/:code', asHandler(async (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  const m = await sql`SELECT id, name, code, commission_pct, active FROM marketers WHERE code = ${code}`;
+  if (!m.length) return res.status(404).json({ error: 'Unknown marketer code' });
+  const mk = m[0];
+  const refs = await sql`SELECT tenant_id, shop_name, status, COALESCE(commission_due, 0)::numeric AS due, created_at FROM referrals WHERE marketer_id = ${mk.id} ORDER BY created_at DESC`;
+  const payouts = await sql`SELECT amount, method, reference, created_at FROM marketer_payouts WHERE marketer_id = ${mk.id} ORDER BY created_at DESC`;
+  const earned = refs.reduce((a, r) => a + Number(r.due || 0), 0);
+  const paid = payouts.reduce((a, p) => a + Number(p.amount || 0), 0);
+  res.json({
+    name: mk.name, code: mk.code, commissionPct: Number(mk.commission_pct || 0), active: !!mk.active,
+    shops: refs.map(r => ({ shopName: r.shop_name, status: r.status, earned: Number(r.due || 0), since: r.created_at })),
+    earned, paid, balance: earned - paid,
+    payouts: payouts.map(p => ({ amount: Number(p.amount || 0), method: p.method, reference: p.reference, at: p.created_at })),
+  });
 }));
 
 // Payment log table tracking helper
