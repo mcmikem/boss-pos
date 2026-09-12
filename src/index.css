@@ -63,6 +63,65 @@ html.light-theme [class~="text-cyan-400"] { color: #0e7490 !important; }
 html.light-theme .boss-card { background-color: #ffffff; border-color: rgba(24, 24, 27, 0.1); box-shadow: 0 4px 20px rgba(24, 24, 27, 0.08); }
 html.light-theme .boss-card:hover { background-color: #fafaf9; border-color: rgba(24, 24, 27, 0.2); transform: translateY(-2px); }
 
+/* ---- Light-theme coverage, round 2: every dark surface / light text that the
+   exact-token rules above miss (opacity variants like bg-zinc-900/50 or
+   text-white/60 never equal the bare token, so ~= never matches them).
+   Modal dim layers (bg-black/70 and up) deliberately STAY dark. ---- */
+html.light-theme [class*="bg-zinc-950"],
+html.light-theme [class*="bg-[#141414]/"],
+html.light-theme [class*="bg-black/30"],
+html.light-theme [class*="bg-black/40"],
+html.light-theme [class*="bg-black/45"] { background-color: #f5f5f4 !important; }
+html.light-theme [class*="bg-zinc-900/"],
+html.light-theme [class*="bg-zinc-800/"],
+html.light-theme [class~="bg-zinc-700"] { background-color: #e4e4e7 !important; }
+html.light-theme [class*="hover:bg-zinc-800"]:hover,
+html.light-theme [class*="hover:bg-zinc-700"]:hover { background-color: #d4d4d8 !important; }
+html.light-theme .group:hover [class*="group-hover:bg-zinc-700"] { background-color: #d4d4d8 !important; }
+/* Deep tint panels (alerts, toasts, badges) would trap remapped-dark text on a
+   near-black fill — wash them to their daylight tint instead. Borders stay. */
+html.light-theme [class*="bg-emerald-950"] { background-color: #ecfdf5 !important; }
+html.light-theme [class*="bg-rose-950"] { background-color: #fff1f2 !important; }
+html.light-theme [class*="bg-amber-950"] { background-color: #fffbeb !important; }
+html.light-theme [class*="bg-cyan-950"],
+html.light-theme [class*="bg-cyan-900"] { background-color: #ecfeff !important; }
+html.light-theme [class*="bg-orange-950"] { background-color: #fff7ed !important; }
+/* White overlays are invisible on paper — turn them into ink tints instead. */
+html.light-theme [class*="bg-white/"] { background-color: rgba(24, 24, 27, 0.05) !important; }
+html.light-theme [class*="hover:bg-white/"]:hover { background-color: rgba(24, 24, 27, 0.08) !important; }
+/* Dark borders go hairline; zinc dividers follow. */
+html.light-theme [class*="border-zinc-800"],
+html.light-theme [class~="border-zinc-700"],
+html.light-theme [class~="border-zinc-600"] { border-color: rgba(24, 24, 27, 0.14) !important; }
+html.light-theme [class*="divide-"] > * { border-color: rgba(24, 24, 27, 0.08) !important; }
+/* -300 accents and opacity-thinned text wash out on paper — deepen them all. */
+html.light-theme [class~="text-emerald-300"],
+html.light-theme [class~="text-green-400"],
+html.light-theme [class~="text-green-500"] { color: #047857 !important; }
+html.light-theme [class~="text-amber-300"],
+html.light-theme [class~="text-amber-500"],
+html.light-theme [class~="text-amber-100"],
+html.light-theme [class~="text-orange-300"] { color: #b45309 !important; }
+html.light-theme [class~="text-rose-300"],
+html.light-theme [class~="text-rose-500"],
+html.light-theme [class~="text-red-400"],
+html.light-theme [class~="text-red-500"] { color: #be123c !important; }
+html.light-theme [class~="text-cyan-300"],
+html.light-theme [class~="text-cyan-500"] { color: #0e7490 !important; }
+html.light-theme [class~="text-emerald-500"],
+html.light-theme [class~="text-emerald-600"] { color: #047857 !important; }
+html.light-theme [class~="text-gold-medium"] { color: #7a5f00 !important; }
+html.light-theme [class*="text-white/"],
+html.light-theme [class*="text-black/"],
+html.light-theme [class*="text-rose-400/"],
+html.light-theme [class*="text-amber-300/"],
+html.light-theme [class*="text-amber-400/"],
+html.light-theme [class*="text-amber-500/"],
+html.light-theme [class*="text-emerald-400/"],
+html.light-theme [class*="text-gold-brand/"] { color: #3f3f46 !important; }
+/* Gold focus rings disappear on paper — focus in deep gold instead. */
+html.light-theme [class*="focus:border-gold-brand"]:focus { border-color: #7a5f00 !important; }
+
 /* Mistake 6 fix: tiny caps labels need breathing room to scan fast.
    Use for badges / eyebrows instead of bare `uppercase tracking-wider`. */
 .micro-label {
