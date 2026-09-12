@@ -88,6 +88,25 @@ function addDeletedSale(id: string): void {
   } catch {}
 }
 
+// Already running as the installed app (not a browser tab)?
+function isStandalone(): boolean {
+  try {
+    if (window.matchMedia('(display-mode: standalone)').matches) return true;
+    if ((window.navigator as unknown as { standalone?: boolean }).standalone === true) return true;
+  } catch {}
+  return false;
+}
+
+// iPhones/iPads never fire beforeinstallprompt — install is manual there.
+function isIOSDevice(): boolean {
+  try {
+    const ua = navigator.userAgent || '';
+    if (/iphone|ipad|ipod/i.test(ua)) return true;
+    if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
+  } catch {}
+  return false;
+}
+
 // Inline add-staff form used in Settings (first setup + later adds).
 function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'cashier', pin: string) => void }) {
   const [name, setName] = useState('');
@@ -219,7 +238,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [efrisSaving, setEfrisSaving] = useState(false);
   const [outboxPreview, setOutboxPreview] = useState<{ id: string; path: string; method: string; age: string }[]>([]);
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  // Dismissed forever once the user says "not now" — the banner must never nag.
+  const [installDismissed, setInstallDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_install_dismissed') === '1'; } catch { return false; }
+  });
   const [reconcileResult, setReconcileResult] = useState<{ salesChecked: number; totalMismatches: number; negativeStock: { id: string; name: string; qty: number }[] } | null>(null);
 
   const readyRef = useRef(false);
@@ -513,12 +535,34 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return () => { closed = true; try { controller?.abort(); } catch {} };
   }, [authState, applyBootData]);
 
-  // PWA install prompt capture
+  // PWA install prompt capture (preventDefault keeps it for our own button).
   useEffect(() => {
-    const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); setShowInstallBanner(true); };
+    const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
     window.addEventListener('beforeinstallprompt', h);
     return () => window.removeEventListener('beforeinstallprompt', h);
   }, []);
+
+  // Fires the stored install prompt and reports back. Returns true when a
+  // prompt actually ran (button did something), false when there was nothing
+  // to fire (e.g. iPhone, which never provides one).
+  const runInstallPrompt = async (): Promise<boolean> => {
+    const ev = installPrompt as unknown as { prompt: () => void; userChoice?: Promise<{ outcome: string }> } | null;
+    if (!ev || typeof ev.prompt !== 'function') return false;
+    try {
+      ev.prompt();
+      const choice = await ev.userChoice?.catch(() => null);
+      if (choice && choice.outcome === 'accepted') {
+        triggerToast('Installing — find the app on your home screen', 'success');
+      }
+    } catch {}
+    setInstallPrompt(null);
+    return true;
+  };
+
+  const dismissInstall = () => {
+    try { localStorage.setItem('boss_pos_install_dismissed', '1'); } catch {}
+    setInstallDismissed(true);
+  };
 
   // Refresh the offline-pending badge + "Synced" pill every 30s.
   useEffect(() => {
@@ -1577,7 +1621,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               { key: 'pin', label: 'Set a till PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
               { key: 'stock', label: 'Add your first products', done: products.length > 0, act: () => setActiveTab('inventory') },
               { key: 'sale', label: 'Make your first sale', done: sales.length > 0 },
-              { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {} } : undefined },
+              { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { runInstallPrompt(); } : undefined },
             ];
             const doneCount = steps.filter(s => s.done).length;
             if (doneCount >= steps.length) return null;
@@ -1828,24 +1872,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           ) : null}
         </div>
         <div className="flex items-center gap-3">
-          {showInstallBanner && (
-            <div className="sm:flex h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all">
-              <span>Install app for offline access & faster sync</span>
-              <button onClick={async () => {
-                try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {}
-                setInstallPrompt(null);
-                setShowInstallBanner(false);
-              }} className="ml-2 opacity-50 cursor-not-allowed">
-                Install
-              </button>
-            </div>
-          )}
-          {installPrompt && !showInstallBanner && (
-            <button onClick={async () => {
-              try { (installPrompt as unknown as { prompt: () => void }).prompt(); } catch {}
-              setInstallPrompt(null);
-            }} className="hidden sm:flex h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90">
-              Install
+          {installPrompt && (
+            <button onClick={() => { runInstallPrompt(); }}
+              className="h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer">
+              Install app
             </button>
           )}
           <button onClick={handleSwitchStaff} title={staffConfigured ? 'Switch seller (PIN-checked)' : 'Who is selling'}
@@ -1869,6 +1899,44 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] max-w-7xl mx-auto w-full">
+        {/* First-run install banner: new devices see this before anything else.
+            Dismissed forever on "Not now". iPhones get manual steps (no prompt). */}
+        {!installDismissed && (() => {
+          try {
+            if (isStandalone()) return null;
+          } catch { return null; }
+          const ios = isIOSDevice();
+          if (!installPrompt && !ios) return null;
+          return (
+            <div className="boss-card p-4 rounded-2xl border border-gold-brand/40 bg-gold-brand/5 mb-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gold-brand/15 border border-gold-brand/30 flex items-center justify-center shrink-0">
+                  <Download className="w-5 h-5 text-gold-brand" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-white uppercase tracking-widest">Install the app</p>
+                  <p className="text-[11px] text-zinc-400 font-bold mt-0.5 leading-snug">
+                    {ios
+                      ? 'On iPhone: tap Share, then "Add to Home Screen" — it opens fast and works offline.'
+                      : 'One tap — opens fast, works offline, syncs faster.'}
+                  </p>
+                  <div className="flex gap-2 mt-2.5">
+                    {!ios && (
+                      <button onClick={() => { runInstallPrompt(); }}
+                        className="h-10 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                        Install
+                      </button>
+                    )}
+                    <button onClick={dismissInstall}
+                      className="h-10 px-4 border border-zinc-700 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl hover:text-zinc-200 transition-all cursor-pointer">
+                      {ios ? 'Got it' : 'Not now'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         {renderContent()}
       </main>
 
