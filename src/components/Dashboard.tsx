@@ -155,69 +155,77 @@ export default function Dashboard({
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         
-        <div 
+        <button
+          type="button"
           onClick={() => onNavigate('sales')}
-          className="boss-card border-t-4 border-t-emerald-500 p-4 flex flex-col justify-between h-36 cursor-pointer active:scale-98 transition-all hover:border-emerald-500/30 group"
+          aria-label={`Cash box ${formatCurrency(cashCollected)}. Cash in drawer. Go to sell screen.`}
+          className="boss-card border-t-4 border-t-emerald-500 p-4 flex flex-col justify-between min-h-36 min-w-0 w-full text-left cursor-pointer active:scale-98 transition-all hover:border-emerald-500/30 group focus-visible:outline-2 focus-visible:outline-gold-brand"
           id="kpi-cash-box"
         >
-          <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-emerald-400 bg-emerald-950/40 px-2 py-1 border border-emerald-800/30 rounded-lg uppercase tracking-wider">Cash Box</span>
-            <Coins className="w-5 h-5 text-emerald-400" />
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-xs font-bold text-emerald-400 bg-emerald-950/40 px-2 py-1 border border-emerald-800/30 rounded-lg uppercase tracking-wider truncate">Cash Box</span>
+            <Coins className="w-5 h-5 text-emerald-400 shrink-0" />
           </div>
-          <div className="mt-2">
+          <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sente Enkalu</p>
-            <p className="text-xl font-black text-white font-display truncate">{formatCurrency(cashCollected)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300">Cash in drawer</p>
+            <p className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(cashCollected)}>{formatCurrency(cashCollected)}</p>
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">Cash in drawer</p>
           </div>
-        </div>
+        </button>
 
-        <div 
+        <button
+          type="button"
           onClick={() => onNavigate('sales')}
-          className="boss-card border-t-4 border-t-yellow-500 p-4 flex flex-col justify-between h-36 cursor-pointer active:scale-98 transition-all hover:border-yellow-500/30 group"
+          aria-label={`Mobile money received ${formatCurrency(momoCollected)}. MTN and Airtel. Go to sell screen.`}
+          className="boss-card border-t-4 border-t-yellow-500 p-4 flex flex-col justify-between min-h-36 min-w-0 w-full text-left cursor-pointer active:scale-98 transition-all hover:border-yellow-500/30 group focus-visible:outline-2 focus-visible:outline-gold-brand"
           id="kpi-momo-collected"
         >
-          <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-yellow-400 bg-yellow-950/45 px-2 py-1 border border-yellow-800/30 rounded-lg uppercase tracking-wider">MoMo Received</span>
-            <Smartphone className="w-5 h-5 text-yellow-400" />
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-xs font-bold text-yellow-400 bg-yellow-950/45 px-2 py-1 border border-yellow-800/30 rounded-lg uppercase tracking-wider truncate">MoMo Received</span>
+            <Smartphone className="w-5 h-5 text-yellow-400 shrink-0" />
           </div>
-          <div className="mt-2">
+          <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sente z'Esimu</p>
-            <p className="text-xl font-black text-white font-display truncate">{formatCurrency(momoCollected)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300">MTN & Airtel</p>
+            <p className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(momoCollected)}>{formatCurrency(momoCollected)}</p>
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">MTN & Airtel</p>
           </div>
-        </div>
+        </button>
 
-        <div 
+        <button
+          type="button"
           onClick={() => onNavigate('sales')}
-          className="boss-card border-t-4 border-t-blue-500 p-4 flex flex-col justify-between h-36 cursor-pointer active:scale-98 transition-all hover:border-blue-500/30 group"
+          aria-label={`Credit given ${formatCurrency(creditIssued)}. To collect from customers. Go to sell screen.`}
+          className="boss-card border-t-4 border-t-blue-500 p-4 flex flex-col justify-between min-h-36 min-w-0 w-full text-left cursor-pointer active:scale-98 transition-all hover:border-blue-500/30 group focus-visible:outline-2 focus-visible:outline-gold-brand"
           id="kpi-credit-book"
         >
-          <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-blue-400 bg-blue-950/40 px-2 py-1 border border-blue-800/30 rounded-lg uppercase tracking-wider">Credit Given</span>
-            <BookOpen className="w-5 h-5 text-blue-400" />
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-xs font-bold text-blue-400 bg-blue-950/40 px-2 py-1 border border-blue-800/30 rounded-lg uppercase tracking-wider truncate">Credit Given</span>
+            <BookOpen className="w-5 h-5 text-blue-400 shrink-0" />
           </div>
-          <div className="mt-2">
+          <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Amabanja</p>
-            <p className="text-xl font-black text-white font-display truncate">{formatCurrency(creditIssued)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300">To collect from customers</p>
+            <p className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(creditIssued)}>{formatCurrency(creditIssued)}</p>
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">To collect from customers</p>
           </div>
-        </div>
+        </button>
 
-        <div 
+        <button
+          type="button"
           onClick={() => onNavigate('analytics')}
-          className="boss-card border-t-4 border-t-gold-brand p-4 flex flex-col justify-between h-36 cursor-pointer active:scale-98 transition-all hover:border-gold-brand/30 group"
+          aria-label={`Today's profit ${formatCurrency(netProfit)}. After costs and expenses. Go to reports.`}
+          className="boss-card border-t-4 border-t-gold-brand p-4 flex flex-col justify-between min-h-36 min-w-0 w-full text-left cursor-pointer active:scale-98 transition-all hover:border-gold-brand/30 group focus-visible:outline-2 focus-visible:outline-gold-brand"
           id="kpi-magoba-profit"
         >
-          <div className="flex justify-between items-start">
-            <span className="text-xs font-bold text-gold-brand bg-gold-brand/10 px-2 py-1 border border-gold-brand/20 rounded-lg uppercase tracking-wider">Today's Profit</span>
-            <TrendingUp className="w-5 h-5 text-gold-brand" />
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-xs font-bold text-gold-brand bg-gold-brand/10 px-2 py-1 border border-gold-brand/20 rounded-lg uppercase tracking-wider truncate">Today's Profit</span>
+            <TrendingUp className="w-5 h-5 text-gold-brand shrink-0" />
           </div>
-          <div className="mt-2">
+          <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Magoba</p>
-            <p className={`text-xl font-black font-display truncate ${netProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(netProfit)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300">After costs & expenses</p>
+            <p className={`text-lg sm:text-xl font-black font-display truncate tabular-nums ${netProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`} title={formatCurrency(netProfit)}>{formatCurrency(netProfit)}</p>
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">After costs & expenses</p>
           </div>
-        </div>
+        </button>
 
       </section>
 

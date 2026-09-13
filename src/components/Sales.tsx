@@ -339,7 +339,7 @@ export default function Sales({
     setServiceQtyProduct(null);
   };
 
-  const handleCompleteSaleRef = useRef<(() => void | Promise<void>) | null>(null);
+  const handleCompleteSaleRef = useRef<(() => boolean | void | Promise<boolean | void>) | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -380,13 +380,26 @@ export default function Sales({
     setRemoveConfirmId(null);
   };
 
-  const handleDirectQtyChange = (productId: string, variantId: string | undefined, val: number) => {
-    const product = products.find(p => p.id === productId);
+  // Direct qty edit (tap the qty pill → type → Enter). Takes the RAW string so
+  // a typo or empty field can never nuke the line: only an explicit "0"
+  // removes it, anything else unparseable just closes the editor and keeps
+  // the old qty. Fractions (2.5 kg) round to 3 decimals via parseQty.
+  const handleDirectQtyChange = (productId: string, variantId: string | undefined, raw: string) => {
     const key = `${productId}::${variantId || ''}`;
-    if (val <= 0) { handleRemoveItem(productId, variantId); setEditingItemId(null); return; }
+    const trimmed = raw.trim();
+    if (trimmed === '') { setEditingItemId(null); return; }
+    const val = parseQty(trimmed);
+    if (val <= 0) {
+      if (/^0+(\.0+)?$/.test(trimmed)) handleRemoveItem(productId, variantId);
+      else triggerToast('Enter a valid quantity (e.g. 2 or 2.5)', 'error');
+      setEditingItemId(null);
+      return;
+    }
+    const product = products.find(p => p.id === productId);
     if (product && val > product.stockQty && !product.isService) {
       triggerToast(`Only ${product.stockQty} remaining in stock!`, 'error');
-      val = product.stockQty;
+      setEditingItemId(null);
+      return;
     }
     setCart(prev => prev.map(item =>
       `${item.productId}::${item.variantId || ''}` === key
@@ -399,7 +412,7 @@ export default function Sales({
   const handleRemoveItem = (productId: string, variantId: string | undefined) => {
     const key = `${productId}::${variantId || ''}`;
     const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
-    if (item && item.qty > 1 && !removeConfirmId) {
+    if (item && item.qty > 1 && removeConfirmId !== key) {
       setRemoveConfirmId(key);
       return;
     }
@@ -421,8 +434,8 @@ export default function Sales({
   const tax = 0;
 
   const handleCompleteSale = async () => {
-    if (isCompleting) return;
-    if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return; }
+    if (isCompleting) return false;
+    if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
 
     // Re-validate stock against the live catalog. The cart can go stale across
     // tab switches or stock edits, so never sell more than is actually there.
@@ -447,7 +460,7 @@ export default function Sales({
       setCart(clampedItems);
       if (itemsToSell.length === 0) {
         triggerToast(`Out of stock: ${oversold.join(', ')}`, 'error');
-        return;
+        return false;
       }
       triggerToast(`Stock shortage — selling available only: ${oversold.join(', ')}`, 'error');
     }
@@ -471,7 +484,7 @@ export default function Sales({
         );
         if (!ok) {
           triggerToast('Sale paused — log Morning Production first', 'info');
-          return;
+          return false;
         }
         try {
           pushNotice(
@@ -486,6 +499,13 @@ export default function Sales({
 
     setIsCompleting(true);
     const cashPaidNum = parseFloat(customCashReceived);
+    // Underpaid-Cash guard: desktop/mobile buttons disable short-pay, but
+    // QuickSale + F2 bypassed them. Block here so no path can sell at a loss.
+    if (paymentMethod === 'Cash' && customCashReceived !== '' && !isNaN(cashPaidNum) && cashPaidNum < saleTotal) {
+      setIsCompleting(false);
+      triggerToast(`Short by ${formatCurrency(saleTotal - cashPaidNum)} — collect full cash first`, 'error');
+      return false;
+    }
     let changeMsg = '';
     if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= saleTotal) {
       changeMsg = ` Change: ${formatCurrency(cashPaidNum - saleTotal)}`;
@@ -513,6 +533,7 @@ export default function Sales({
     setIsCompleting(false);
     playChargeFeedback();
     triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
+    return true;
   };
   handleCompleteSaleRef.current = handleCompleteSale;
 
@@ -600,38 +621,107 @@ export default function Sales({
               <input type="number" step="any" min="0" autoFocus value={editingQtyValue}
                 onChange={(e) => setEditingQtyValue(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleDirectQtyChange(item.productId, item.variantId, parseQty(editingQtyValue));
+                  if (e.key === 'Enter') handleDirectQtyChange(item.productId, item.variantId, editingQtyValue);
                   if (e.key === 'Escape') setEditingItemId(null);
                 }}
                 className="w-16 bg-zinc-900 border border-gold-brand text-gold-light rounded text-center text-sm h-11 p-1 focus:outline-none" />
-              <button onClick={() => handleDirectQtyChange(item.productId, item.variantId, parseQty(editingQtyValue))}
+              <button onClick={() => handleDirectQtyChange(item.productId, item.variantId, editingQtyValue)}
+                aria-label={`Set quantity for ${item.productName}`}
                 className="p-2 bg-gold-brand text-black rounded text-sm hover:opacity-90 cursor-pointer touch-target"><Check className="w-4 h-4" /></button>
             </div>
           ) : (
             // Mistake 14: unit lives INSIDE qty selector, not in product title.
             <button onClick={() => { setEditingItemId(lineKey); setEditingQtyValue(String(item.qty)); }}
+              aria-label={`Edit quantity of ${item.productName}, currently ${item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}`}
               className="text-xs font-semibold text-zinc-300 bg-zinc-900 hover:text-gold-brand hover:bg-zinc-800 px-3 py-1.5 rounded-lg cursor-pointer transition-all touch-target tabular-nums">
               {item.saleUnit ? unitLabel(item.qty, item.saleUnit) : `${item.qty} × ${formatCurrency(item.unitPrice)}`}
             </button>
           )}
           <div className="flex items-center gap-1.5">
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
+              aria-label={`Decrease quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Minus className="w-4 h-4" /></button>
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
+              aria-label={`Increase quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Plus className="w-4 h-4" /></button>
             {isRemoveConfirm ? (
               <div className="flex items-center gap-1">
                 <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
+                  aria-label={`Confirm remove ${item.productName} from cart`}
                   className="touch-target bg-rose-600 text-white rounded-lg flex items-center justify-center text-xs font-black cursor-pointer">Yes</button>
                 <button onClick={() => setRemoveConfirmId(null)}
+                  aria-label={`Keep ${item.productName} in cart`}
                   className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center text-xs font-bold cursor-pointer">No</button>
               </div>
             ) : (
               <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
+                aria-label={`Remove ${item.productName} from cart`}
                 className="touch-target bg-rose-950/20 hover:bg-rose-950 hover:text-rose-400 text-rose-500 rounded-lg flex items-center justify-center transition-all cursor-pointer"><Trash2 className="w-4 h-4" /></button>
             )}
           </div>
         </div>
+      </div>
+    );
+  };
+
+  // Compact cart row for the mobile sheet + QuickSale footer. Same guarantees
+  // as the desktop row: first tap on remove arms a Yes/No confirm (so a
+  // qty>1 line can't be wiped by a stray tap), and the qty pill opens an
+  // inline editor that accepts fractions (2.5 kg) via handleDirectQtyChange.
+  const renderCompactCartRow = (item: SaleItem, onDark: boolean) => {
+    const lineKey = `${item.productId}::${item.variantId || ''}`;
+    const isEditing = editingItemId === lineKey;
+    const isRemoveConfirm = removeConfirmId === lineKey;
+    const qtyText = item.saleUnit ? unitLabel(item.qty, item.saleUnit) : String(item.qty);
+    return (
+      <div key={lineKey} className={`${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border border-white/5 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]`}>
+        <div className="min-w-0 flex-1">
+          <h4 className="text-sm font-semibold text-zinc-100 truncate max-w-[160px] leading-snug" title={item.productName}>{item.productName}</h4>
+          {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
+          <p className="text-xs text-gold-brand font-bold mt-0.5 tabular-nums">{formatCurrency(item.lineTotal)}</p>
+        </div>
+        {isEditing ? (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <input type="number" step="any" min="0" autoFocus value={editingQtyValue}
+              onChange={(e) => setEditingQtyValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleDirectQtyChange(item.productId, item.variantId, editingQtyValue);
+                if (e.key === 'Escape') setEditingItemId(null);
+              }}
+              aria-label={`Quantity for ${item.productName}`}
+              className="w-16 bg-zinc-900 border border-gold-brand text-gold-light rounded-lg text-center text-sm h-11 p-1 focus:outline-none tabular-nums" />
+            <button onClick={() => handleDirectQtyChange(item.productId, item.variantId, editingQtyValue)}
+              aria-label={`Set quantity for ${item.productName}`}
+              className="touch-target bg-gold-brand text-black rounded-xl flex items-center justify-center cursor-pointer"><Check className="w-4 h-4" /></button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
+              aria-label={`Decrease quantity of ${item.productName}`}
+              className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
+            <button onClick={() => { setEditingItemId(lineKey); setEditingQtyValue(String(item.qty)); }}
+              aria-label={`Edit quantity of ${item.productName}, currently ${qtyText}`}
+              title="Tap to type an exact quantity (fractions allowed)"
+              className="text-sm font-bold text-white min-w-[44px] min-h-[44px] px-1 text-center tabular-nums rounded-xl hover:bg-zinc-900 cursor-pointer">{qtyText}</button>
+            <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
+              aria-label={`Increase quantity of ${item.productName}`}
+              className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
+            {isRemoveConfirm ? (
+              <>
+                <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
+                  aria-label={`Confirm remove ${item.productName} from cart`}
+                  className="touch-target bg-rose-600 text-white rounded-xl flex items-center justify-center text-xs font-black cursor-pointer px-2">Yes</button>
+                <button onClick={() => setRemoveConfirmId(null)}
+                  aria-label={`Keep ${item.productName} in cart`}
+                  className="touch-target bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-xs font-bold cursor-pointer px-2">No</button>
+              </>
+            ) : (
+              <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
+                aria-label={`Remove ${item.productName} from cart`}
+                className="touch-target bg-rose-950/20 hover:bg-rose-950/40 text-rose-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">x</button>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -1146,24 +1236,7 @@ export default function Sales({
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] max-h-[40vh]">
             {renderParkedRows()}
-            {cart.map(item => (
-              <div key={`${item.productId}::${item.variantId || ''}`} className="bg-[#0A0A0A] border border-white/5 p-3 rounded-xl flex items-center justify-between gap-2 min-h-[64px]">
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-semibold text-zinc-100 truncate max-w-[160px] leading-snug" title={item.productName}>{item.productName}</h4>
-                  {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
-                  <p className="text-xs text-gold-brand font-bold mt-0.5 tabular-nums">{formatCurrency(item.lineTotal)}</p>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
-                    className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
-                  <span className="text-sm font-bold text-white min-w-[24px] text-center tabular-nums">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
-                  <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
-                    className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">+</button>
-                  <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
-                    className="touch-target bg-rose-950/20 hover:bg-rose-950/40 text-rose-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">x</button>
-                </div>
-              </div>
-            ))}
+            {cart.map(item => renderCompactCartRow(item, false))}
           </div>
           <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
             <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
@@ -1342,43 +1415,69 @@ export default function Sales({
           {cart.length > 0 && (
             <div className="border-t border-white/5 p-4 space-y-3 bg-[#0A0A0A]">
               <div className="space-y-2 max-h-40 overflow-y-auto">
-                {cart.map(item => (
-                  <div key={`${item.productId}::${item.variantId || ''}`} className="flex items-center justify-between bg-[#141414] border border-white/5 p-3 rounded-xl">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-zinc-100 truncate leading-snug">{item.productName}</p>
-                      {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
-                      <p className="text-xs font-bold text-gold-brand tabular-nums">{formatCurrency(item.lineTotal)}</p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0 ml-2">
-                      <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
-                        className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">-</button>
-                      <span className="text-sm font-bold text-white min-w-[20px] text-center tabular-nums">{item.saleUnit ? unitLabel(item.qty, item.saleUnit) : item.qty}</span>
-                      <button onClick={() => handleAdjustQty(item.productId, item.variantId, 1)}
-                        className="touch-target bg-zinc-800 text-zinc-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">+</button>
-                      <button onClick={() => handleRemoveItem(item.productId, item.variantId)}
-                        className="touch-target bg-rose-950/20 text-rose-400 rounded-lg flex items-center justify-center font-bold cursor-pointer">x</button>
-                    </div>
-                  </div>
-                ))}
+                {cart.map(item => renderCompactCartRow(item, true))}
               </div>
               <div className="grid grid-cols-4 gap-1.5">
                 {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'].map(name => (
-                  <button key={name} onClick={() => setPaymentMethod(name as any)}
-                    className={`py-2.5 rounded-xl text-xs border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 ${
+                  <button key={name} onClick={() => { setPaymentMethod(name as any); setCustomCashReceived(''); }}
+                    className={`py-2.5 rounded-xl text-xs border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
                       paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'
                     }`}>
                     {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
                   </button>
                 ))}
               </div>
+              {paymentMethod === 'Cash' && (
+                <div className="bg-[#141414] border border-white/5 p-3 rounded-2xl space-y-2">
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="text-xs text-zinc-400 font-bold uppercase">{t(lang, 'cashReceived')}</span>
+                    <input type="number" min="0" placeholder={t(lang, 'amount')} value={customCashReceived}
+                      onChange={(e) => setCustomCashReceived(e.target.value)}
+                      aria-label={t(lang, 'cashReceived')}
+                      className="w-28 bg-[#0A0A0A] border border-white/5 text-gold-brand font-black text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
+                  </div>
+                  {featsOn('quickCash') && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {(() => {
+                        if (total <= 0) return null;
+                        const s = new Set<number>();
+                        s.add(total);
+                        [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) s.add(n); });
+                        s.add(Math.ceil(total / 5000) * 5000);
+                        return Array.from(s).filter(a => a >= total).sort((a, b) => a - b).slice(0, 4).map(amt => (
+                          <button key={amt} onClick={() => setCustomCashReceived(String(amt))}
+                            className={`px-3 py-1.5 text-xs font-black rounded-lg border transition-all min-h-[36px] cursor-pointer active:scale-95 ${
+                              parseFloat(customCashReceived) === amt ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#0A0A0A] text-zinc-400 border-white/5'
+                            }`}>
+                            {amt === total ? t(lang, 'exact') : amt.toLocaleString()}
+                          </button>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                  {customCashReceived && (
+                    <div className="pt-1.5 border-t border-white/5 flex justify-between items-center">
+                      {parseFloat(customCashReceived) >= total ? (
+                        <><span className="text-xs text-emerald-400 font-bold uppercase">{t(lang, 'change')}</span><span className="text-sm font-black text-emerald-400 tabular-nums">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
+                      ) : (
+                        <><span className="text-xs text-amber-500 font-bold uppercase">{t(lang, 'stillNeed')}</span><span className="text-sm font-black text-amber-500 tabular-nums">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-[13px] font-semibold text-zinc-300">Total</span>
                 <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
               </div>
-              <button onClick={() => setShowConfirmSale(true)} disabled={cart.length === 0}
-                className="w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer">
+              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
+                title={isDisabled && disabledReason ? disabledReason : undefined}
+                className="w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                 {`${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
               </button>
+              {isDisabled && disabledReason && (
+                <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>
+              )}
             </div>
           )}
         </div>

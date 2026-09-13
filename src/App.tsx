@@ -1848,9 +1848,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         '--color-gold-light': THEME_MAP.get(settings.themeId)?.light ?? '#ffedc3',
       } as Record<string, string>}
     >
-      <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center px-4 py-3 h-16 w-full">
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm sm:text-base md:text-lg font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[150px] sm:max-w-none">
+      <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center gap-2 px-3 sm:px-4 py-3 h-16 w-full">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <h1 className="text-sm sm:text-base md:text-lg font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[110px] min-[400px]:max-w-[150px] sm:max-w-none shrink-0">
             {settings.shopName}
           </h1>
           {!isOnline && (
@@ -1871,18 +1871,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {installPrompt && (
             <button onClick={() => { runInstallPrompt(); }}
-              className="h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer">
-              Install app
+              className="h-8 px-2.5 sm:px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer shrink-0">
+              Install<span className="hidden sm:inline"> app</span>
             </button>
           )}
           <button onClick={handleSwitchStaff} title={staffConfigured ? 'Switch seller (PIN-checked)' : 'Who is selling'}
-            className="flex items-center gap-1.5 h-8 px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer">
-            <span className={`w-1.5 h-1.5 rounded-full ${activeStaff ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-            <span className="max-w-[90px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
-            {staffConfigured && <span className="text-[8px] text-zinc-600">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
+            aria-label={staffConfigured ? `Switch seller, currently ${activeStaff?.name || staffName || 'unset'}` : 'Set seller name'}
+            className="flex items-center gap-1.5 h-8 px-2 sm:px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer min-w-0">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeStaff ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+            <span className="max-w-[64px] min-[400px]:max-w-[90px] sm:max-w-[120px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
+            {staffConfigured && <span className="hidden sm:inline text-[8px] text-zinc-600 shrink-0">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
           </button>
           <NotificationsBell />
           <button onClick={() => {
@@ -1944,7 +1945,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           form footer can ever hide behind it. Page content has no z-index,
           so the nav still floats above scrolling content. */}
       <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-40 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
-        <button onClick={() => setActiveTab('sales')} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="sales-nav-btn">
+        <button onClick={() => setActiveTab('sales')} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "sales" ? "page" : undefined} id="sales-nav-btn">
           <div className="relative">
             <ShoppingCart className="w-5 h-5 mb-1" />
             {cart.length > 0 && (
@@ -1956,23 +1957,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'sell')}</span>
         </button>
         {isManager && (
-        <button onClick={() => setActiveTab('inventory')} aria-label={t(settings.language, 'stock')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="inventory-nav-btn">
+        <button onClick={() => setActiveTab('inventory')} aria-label={t(settings.language, 'stock')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "inventory" ? "page" : undefined} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'stock')}</span>
         </button>
         )}
-        <button onClick={() => { setActiveTab('expenses'); }} aria-label={t(settings.language, 'spend')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="expenses-nav-btn">
+        <button onClick={() => { setActiveTab('expenses'); }} aria-label={t(settings.language, 'spend')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "expenses" ? "page" : undefined} id="expenses-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'spend')}</span>
         </button>
         {isManager && (
-        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'reports')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="analytics-nav-btn">
+        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'reports')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "analytics" ? "page" : undefined} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'reports')}</span>
         </button>
         )}
         {isManager && (
-        <button onClick={() => setActiveTab('registers')} aria-label={t(settings.language, 'closeDay')} className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="registers-nav-btn">
+        <button onClick={() => setActiveTab('registers')} aria-label={t(settings.language, 'closeDay')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "registers" ? "page" : undefined} id="registers-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'closeDay')}</span>
         </button>

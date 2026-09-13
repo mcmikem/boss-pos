@@ -4,7 +4,7 @@ import { t } from '../utils/i18n';
 interface ConfirmSaleModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: () => void | Promise<void>;
+  onConfirm: () => boolean | void | Promise<boolean | void>;
   isCompleting?: boolean;
   cart: SaleItem[];
   total: number;
@@ -44,7 +44,10 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isComplet
         <div className="flex gap-2">
           <button onClick={onClose} disabled={isCompleting}
             className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed">{t(lang, 'cancel')}</button>
-          <button onClick={() => { Promise.resolve(onConfirm()).finally(onClose); }} disabled={isCompleting}
+          {/* Only dismiss on success: handleCompleteSale returns false when it
+              blocks the sale (e.g. underpaid cash) so the cashier can fix the
+              tender instead of re-opening the modal. */}
+          <button onClick={async () => { const ok = await onConfirm(); if (ok !== false) onClose(); }} disabled={isCompleting}
             className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed">
             {isCompleting ? t(lang, 'saving') : t(lang, 'confirm')}
           </button>

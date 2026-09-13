@@ -542,9 +542,9 @@ const colorsMap: { [key: string]: string } = {
 
   return (
     <div className="space-y-6 animate-fade-in pb-4" id="analytics-tab-content">
-      <section className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-        <div>
-          <h2 className="text-3xl font-black text-white uppercase tracking-tight font-display">
+      <section className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight font-display truncate">
             {showSuppliers ? 'Suppliers' : 'Reports'}
           </h2>
           <p className="text-sm text-zinc-400 mt-1 font-bold tracking-wider">
@@ -556,7 +556,7 @@ const colorsMap: { [key: string]: string } = {
             </p>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 shrink-0">
           {!showSuppliers && (
             <button onClick={async () => {
               const salesCsv = [
@@ -581,18 +581,18 @@ const colorsMap: { [key: string]: string } = {
                 triggerToast(ok ? 'Report exported as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
               }
             }}
-              className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-emerald-500 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
+              className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-emerald-500 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
               Export CSV
             </button>
           )}
           {!showSuppliers && (
             <button onClick={() => onNavigate('registers')}
-              className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-amber-500 text-amber-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5">
+              className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-amber-500 text-amber-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5">
               <LayoutGrid className="w-3.5 h-3.5" /> Daily Close-out
             </button>
           )}
           <button onClick={() => setShowSuppliers(!showSuppliers)}
-            className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
+            className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
             {showSuppliers ? '← Back to Reports' : 'View Suppliers →'}
           </button>
         </div>
@@ -761,29 +761,29 @@ const colorsMap: { [key: string]: string } = {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="md:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between h-32" title="Category that sold the most money in this period">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="sm:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between min-h-32 min-w-0" title="Category that sold the most money in this period">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Top Category ({timeFilter}) <Info className="w-3 h-3 text-zinc-600" /></span>
-              <div className="flex items-center justify-between mt-1">
-                <h3 className="text-2xl font-black text-gold-brand uppercase font-display">{topCategory.name}</h3>
-                <TrendingUp className="w-6 h-6 text-gold-brand" />
+              <div className="flex items-center justify-between gap-2 mt-1 min-w-0">
+                <h3 className="text-2xl font-black text-gold-brand uppercase font-display truncate tabular-nums" title={topCategory.name}>{topCategory.name}</h3>
+                <TrendingUp className="w-6 h-6 text-gold-brand shrink-0" />
               </div>
-              <p className="text-xs text-zinc-400 font-bold uppercase">Sales: {formatCurrency(topCategory.amount)}</p>
+              <p className="text-xs text-zinc-400 font-bold uppercase truncate tabular-nums">Sales: {formatCurrency(topCategory.amount)}</p>
             </div>
-            <div className="boss-card p-5 flex flex-col justify-between h-32" title="All money from sales in this period (before costs). Swipe Daily/Weekly/Monthly to change period.">
+            <div className="boss-card p-5 flex flex-col justify-between min-h-32 min-w-0" title="All money from sales in this period (before costs). Swipe Daily/Weekly/Monthly to change period.">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Money In <Info className="w-3 h-3 text-zinc-600" /></span>
-              <h3 className="text-2xl font-black text-white font-display mt-1">{formatCurrency(displayIncome)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase">
+              <h3 className="text-2xl font-black text-white font-display mt-1 truncate tabular-nums" title={formatCurrency(displayIncome)}>{formatCurrency(displayIncome)}</h3>
+              <p className="text-xs text-zinc-500 font-bold uppercase truncate">
                 Total sales{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''} • Tap Daily/Weekly/Monthly above
               </p>
               {displayVat > 0 && (
-                <p className="text-xs text-emerald-400 font-bold uppercase mt-1">VAT inside: {formatCurrency(displayVat)}</p>
+                <p className="text-xs text-emerald-400 font-bold uppercase mt-1 truncate tabular-nums">VAT inside: {formatCurrency(displayVat)}</p>
               )}
             </div>
-            <div className="boss-card p-5 flex flex-col justify-between h-32" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
+            <div className="boss-card p-5 flex flex-col justify-between min-h-32 min-w-0" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Profit Left <Info className="w-3 h-3 text-zinc-600" /></span>
-              <h3 className={`text-2xl font-black font-display mt-1 ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`}>{formatCurrency(displayNetProfit)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase">{displayNetProfit >= 0 ? 'You kept this' : 'You lost this'} • after all costs</p>
+              <h3 className={`text-2xl font-black font-display mt-1 truncate tabular-nums ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`} title={formatCurrency(displayNetProfit)}>{formatCurrency(displayNetProfit)}</h3>
+              <p className="text-xs text-zinc-500 font-bold uppercase truncate">{displayNetProfit >= 0 ? 'You kept this' : 'You lost this'} • after all costs</p>
             </div>
           </div>
 
@@ -1006,29 +1006,32 @@ const colorsMap: { [key: string]: string } = {
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-3">Sales by Category</h3>
               <div className="flex flex-col sm:flex-row items-center gap-6">
                 <div className="relative w-28 h-28 shrink-0">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                    <circle cx="18" cy="18" r="16" fill="none" stroke="#2a2a2a" strokeWidth="4"></circle>
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36" role="img" aria-label={`Sales share by category, total ${formatCurrency(revenue)}`}>
+                    <circle cx="18" cy="18" r="16" fill="none" stroke="#2a2a2a" strokeWidth="4" pathLength={100}></circle>
                     {donutSegments.map((seg, idx) => (
-                      <circle key={idx} cx="18" cy="18" r="16" fill="none" stroke={seg.color} strokeWidth="4" strokeDasharray={seg.strokeDash} strokeDashoffset={seg.strokeOffset} className="transition-all duration-300"></circle>
+                      <circle key={idx} cx="18" cy="18" r="16" fill="none" stroke={seg.color} strokeWidth="4" pathLength={100} strokeLinecap="butt" strokeDasharray={seg.strokeDash} strokeDashoffset={seg.strokeOffset} className="transition-all duration-300"></circle>
                     ))}
                   </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-xs text-zinc-500 font-bold uppercase">Total</span>
-                    <span className="text-xs font-black text-white">{revenue > 0 ? '100%' : '0%'}</span>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center px-1 text-center">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase">Total</span>
+                    <span className="text-[11px] font-black text-white tabular-nums leading-tight" title={formatCurrency(revenue)}>{revenue > 0 ? formatCurrency(revenue) : '—'}</span>
                   </div>
                 </div>
-                <div className="space-y-2 flex-1 w-full">
+                <div className="space-y-2 flex-1 w-full min-w-0">
+                  {Object.entries(categoryBreakdown).length === 0 && (
+                    <p className="text-[11px] text-zinc-600 font-bold uppercase text-center py-4">No category sales in this period</p>
+                  )}
                   {Object.entries(categoryBreakdown).map(([cat, val]) => {
                     const numericVal = val as number;
                     const pct = revenue > 0 ? (numericVal / revenue) * 100 : 0;
                     const catColor = colorsMap[cat] || '#3f3f46';
                     return (
-                      <div key={cat} className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
+                      <div key={cat} className="flex items-center justify-between gap-4 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
                           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: catColor }}></span>
-                          <span className="text-xs text-zinc-400 font-bold uppercase">{cat}</span>
+                          <span className="text-xs text-zinc-400 font-bold uppercase truncate" title={cat}>{cat}</span>
                         </div>
-                        <span className="text-xs font-black text-zinc-200">
+                        <span className="text-xs font-black text-zinc-200 shrink-0 tabular-nums">
                           {formatCurrency(numericVal)} <span className="text-zinc-500 text-xs font-bold">({pct.toFixed(0)}%)</span>
                         </span>
                       </div>
@@ -1057,13 +1060,14 @@ const colorsMap: { [key: string]: string } = {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-500 font-bold uppercase mb-1 flex items-center gap-1">
-                    Category
-                    <button onClick={() => setShowExpenseCatManager(true)}
-                      className="p-0.5 text-zinc-500 hover:text-gold-brand transition-colors" title="Manage Categories">
-                      <Settings2 className="w-3 h-3" />
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-xs text-zinc-500 font-bold uppercase">Category</span>
+                    <button type="button" onClick={() => setShowExpenseCatManager(true)}
+                      aria-label="Manage expense categories" title="Manage categories"
+                      className="w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer rounded-lg hover:bg-white/5">
+                      <Settings2 className="w-3.5 h-3.5" />
                     </button>
-                  </label>
+                  </div>
                   <select value={expenseCat} onChange={(e) => setExpenseCat(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                     {expenseCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
