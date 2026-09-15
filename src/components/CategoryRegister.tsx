@@ -4,6 +4,8 @@ import {
   Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText
 } from 'lucide-react';
 import StatementModal from './StatementModal';
+import BeginnerTip from './BeginnerTip';
+import { t } from '../utils/i18n';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale, Expense } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
@@ -37,6 +39,7 @@ interface CategoryRegisterProps {
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBack?: () => void;
+  lang?: unknown;
   onPrintClose?: () => void;
   onSendClose?: () => void;
   features?: Record<string, boolean>;
@@ -65,7 +68,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack,
+  staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
   onPrintClose, onSendClose, features,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
@@ -398,14 +401,16 @@ export default function CategoryRegister({
           <LayoutGrid className="w-5 h-5 text-amber-400" />
         </div>
         <div>
-          <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">Registers</h2>
+          <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">{t(lang, 'closeDayCta')}</h2>
           <p className="text-xs text-zinc-500 font-bold">{showProduction ? 'Credit • Daily balance • Losses' : 'Credit • Losses • Money out'}</p>
         </div>
       </div>
+      <BeginnerTip tipKey="close-day" text="Close day = count today's money and finish the books. Do it every evening." />
       {onBack && (
-        <button onClick={onBack}
+        /* Consistent back (#24): same Back button as every other sub-panel. */
+        <button onClick={onBack} aria-label="Back to reports"
           className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
-          <ArrowRightLeft className="w-4 h-4" /> Back to Reports
+          <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'back')}
         </button>
       )}
 

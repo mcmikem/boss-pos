@@ -1,9 +1,9 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { t } from './utils/i18n';
@@ -24,6 +24,7 @@ import { logVoid as logVoidDay } from './utils/cashflow';
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
 import PinGate from './components/PinGate';
+import SettingHelp from './components/SettingHelp';
 import MorningBrief from './components/MorningBrief';
 import NotificationsBell from './components/NotificationsBell';
 import { pushNotice, dayKeyOf } from './utils/notifications';
@@ -86,6 +87,48 @@ function addDeletedSale(id: string): void {
     s.add(id);
     localStorage.setItem(DELETED_SALES_KEY, JSON.stringify([...s].slice(-500)));
   } catch {}
+}
+
+// Deleted-expense tombstones: same resurrection problem as sales — an offline
+// DELETE is queued, but the next 30s background boot still contains the row,
+// so it flickers back until the queue flushes. Tombstoned ids stay hidden.
+const DELETED_EXPENSES_KEY = 'boss_pos_deleted_expenses';
+function readDeletedExpenses(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_EXPENSES_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+function addDeletedExpense(id: string): void {
+  try {
+    const s = readDeletedExpenses();
+    s.add(id);
+    localStorage.setItem(DELETED_EXPENSES_KEY, JSON.stringify([...s].slice(-500)));
+  } catch {}
+}
+function removeDeletedExpense(id: string): void {
+  try {
+    const s = readDeletedExpenses();
+    s.delete(id);
+    localStorage.setItem(DELETED_EXPENSES_KEY, JSON.stringify([...s].slice(-500)));
+  } catch {}
+}
+
+// Settings keys that sync to the server. Serialized for the dirty-check that
+// stops background boot-pulls from overwriting unsaved local taps.
+const SETTINGS_SYNC_KEYS = new Set([
+  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate','momoFeePct','ownerPhone',
+  'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','features',
+]);
+function serializeSettings(s: StoreSettings): string {
+  const filtered: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(s as unknown as Record<string, unknown>)) {
+    if (k === 'hasPin' || k === 'clientWriteId' || k === 'deviceId') continue;
+    if (!SETTINGS_SYNC_KEYS.has(k)) continue;
+    filtered[k] = v;
+  }
+  return JSON.stringify(filtered);
 }
 
 // Already running as the installed app (not a browser tab)?
@@ -153,6 +196,39 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, [theme]);
   const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
   const [showSuppliers, setShowSuppliers] = useState(false);
+  const [showMore, setShowMore] = useState(false);
+  // Simple → Full graduation (#25): beginners get Sell / Money / More until
+  // they've made 20 sales. Choice persists; graduating never nags again.
+  const [navMode, setNavMode] = useState<'simple' | 'full'>(() => {
+    try {
+      const stored = localStorage.getItem('boss_pos_nav_mode');
+      if (stored === 'simple' || stored === 'full') return stored;
+    } catch {}
+    return 'simple';
+  });
+  const [gradDismissed, setGradDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_nav_graduated') === '1'; } catch { return false; }
+  });
+  const setNav = (m: 'simple' | 'full') => {
+    setNavMode(m);
+    try { localStorage.setItem('boss_pos_nav_mode', m); } catch {}
+    if (m === 'full') {
+      try { localStorage.setItem('boss_pos_nav_graduated', '1'); } catch {}
+      setGradDismissed(true);
+    }
+    setShowMore(false);
+  };
+  const staySimple = () => {
+    try { localStorage.setItem('boss_pos_nav_graduated', '1'); } catch {}
+    setGradDismissed(true);
+  };
+  // Consistent back (#24): Escape closes the More sheet like ✕ / backdrop.
+  useEffect(() => {
+    if (!showMore) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowMore(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showMore]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
@@ -174,6 +250,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   });
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  // Simple → Full derivation must sit AFTER sales state (TDZ otherwise).
+  const isSimpleNav = navMode === 'simple';
+  const showGraduation = isSimpleNav && !gradDismissed && sales.length >= 20;
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierPrices, setSupplierPrices] = useState<SupplierPrice[]>([]);
@@ -262,10 +341,26 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   // Shared boot-apply: lands a /api/boot payload into local state + caches. Used
   // by the initial load AND the silent 3-minute background refresh (multi-till).
+  // Declared above the persist effect so both share lastSentSettingsRef.
+  const lastSentSettingsRef = useRef<string>('');
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const applyBootData = useCallback((d: BootData) => {
-    setSettings(d.settings);
-    if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
-    if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
+    // Settings revert guard: if the user tapped theme/language/etc. locally
+    // and the PUT hasn't landed yet, a background boot-pull must NOT overwrite
+    // the fresh tap with stale server values (the "forces my choice back"
+    // glitch). Dirty local settings win; the debounced PUT below saves them.
+    let settingsDirty = false;
+    try {
+      settingsDirty = lastSentSettingsRef.current !== '' &&
+        serializeSettings(settingsRef.current) !== lastSentSettingsRef.current;
+    } catch { settingsDirty = false; }
+    if (!settingsDirty) {
+      setSettings(d.settings);
+      try { lastSentSettingsRef.current = serializeSettings(d.settings); } catch {}
+      if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
+      if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
+    }
     const enriched = enrichProductsWithIcons(d.products);
     setProducts(enriched);
     saveProducts(enriched);
@@ -278,7 +373,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     } catch {
       setSales(d.sales);
     }
-    setExpenses(d.expenses);
+    try {
+      const tomb = readDeletedExpenses();
+      setExpenses(normalizeExpenses(d.expenses || []).filter(e => !tomb.has(e.id)));
+    } catch {
+      setExpenses(normalizeExpenses(d.expenses || []));
+    }
     setCreditPayments(d.creditPayments);
     setCreditEats(d.creditEats);
     setProductionRegisters(d.productionRegisters);
@@ -338,7 +438,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       supplierPriceApi.list().then(setSupplierPrices).catch(fail('supplier prices')),
       staffApi.list().then(setStaffList).catch(fail('staff')),
       saleApi.list().then(setSales).catch(fail('sales')),
-      expenseApi.list().then(setExpenses).catch(fail('expenses')),
+      expenseApi.list().then(list => {
+        try {
+          const tomb = readDeletedExpenses();
+          setExpenses(list.filter(e => !tomb.has(e.id)));
+        } catch { setExpenses(list); }
+      }).catch(fail('expenses')),
       creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
       creditEatApi.list().then(setCreditEats).catch(fail('credit eats')),
       productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
@@ -753,22 +858,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // on every keystroke. Also diff so boot-pull doesn't echo back the same
   // payload and create a constant PUT loop (the source of "constantly failed
   // to save settings").
-  const lastSentSettingsRef = useRef<string>('');
   useEffect(() => {
     if (!readyRef.current) return;
     // Cashiers never push settings (a clocked-in cashier only sells).
     if (staffConfigured && activeRole !== 'manager') return;
-    const ALLOWED = new Set([
-      'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','shopType','language','usdRate','momoFeePct','ownerPhone',
-      'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','features',
-    ]);
-    const filtered: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(settings as unknown as Record<string, unknown>)) {
-      if (k === 'hasPin' || k === 'clientWriteId' || k === 'deviceId') continue;
-      if (!ALLOWED.has(k)) continue;
-      filtered[k] = v;
-    }
-    const serialized = JSON.stringify(filtered);
+    const serialized = serializeSettings(settings);
     if (serialized === lastSentSettingsRef.current) return;
     // Don't echo the just-booted value back immediately — wait for a user edit
     if (lastSentSettingsRef.current === '' ) {
@@ -777,7 +871,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
     const t = setTimeout(() => {
       lastSentSettingsRef.current = serialized;
-      settingsApi.update(filtered as unknown as StoreSettings).catch((err) => {
+      settingsApi.update(JSON.parse(serialized) as unknown as StoreSettings).catch((err) => {
         const msg = err instanceof ApiError ? err.message : String(err?.message || err);
         // 401 means token expired — prompt re-login, don't spam toast
         if (err instanceof ApiError && err.status === 401) {
@@ -1341,8 +1435,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const handleDeleteExpense = async (expenseId: string) => {
     const prev = expenses.find(e => e.id === expenseId);
+    // Tombstone FIRST so the 30s background boot can't resurrect the row
+    // while an offline-queued DELETE is still waiting to flush.
+    addDeletedExpense(expenseId);
     setExpenses(prev => prev.filter(e => e.id !== expenseId));
     try { await expenseApi.remove(expenseId); } catch {
+      removeDeletedExpense(expenseId);
       if (prev) setExpenses(list => [prev, ...list]);
       triggerToast('Failed to delete expense', 'error');
     }
@@ -1555,8 +1653,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleDeleteProduction = async (id: string) => {
     const prev = productionRegisters.find(p => p.id === id);
     setProductionRegisters(prev => prev.filter(p => p.id !== id));
+    // Mirror the add path: removing a batch takes it back out of sellable
+    // stock, so deleting a wrong entry corrects the balance by itself.
+    if (prev?.productId && prev.qty > 0) {
+      setProducts(list => list.map(prod =>
+        prod.id === prev.productId && !prod.isService
+          ? { ...prod, stockQty: Math.max(0, (prod.stockQty || 0) - prev.qty) }
+          : prod
+      ));
+    }
     try { await productionRegisterApi.remove(id); } catch {
       if (prev) setProductionRegisters(list => [prev, ...list]);
+      if (prev?.productId && prev.qty > 0) {
+        setProducts(list => list.map(prod =>
+          prod.id === prev.productId && !prod.isService
+            ? { ...prod, stockQty: (prod.stockQty || 0) + prev.qty }
+            : prod
+        ));
+      }
       triggerToast('Failed to delete production', 'error');
     }
   };
@@ -1634,19 +1748,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               window.matchMedia('(display-mode: standalone)').matches ||
               (window.navigator as unknown as { standalone?: boolean }).standalone === true
             );
+            // Setup checklist ordering (#3): the 3 value-blockers first (stock →
+            // sale → PIN). Shop name + install collapse under "Later".
             const steps = [
-              { key: 'name', label: 'Name your shop', done: !!settings.shopName && settings.shopName !== 'My Shop', act: () => setIsSettingsOpen(true) },
-              { key: 'pin', label: 'Set a till PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
               { key: 'stock', label: 'Add your first products', done: products.length > 0, act: () => setActiveTab('inventory') },
               { key: 'sale', label: 'Make your first sale', done: sales.length > 0 },
+              { key: 'pin', label: 'Set a till PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
+            ];
+            const laterSteps = [
+              { key: 'name', label: 'Name your shop', done: !!settings.shopName && settings.shopName !== 'My Shop', act: () => setIsSettingsOpen(true) },
               { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { runInstallPrompt(); } : undefined },
             ];
-            const doneCount = steps.filter(s => s.done).length;
-            if (doneCount >= steps.length) return null;
+            const allSteps = [...steps, ...laterSteps];
+            const doneCount = allSteps.filter(s => s.done).length;
+            if (doneCount >= allSteps.length) return null;
             return (
               <div className="boss-card p-4 rounded-2xl border border-gold-brand/30 mb-4">
                 <div className="flex items-center justify-between mb-1.5">
-                  <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Get set up {doneCount}/{steps.length}</h3>
+                  <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Get set up {doneCount}/{allSteps.length}</h3>
                   <button onClick={() => { try { localStorage.setItem('boss_pos_setup_done', '1'); } catch {} setSetupDismissed(true); }}
                     aria-label="Dismiss setup checklist"
                     className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer">
@@ -1654,7 +1773,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </button>
                 </div>
                 <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
-                  <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((doneCount / steps.length) * 100)}%` }} />
+                  <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((doneCount / allSteps.length) * 100)}%` }} />
                 </div>
                 <div className="space-y-1.5">
                   {steps.map(s => (
@@ -1671,6 +1790,27 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       )}
                     </div>
                   ))}
+                  <details className="pt-1">
+                    <summary className="text-[10px] font-black text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-zinc-300 touch-target">
+                      Later ({laterSteps.filter(s => s.done).length}/{laterSteps.length})
+                    </summary>
+                    <div className="space-y-1.5 pt-1.5">
+                      {laterSteps.map(s => (
+                        <div key={s.key} className="flex items-center gap-2">
+                          <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-black ${
+                            s.done ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40' : 'bg-[#0A0A0A] text-zinc-500 border border-white/10'
+                          }`}>{s.done ? '✓' : '•'}</span>
+                          <span className={`flex-1 min-w-0 text-xs font-bold uppercase tracking-wider truncate ${s.done ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{s.label}</span>
+                          {!s.done && s.act && (
+                            <button onClick={s.act}
+                              className="h-8 px-3 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer shrink-0">
+                              Go
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 </div>
               </div>
             );
@@ -1691,6 +1831,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
             onUndoSale={handleUndoSale}
+            onGoToStock={() => setActiveTab('inventory')}
+            simple={isSimpleNav}
           />
           </ErrorBoundary>
         );
@@ -1727,6 +1869,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onDeleteExpenseCategory={handleDeleteExpenseCategory}
             onUpdateProduct={handleUpdateProduct}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
+            lang={settings.language}
           />
           </Suspense>
           </ErrorBoundary>
@@ -1756,6 +1899,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onSetEodCapital={(cat, value) => setSettings(prev => ({ ...prev, eodCapital: { ...(prev.eodCapital || {}), [cat]: value } }))}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
+            lang={settings.language}
             onPrintClose={() => printDailyClose(new Date().toISOString().slice(0, 10), sales, expenses, products)}
             onSendClose={() => {
               const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
@@ -1813,6 +1957,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
             onUndoSale={handleUndoSale}
+            onGoToStock={() => setActiveTab('inventory')}
+            simple={isSimpleNav}
           />
           </ErrorBoundary>
         );
@@ -1974,7 +2120,36 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
       {/* Bottom nav sits at z-40 (below every modal/sheet/backdrop) so no
           form footer can ever hide behind it. Page content has no z-index,
-          so the nav still floats above scrolling content. */}
+          so the nav still floats above scrolling content.
+          Simple mode (#25): beginners get Sell / Money / More. Stock,
+          Spending, Reports and Close day live under Money/More until the
+          20-sale graduation prompt. */}
+      {isSimpleNav ? (
+      <nav id="bottom-nav" aria-label="Simple menu" className="fixed bottom-0 inset-x-0 w-full z-40 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
+        <button onClick={() => { setActiveTab('sales'); setShowMore(false); }} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "sales" ? "page" : undefined} id="sales-nav-btn">
+          <div className="relative">
+            <ShoppingCart className="w-5 h-5 mb-1" />
+            {cart.length > 0 && (
+              <span className="absolute -top-1.5 -right-2 bg-gold-brand text-black text-[8px] font-black w-4 h-4 rounded-full flex items-center justify-center border border-[#0F0F0F]">
+                {cart.reduce((sum, item) => sum + item.qty, 0)}
+              </span>
+            )}
+          </div>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'sell')}</span>
+        </button>
+        <button onClick={() => { setActiveTab(isManager ? 'analytics' : 'expenses'); setShowMore(false); }} aria-label="Money"
+          className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' || activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`}
+          aria-current={activeTab === 'analytics' || activeTab === 'expenses' ? 'page' : undefined} id="money-nav-btn">
+          <Wallet className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'money')}</span>
+        </button>
+        <button onClick={() => setShowMore(true)} aria-label="More options" aria-expanded={showMore}
+          className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${showMore || (activeTab !== 'sales' && activeTab !== 'analytics' && activeTab !== 'expenses') ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="more-nav-btn">
+          <Ellipsis className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'more')}</span>
+        </button>
+      </nav>
+      ) : (
       <nav id="bottom-nav" className="fixed bottom-0 inset-x-0 w-full z-40 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
         <button onClick={() => setActiveTab('sales')} aria-label={t(settings.language, 'sell')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'sales' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "sales" ? "page" : undefined} id="sales-nav-btn">
           <div className="relative">
@@ -2010,6 +2185,94 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         </button>
         )}
       </nav>
+      )}
+
+      {/* Simple → Full graduation prompt (#25): once at 20 sales, never nags. */}
+      {showGraduation && (
+        <div role="status" aria-label="Try the full menu" className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] inset-x-4 z-40 boss-card p-4 rounded-2xl border border-gold-brand/40 bg-[#141414]/95 shadow-2xl">
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-black text-white uppercase tracking-widest">You've made 20 sales — ready for the full menu?</p>
+              <p className="text-[11px] text-zinc-400 font-bold mt-0.5 leading-snug">Stock, Spending, Reports and Close day get their own tabs.</p>
+              <div className="flex gap-2 mt-2.5">
+                <button onClick={() => setNav('full')}
+                  className="h-10 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                  Try full menu
+                </button>
+                <button onClick={staySimple}
+                  className="h-10 px-4 border border-zinc-700 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl hover:text-zinc-200 transition-all cursor-pointer">
+                  Stay simple
+                </button>
+              </div>
+            </div>
+            <button onClick={staySimple} aria-label="Dismiss full menu suggestion"
+              className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer shrink-0">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* More sheet (simple mode): Stock / Spending / Reports / Close day. */}
+      {isSimpleNav && showMore && (
+        <div className="fixed inset-0 z-[80] flex flex-col" role="dialog" aria-label="More options">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowMore(false)} />
+          <div className="relative mt-auto bg-[#141414] border-t border-zinc-800 rounded-t-3xl max-h-[80vh] flex flex-col shadow-2xl animate-slide-up">
+            <div className="flex justify-center pt-2 pb-1">
+              <div className="w-10 h-1 rounded-full bg-zinc-700" />
+            </div>
+            <div className="flex items-center justify-between px-5 pb-3 border-b border-white/5">
+              <h3 className="text-sm font-black text-white uppercase tracking-wider">{t(settings.language, 'more')}</h3>
+              <button onClick={() => setShowMore(false)} aria-label="Close more options"
+                className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-all cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-2">
+              {isManager && (
+              <button onClick={() => { setActiveTab('inventory'); setShowMore(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
+                <Package className="w-5 h-5 text-gold-brand shrink-0" />
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'stock')}</span>
+                <span className="block text-[11px] text-zinc-500 font-bold">Add products, check what's left</span></span>
+              </button>
+              )}
+              <button onClick={() => { setActiveTab('expenses'); setShowMore(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
+                <Wallet className="w-5 h-5 text-gold-brand shrink-0" />
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'spend')}</span>
+                <span className="block text-[11px] text-zinc-500 font-bold">Log what the shop spends</span></span>
+              </button>
+              {isManager && (
+              <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); setShowMore(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
+                <TrendingUp className="w-5 h-5 text-gold-brand shrink-0" />
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'reports')}</span>
+                <span className="block text-[11px] text-zinc-500 font-bold">Today's summary and past sales</span></span>
+              </button>
+              )}
+              {isManager && (
+              <button onClick={() => { setActiveTab('registers'); setShowMore(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
+                <LayoutGrid className="w-5 h-5 text-gold-brand shrink-0" />
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'closeDay')}</span>
+                <span className="block text-[11px] text-zinc-500 font-bold">Count today's money, finish the books</span></span>
+              </button>
+              )}
+              <button onClick={() => { setIsSettingsOpen(true); setShowMore(false); }}
+                className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
+                <Settings className="w-5 h-5 text-gold-brand shrink-0" />
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'settings')}</span>
+                <span className="block text-[11px] text-zinc-500 font-bold">Shop name, PIN, app options</span></span>
+              </button>
+              <button onClick={() => setNav('full')}
+                className="w-full p-4 rounded-2xl border border-gold-brand/30 bg-gold-brand/5 text-gold-brand text-xs font-black uppercase tracking-widest hover:bg-gold-brand/10 active:scale-[0.98] transition-all cursor-pointer min-h-[52px]">
+                Show full menu (5 tabs)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}
 
@@ -2052,13 +2315,59 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               <RefreshCw className={`w-4 h-4 ${updatingApp ? 'animate-spin' : ''}`} /> {updatingApp ? 'Checking…' : 'Update app to newest version'}
             </button>
             <div className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1">
+              {staffConfigured && !isManager ? (
+                // Sellers get a limited Settings: accounts are created by a
+                // manager, and shop-wide options stay out of reach. Only
+                // device-local display choices remain.
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-gold-brand/30 bg-gold-brand/5 p-4">
+                    <p className="text-xs font-black text-white uppercase tracking-widest">
+                      Clocked in as {activeStaff?.name || staffName || 'seller'}
+                    </p>
+                    <p className="text-[11px] text-zinc-400 font-bold mt-1 leading-snug">
+                      Shop settings are managed by a manager. Ask them to change prices, stock, PINs or staff accounts.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Who is selling</label>
+                    <button onClick={handleSwitchStaff}
+                      className="w-full h-12 bg-[#0A0A0A] border border-white/5 px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none flex items-center justify-between cursor-pointer">
+                      <span>{activeStaff?.name || staffName || 'Tap to set seller'}</span>
+                      <span className="text-[10px] text-gold-brand font-black uppercase">Switch</span>
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={async () => {
+                      const newTheme = theme === 'light' ? 'dark' : 'light';
+                      setTheme(newTheme);
+                      localStorage.setItem(THEME_KEY, newTheme);
+                      if (newTheme === 'dark') {
+                        document.documentElement.classList.add('dark');
+                      } else {
+                        document.documentElement.classList.remove('dark');
+                      }
+                      document.documentElement.classList.toggle('light-theme', newTheme === 'light');
+                    }}
+                      className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-gold-brand/40 transition-all cursor-pointer">
+                      {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
+                    </button>
+                    <button onClick={() => setSettings(prev => ({ ...prev, largeText: !prev.largeText }))}
+                      title="Bigger text and buttons for sunlight and tired eyes"
+                      className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${settings.largeText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                      {settings.largeText ? 'Big text: On' : 'Big text: Off'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+              <>
+              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest">Shop</p>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Name</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Name <SettingHelp label="Shop Name" text="Your shop's name. It shows at the top of every till, on receipts and on the daily close message." /></label>
                 <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'My Shop' }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" placeholder="e.g. IMAC Phone Shop" />
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Shop Type</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Type <SettingHelp label="Shop Type" text="Tells the till what you sell. Eatery unlocks recipes and morning production; tailoring, design, bookings and repairs add their order screens." /></label>
                 <select value={settings.vibe} onChange={(e) => setSettings(prev => ({ ...prev, vibe: e.target.value }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
                   <option value="Phone & Accessories">Phone & Accessories</option>
@@ -2068,16 +2377,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Till language</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Till language <SettingHelp label="Till language" text="Switches Sell, Expenses, Money, Reports and Close day between English and Luganda. Settings always stay in English." /></label>
                 <select value={settings.language || 'english'} onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value as StoreSettings['language'] }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
                   <option value="english">English</option>
                   <option value="luganda">Luganda (sell screen)</option>
                 </select>
-                <p className="text-[10px] text-zinc-600">Luganda covers the sell screen — search, cart, charge, confirm. Settings stay in English.</p>
+                <p className="text-[10px] text-zinc-600">Luganda covers Sell, Expenses, Money, Reports and Close day. Settings stay in English.</p>
               </div>
+              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest pt-2">Selling</p>
               <div className="space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Extra Modules</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Extra Modules <SettingHelp label="Extra Modules" text="Order screens for side businesses — tailoring, design & print, bookings, repairs. Off means hidden everywhere until you need them." /></label>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => setSettings(prev => ({ ...prev, showTailoring: !prev.showTailoring }))}
                     className={`py-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${settings.showTailoring ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-transparent text-zinc-500 hover:text-zinc-300'}`}>
@@ -2099,7 +2409,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Turn on the order screens you actually use. Hidden until enabled.</p>
               </div>
               <div className="space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Till control</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Till control <SettingHelp label="Till control" text="Master switches for helper features — fast sellers, cash shortcuts, briefing, checklist. Everything is ON by default; turn off what your shop doesn't use." /></label>
                 <div className="space-y-1.5">
                   {FEATURES.map(f => {
                     const on = isOn(settings.features, f.key);
@@ -2148,8 +2458,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Everything is on by default — turn off what your shop doesn’t use. Choices sync to all tills.</p>
               </div>
               <div className="space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <Palette className="w-3.5 h-3.5 text-gold-brand" /> Color Theme
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  <Palette className="w-3.5 h-3.5 text-gold-brand" /> Color Theme <SettingHelp label="Color Theme" text="Recolours every till in the shop — pick the colour your staff recognises. Purely visual, never touches money." />
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {THEMES_LIST.map(t => (
@@ -2163,7 +2473,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Default Payment</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Default Payment <SettingHelp label="Default Payment" text="The payment button pre-selected in every new cart. Cashiers can still switch per sale — this just saves a tap." /></label>
                 <div className="grid grid-cols-4 gap-1">
                   {(['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'] as const).map(m => (
                     <button key={m} onClick={() => setSettings(prev => ({ ...prev, defaultPaymentMethod: m }))}
@@ -2183,15 +2493,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between items-baseline">
-                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Daily Goal</label>
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Daily Goal <SettingHelp label="Daily Goal" text="How many sales you aim for today. The sell screen shows progress — hit it and the till celebrates." /></label>
                   <span className="text-xs font-black text-gold-brand">{settings.dailyGoalNum} Sales</span>
                 </div>
                 <input type="range" min="5" max="30" value={settings.dailyGoalNum}
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
               </div>
+              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest pt-2">Staff &amp; money</p>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Who is selling</label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Who is selling <SettingHelp label="Who is selling" text="The name stamped on every sale, so Reports can show sales per seller. Each phone remembers its own seller." /></label>
                 <button onClick={handleSwitchStaff}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none flex items-center justify-between cursor-pointer">
                   <span>{activeStaff?.name || staffName || 'Tap to set seller'}</span>
@@ -2200,8 +2511,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Every sale is stamped with this name so Reports can show sales by seller.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <User className="w-3.5 h-3.5 text-gold-brand" /> Staff logins
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  <User className="w-3.5 h-3.5 text-gold-brand" /> Staff logins <SettingHelp label="Staff logins" text="PIN-checked accounts. Managers unlock everything; sellers (cashiers) only see Sell and Spend. Only a manager can add or change accounts." />
                 </label>
                 {!staffConfigured ? (
                   <>
@@ -2481,6 +2792,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     {settings.largeText ? 'Big text: On' : 'Big text: Off'}
                   </button>
                 </div>
+                <button onClick={() => setNav(isSimpleNav ? 'full' : 'simple')}
+                  title="Simple shows Sell, Money and More. Full shows all five tabs."
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                  {isSimpleNav ? 'Menu: Simple (Sell · Money · More)' : 'Menu: Full (5 tabs)'}
+                </button>
               {isManager && (
                 <div className="border-t border-white/5 pt-3 space-y-2">
                   <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
@@ -2547,15 +2863,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       triggerToast('Dropped oldest queued change', 'info');
                     }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Drop oldest</button>
                   </div>
-                )}
+              )}
+                <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest pt-2">This device &amp; data</p>
                 <div className="flex gap-2">
                   <button onClick={async () => {
                     try {
                       const r = await reconcileApi.check();
                       setReconcileResult(r);
-                      if (r.totalMismatches===0 && r.negativeStock.length===0 && r.dupOrderNumbers.length===0) triggerToast(`Reconcile OK: ${r.salesChecked} sales checked`, 'success');
+                      if (r.totalMismatches===0 && r.negativeStock.length===0 && r.dupOrderNumbers.length===0) triggerToast(`Check OK: ${r.salesChecked} sales checked`, 'success');
                       else triggerToast(`Found ${r.totalMismatches} total mismatches, ${r.negativeStock.length} negative stock`, 'error');
-                    } catch { triggerToast('Reconcile check failed', 'error'); }
+                    } catch { triggerToast('Check failed — try again', 'error'); }
                   }} className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40">Check gaps</button>
                   <button onClick={async () => {
                     if (!confirm('Fix totals & clamp negative stock? This writes to server.')) return;
@@ -2564,7 +2881,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       setReconcileResult({ salesChecked: r.salesChecked, totalMismatches: r.totalMismatches, negativeStock: r.negativeStock });
                       triggerToast(`Fixed ${r.totalFixes} totals, ${r.negativeFixed} stock`, 'success');
                       fetchAllData();
-                    } catch { triggerToast('Reconcile fix failed', 'error'); }
+                    } catch { triggerToast('Fix failed — try again', 'error'); }
                   }} className="flex-1 h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50">Fix gaps</button>
                 </div>
                 {reconcileResult && (
@@ -2689,6 +3006,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </div>
                 )}
               </div>
+            </>)}
             </div>
             <button onClick={() => { setIsSettingsOpen(false); triggerToast("Settings saved!", "success"); }}
               className="w-full mt-6 h-11 bg-gold-brand text-black font-black uppercase tracking-widest rounded-2xl text-xs hover:opacity-90 active:scale-98 transition-all font-display">

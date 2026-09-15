@@ -1,8 +1,9 @@
 // Sell-screen translations. English is the source of truth; Luganda covers
-// the ~30 strings a cashier reads mid-sale (nav, search, cart, charge,
-// confirm). Everything else (settings, reports, admin) stays English by
-// design — owners already operate there in English. Other languages fall
-// back to English key-by-key so a half-done translation never blanks the UI.
+// the strings a cashier reads mid-sale and on the everyday pages (sell,
+// expenses, money, reports, close day). Settings sheets and admin stay
+// English by design — owners already operate there in English. Other
+// languages fall back to English key-by-key so a half-done translation never
+// blanks the UI.
 
 export type SellLang = 'english' | 'luganda' | 'swahili';
 
@@ -14,7 +15,11 @@ export type SellKey =
   | 'cashReceived' | 'amount' | 'exact' | 'change' | 'stillNeed'
   | 'subtotal' | 'total' | 'completeSale'
   | 'confirmSale' | 'items' | 'itemsLabel' | 'cancel' | 'confirm' | 'saving'
-  | 'backToProducts' | 'checkout' | 'closeBtn' | 'off';
+  | 'backToProducts' | 'checkout' | 'closeBtn' | 'off'
+  | 'money' | 'more' | 'settings' | 'save' | 'delete' | 'sure' | 'keep' | 'done' | 'back'
+  | 'expenses' | 'logExpense' | 'totalSpent' | 'topExpense' | 'history' | 'tapRowDetails'
+  | 'todaysSummary' | 'youKept' | 'youLost' | 'closeDayCta'
+  | 'addProduct' | 'outOfStock';
 
 const EN: Record<SellKey, string> = {
   sell: 'Sell',
@@ -51,6 +56,27 @@ const EN: Record<SellKey, string> = {
   checkout: 'Checkout',
   closeBtn: 'Close',
   off: 'off',
+  money: 'Money',
+  more: 'More',
+  settings: 'Settings',
+  save: 'Save',
+  delete: 'Delete',
+  sure: 'Sure?',
+  keep: 'Keep',
+  done: 'Done',
+  back: 'Back',
+  expenses: 'Expenses',
+  logExpense: 'Log expense',
+  totalSpent: 'Total spent',
+  topExpense: 'Top expense',
+  history: 'History',
+  tapRowDetails: 'Tap a row for details',
+  todaysSummary: "Today's Summary",
+  youKept: 'You kept',
+  youLost: 'You lost',
+  closeDayCta: 'Close the day',
+  addProduct: 'Add product',
+  outOfStock: 'Out of stock',
 };
 
 // Everyday Luganda as spoken in shops (loanwords kept where shops genuinely
@@ -90,6 +116,27 @@ const LU: Record<SellKey, string> = {
   checkout: 'Okusasula',
   closeBtn: 'Ggala',
   off: 'ezikendedde',
+  money: 'Ssente',
+  more: 'Ebirala',
+  settings: 'Enteekateeka',
+  save: 'Tereka',
+  delete: 'Sazaamu',
+  sure: 'Kakasa?',
+  keep: 'Lekawo',
+  done: 'Kiwedde',
+  back: 'Ddayo',
+  expenses: 'Ensaasaanya',
+  logExpense: 'Wandiika ensaasaanya',
+  totalSpent: 'Osaasanyizza byona',
+  topExpense: 'Ekisinga okusaasaanya',
+  history: 'Ebyayita',
+  tapRowDetails: 'Nyiga olunyiriri okulaba',
+  todaysSummary: 'Ebya leero',
+  youKept: 'Osigazza',
+  youLost: 'Ofiiriddwa',
+  closeDayCta: 'Ggalawo leero',
+  addProduct: 'Yongera ekintu',
+  outOfStock: 'Biweddewo',
 };
 
 export function normalizeLang(v: unknown): SellLang {

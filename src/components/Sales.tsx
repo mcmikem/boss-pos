@@ -22,7 +22,7 @@ import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
 import { findMissingProduction } from '../utils/cashflow';
-import { todayLocalKey } from '../utils/dates';
+import { localDayKey, todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart } from '../utils/parked';
@@ -96,6 +96,8 @@ interface SalesProps {
   onDeleteProduction?: (id: string) => void;
   salesHistory?: Sale[];
   wastageLogs?: WastageLog[];
+  onGoToStock?: () => void;
+  simple?: boolean;
 }
 
 const localOrderNumber = () => {
@@ -107,8 +109,30 @@ const localOrderNumber = () => {
   return `Temp #${next}`;
 };
 
+// Search synonyms (#9): Luganda/English doubles + common misspellings map
+// to the catalog name before Fuse runs, so "kikaati" finds chapati.
+const SEARCH_SYNONYMS: Record<string, string> = {
+  chappati: 'chapati',
+  chapatti: 'chapati',
+  kikaati: 'chapati',
+  kikati: 'chapati',
+  rollex: 'rolex',
+  sambusa: 'samosa',
+  samusa: 'samosa',
+};
+const applySynonyms = (q: string) => q.split(' ').map(w => SEARCH_SYNONYMS[w] || w).join(' ');
+
+// Demo stock (#2): practice catalog for brand-new tills. Never persisted —
+// demo checkouts are simulated, so trying can't pollute real reports.
+const DEMO_PRODUCTS: Product[] = [
+  { id: 'demo-chapati', name: 'Chapati', category: 'Eatery', cost: 250, price: 500, stockQty: 50, lowStockThreshold: 10 },
+  { id: 'demo-rolex', name: 'Rolex', category: 'Eatery', cost: 1200, price: 2000, stockQty: 30, lowStockThreshold: 5 },
+  { id: 'demo-soda', name: 'Soda', category: 'Drinks', cost: 900, price: 1500, stockQty: 40, lowStockThreshold: 8 },
+  { id: 'demo-samosa', name: 'Samosa', category: 'Eatery', cost: 550, price: 1000, stockQty: 25, lowStockThreshold: 5 },
+];
+
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, onUndoSale, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [],
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, setStaffName, onSaveCustomProduct, onUndoSale, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
@@ -176,6 +200,17 @@ export default function Sales({
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  // Guided first sale (#1) + demo mode (#2): first-timers get 3 steps and
+  // optional practice stock. Demo sales are blocked in handleCompleteSale.
+  const [demoMode, setDemoMode] = useState(false);
+  const [guideDismissed, setGuideDismissed] = useState(() => {
+    try { return localStorage.getItem('boss_pos_firstsale_guide') === '1'; } catch { return false; }
+  });
+  const dismissGuide = () => {
+    try { localStorage.setItem('boss_pos_firstsale_guide', '1'); } catch {}
+    setGuideDismissed(true);
+  };
+  const catalog = demoMode ? DEMO_PRODUCTS : products;
   // Street mode: roadside-stall selling — each tap on a plain product sells
   // one unit for cash instantly (no cart, no confirm, no receipt). Products
   // with variants or per-unit pricing still open their picker.
@@ -248,7 +283,9 @@ export default function Sales({
     setVisibleCount(30);
   }, [selectedCategory, searchQuery]);
 
-  const byCategory = useMemo(() => products.filter(p => selectedCategory === 'All' || p.category === selectedCategory), [products, selectedCategory]);
+  const byCategory = useMemo(() => catalog.filter(p => selectedCategory === 'All' || p.category === selectedCategory), [catalog, selectedCategory]);
+  // Forgiving search (#9): typo-tolerant (threshold 0.5, location-free) so
+  // "chaptai", "ROLAX" or extra spaces still find chapati / rolex.
   const fuse = useMemo(() => new Fuse(byCategory, {
     keys: [
       { name: 'name', weight: 0.6 },
@@ -256,23 +293,36 @@ export default function Sales({
       { name: 'barcode', weight: 0.1 },
       { name: 'imei', weight: 0.1 },
     ],
-    threshold: 0.38,
+    threshold: 0.5,
+    ignoreLocation: true,
     distance: 80,
     includeScore: true,
   }), [byCategory]);
+  const normQuery = (q: string) => applySynonyms(q.trim().toLowerCase().replace(/\s+/g, ' '));
+  const wordMatch = (p: Product, q: string) => {
+    const words = q.split(' ').filter(Boolean);
+    if (words.length === 0) return true;
+    const hay = `${p.name} ${p.category} ${p.barcode || ''} ${p.imei || ''}`.toLowerCase();
+    return words.every(w => hay.includes(w));
+  };
   const filteredProducts = useMemo(() => {
-    if (!searchQuery.trim()) return byCategory;
-    const res = fuse.search(searchQuery.trim());
+    const q = normQuery(searchQuery);
+    if (!q) return byCategory;
+    const res = fuse.search(normQuery(searchQuery));
     if (res.length === 0) {
-      const q = searchQuery.toLowerCase();
-      return byCategory.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q)));
+      return byCategory.filter(p => wordMatch(p, q));
     }
     return res.map(r => r.item);
   }, [byCategory, fuse, searchQuery]);
 
   const handleAddToCart = (product: Product) => {
     if (product.stockQty <= 0 && !product.isService) {
-      triggerToast(`${product.name} is out of stock!`, 'error');
+      // No dead ends (#20): an out-of-stock tap offers the custom-item path
+      // so the cashier can still serve the customer.
+      triggerToast(`${product.name} is out of stock!`, 'error', {
+        label: 'Sell custom',
+        onClick: () => setIsCustomChargeOpen(true),
+      });
       return;
     }
     // Expiry guard: never sell expired stock; warn when expiring soon.
@@ -359,7 +409,7 @@ export default function Sales({
   }, []);
 
   const handleBarcodeScanned = (barcode: string) => {
-    const product = products.find(p => p.barcode === barcode || p.imei === barcode || p.id === `prod-${barcode}`);
+    const product = catalog.find(p => p.barcode === barcode || p.imei === barcode || p.id === `prod-${barcode}`);
     if (product) {
       handleAddToCart(product);
       triggerToast(`Added: ${product.name}`, 'success');
@@ -448,7 +498,34 @@ export default function Sales({
     : '';
   const tax = 0;
 
+  // Money strip (#16): today's takings at a glance — cash, phone money,
+  // credit out. Computed from real history only, never demo stock.
+  const todayKey = todayLocalKey();
+  const todayLive = useMemo(
+    () => (salesHistory || []).filter(s => {
+      try { return localDayKey(s.timestamp) === todayKey; } catch { return false; }
+    }),
+    [salesHistory, todayKey],
+  );
+  const stripCash = todayLive.filter(s => !s.refunded && s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0);
+  const stripMomo = todayLive.filter(s => !s.refunded && (s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')).reduce((a, s) => a + s.total, 0);
+  const stripCredit = todayLive.filter(s => !s.refunded && s.paymentMethod === 'Credit / Book').reduce((a, s) => a + s.total, 0);
+  const showGuide = !guideDismissed && !demoMode && (salesHistory || []).length === 0;
+
   const handleCompleteSale = async () => {
+    // Playable demo (#2): run the full checkout thrill, but save nothing —
+    // the cart just clears with a success note instead of a real sale.
+    if (demoMode) {
+      if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
+      setCart([]);
+      setCustomCashReceived('');
+      setDiscount('');
+      setCustomerName('');
+      setIsMobileCartOpen(false);
+      playChargeFeedback();
+      triggerToast('Demo sale done — not saved. Exit demo to sell for real.', 'success');
+      return true;
+    }
     if (isCompleting) return false;
     if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
     // F2 / QuickSale bypass the disabled buttons, so the name gate lives here too.
@@ -589,6 +666,14 @@ export default function Sales({
   // One-tap cash sale for street mode. Mirrors the core of handleCompleteSale
   // minus cart/discount/confirm/receipt — speed is the whole point.
   const streetSell = async (product: Product) => {
+    // Demo guard: street taps must never write real sales either.
+    if (demoMode) {
+      setStreetCount(c => c + 1);
+      setStreetTotal(t => t + product.price);
+      playChargeFeedback();
+      triggerToast(`Demo: ${product.name} "sold" — not saved`, 'success');
+      return;
+    }
     try {
       if (expiryStatus(product.expiryDate) === 'expired') {
         triggerToast(`${product.name} is EXPIRED — do not sell`, 'error');
@@ -617,7 +702,7 @@ export default function Sales({
   const repeatLastSale = () => {
     if (!lastSaleItems || lastSaleItems.length === 0) return;
     const live = lastSaleItems.filter(item => {
-      const p = products.find(x => x.id === item.productId);
+      const p = catalog.find(x => x.id === item.productId);
       return !!p && (p.isService || p.stockQty >= item.qty);
     });
     if (live.length === 0) { triggerToast('Last sale items are out of stock now', 'error'); return; }
@@ -787,6 +872,12 @@ export default function Sales({
             id="open-custom-charge-btn">
             + Custom
           </button>
+          {/* Spent everywhere (#18): log spending without leaving Sell. */}
+          <button onClick={() => setShowQuickExpense(true)}
+            className="shrink-0 h-12 px-3 sm:px-4 bg-[#141414] border border-white/5 hover:border-rose-500/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            id="open-quick-expense-btn" title="Log money spent (stock, transport…)">
+            <Wallet className="w-4 h-4" /> Spent
+          </button>
           <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
             className="shrink-0 h-12 px-3 sm:px-4 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
             id="open-quick-sale-btn">
@@ -819,13 +910,65 @@ export default function Sales({
 
         {undoSaleId && onUndoSale && (
           <div className="flex items-center justify-between gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 h-12" role="status">
-            <p className="text-xs font-black text-emerald-300 uppercase tracking-wider truncate">Sale done — wrong items?</p>
+            <p className="text-xs font-black text-emerald-300 uppercase tracking-wider truncate">Sale done — Undo?</p>
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={() => { const id = undoSaleId; if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); if (id) onUndoSale(id); }}
                 className="h-9 px-4 bg-emerald-500 text-black font-black text-[11px] rounded-lg uppercase tracking-wider cursor-pointer active:scale-95">Undo</button>
               <button onClick={() => { if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); }}
                 className="h-9 px-3 text-emerald-300/70 hover:text-emerald-200 font-bold text-[11px] uppercase tracking-wider cursor-pointer">Keep</button>
             </div>
+          </div>
+        )}
+
+        {demoMode && (
+          <div className="flex items-center justify-between gap-2 bg-sky-950/30 border border-sky-800/40 rounded-xl px-4 min-h-[3rem] py-2" role="status">
+            <p className="text-xs font-black text-sky-300 uppercase tracking-wider leading-snug">
+              Demo stock — practice freely, sales are blocked
+            </p>
+            <button onClick={() => setDemoMode(false)}
+              className="h-9 px-4 bg-sky-500 text-black font-black text-[11px] rounded-lg uppercase tracking-wider cursor-pointer active:scale-95 shrink-0">
+              Exit demo
+            </button>
+          </div>
+        )}
+
+        {/* Guided first sale (#1): 3 steps for a brand-new cashier. */}
+        {showGuide && (
+          <div className="boss-card p-4 border border-gold-brand/30" role="status" aria-label="How to make your first sale">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-black text-white uppercase tracking-widest">First sale in 3 taps</p>
+              <button onClick={dismissGuide} aria-label="Dismiss first-sale guide"
+                className="text-zinc-500 hover:text-white font-black px-1 cursor-pointer">×</button>
+            </div>
+            <ol className="mt-2 space-y-1 text-xs font-bold text-zinc-300">
+              <li>1 · {products.length === 0 ? 'Add stock in the Stock tab — or try demo below' : 'Add an item below'}</li>
+              <li>2 · Open the cart</li>
+              <li>3 · Complete the sale</li>
+            </ol>
+            {products.length === 0 && (
+              <div className="flex flex-wrap gap-2 mt-3">
+                <button onClick={() => setDemoMode(true)}
+                  className="h-10 px-4 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-[11px] hover:opacity-90 active:scale-95 cursor-pointer">
+                  Try with demo stock
+                </button>
+                <p className="text-[11px] text-zinc-500 font-bold self-center">No items yet? Add real stock in the Stock tab.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Money strip (#16): today's takings, always one glance away. */}
+        {todayLive.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label="Today's takings">
+            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-emerald-950/40 border border-emerald-800/30 text-[11px] font-black uppercase tracking-wider text-emerald-300 tabular-nums">
+              Cash {formatCurrency(stripCash)}
+            </span>
+            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-yellow-950/40 border border-yellow-800/30 text-[11px] font-black uppercase tracking-wider text-yellow-300 tabular-nums">
+              Phone {formatCurrency(stripMomo)}
+            </span>
+            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-blue-950/40 border border-blue-800/30 text-[11px] font-black uppercase tracking-wider text-blue-300 tabular-nums">
+              Credit {formatCurrency(stripCredit)}
+            </span>
           </div>
         )}
 
@@ -1024,7 +1167,8 @@ export default function Sales({
                   onAddToCart={handleAddToCart}
                   onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
                   pinned={pinnedIds.includes(product.id)}
-                  onTogglePin={featsOn('fastSellers') ? togglePin : undefined}
+                  onTogglePin={!simple && featsOn('fastSellers') ? togglePin : undefined}
+                  simple={simple}
                 />
               ))}
               {filteredProducts.length === 0 && (
@@ -1037,7 +1181,17 @@ export default function Sales({
                       Sell “{searchQuery.trim().slice(0, 24)}” as a custom item
                     </button>
                   ) : (
-                    <p className="text-xs text-zinc-500 font-bold mt-2 uppercase">Add products in Stock to start selling</p>
+                    // Empty states that teach (#4): one action button, not just
+                    // "no data". In demo mode the catalog is never empty.
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-zinc-500 font-bold uppercase">Add products in Stock to start selling</p>
+                      {onGoToStock && (
+                        <button onClick={onGoToStock}
+                          className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                          + Add your first product
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1219,7 +1373,8 @@ export default function Sales({
             </div>
           )}
 
-          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 shrink-0">
+          {/* Sticky total (#11): total + Complete never scroll out of reach. */}
+          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 shrink-0 sticky bottom-0 bg-[#141414] pb-1">
             {discountNum > 0 && (
               <div className="flex justify-between text-zinc-500 text-sm font-medium">
                 <span>{t(lang, 'subtotal')}</span>
@@ -1421,18 +1576,17 @@ export default function Sales({
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             <div className="space-y-1">
               {(() => {
-                let matched: Product[] = products;
+                let matched: Product[] = catalog;
                 if (quickSearchQuery.trim()) {
-                  const fuse = new Fuse(products, {
+                  const qn = normQuery(quickSearchQuery);
+                  const fuse = new Fuse(catalog, {
                     keys: ['name', 'category', 'barcode', 'imei'],
-                    threshold: 0.38,
+                    threshold: 0.5,
+                    ignoreLocation: true,
                     distance: 80,
                   });
-                  const r = fuse.search(quickSearchQuery.trim());
-                  matched = r.length ? r.map(x => x.item) : products.filter(p => {
-                    const q = quickSearchQuery.toLowerCase();
-                    return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q));
-                  });
+                  const r = fuse.search(normQuery(quickSearchQuery));
+                  matched = r.length ? r.map(x => x.item) : catalog.filter(p => wordMatch(p, qn));
                 }
                 return matched.slice(0, 20).map(product => (
                   <ProductCard
@@ -1446,11 +1600,11 @@ export default function Sales({
                 ));
               })()}
               {(() => {
-                const q = quickSearchQuery.toLowerCase();
+                const qn = normQuery(quickSearchQuery);
                 const count = quickSearchQuery ? (() => {
-                  const fuse = new Fuse(products, { keys: ['name','category','barcode'], threshold: 0.38 });
-                  const r = fuse.search(quickSearchQuery.trim());
-                  return r.length ? r.length : products.filter(p => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q))).length;
+                  const fuse = new Fuse(catalog, { keys: ['name','category','barcode'], threshold: 0.5, ignoreLocation: true });
+                  const r = fuse.search(normQuery(quickSearchQuery));
+                  return r.length ? r.length : catalog.filter(p => wordMatch(p, qn)).length;
                 })() : 0;
                 return count === 0 && quickSearchQuery ? (
                 <div className="p-6 text-center">

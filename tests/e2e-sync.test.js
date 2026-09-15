@@ -24,8 +24,8 @@ test('reconcile contract: fix clamps negative stock', () => {
   assert.ok(handler.includes('stockqty < 0'));
 });
 
-test('search contract: Fuse threshold 0.38', () => {
+test('search contract: Fuse forgiving threshold 0.5', () => {
   const sales = fs.readFileSync('src/components/Sales.tsx', 'utf8');
   assert.ok(sales.includes('Fuse'));
-  assert.ok(sales.includes('threshold: 0.38'));
+  assert.ok(sales.includes('threshold: 0.5'));
 });

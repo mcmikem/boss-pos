@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Wallet, X, ChefHat, Plus, Trash2 } from 'lucide-react';
-import { Product, Expense } from '../types';
+import { Product, Expense, ExpenseItem } from '../types';
 
 const SHOP_CATEGORY_ORDER = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 
@@ -116,6 +116,10 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     let amtNum = 0;
     let description = '';
     let category = expenseCat;
+    // Per-item breakdown so the receipt shows each thing at its own price
+    // (Flour 30,000 · Oil 15,000), not one grouped total nobody can audit.
+    let items: ExpenseItem[] | undefined;
+    const priceTag = (n: number) => Math.round(n).toLocaleString();
 
     if (expenseTab === 'General') {
       if (!expenseDesc.trim()) {
@@ -146,6 +150,12 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
         }
         const names = dishIngRs.filter(i => i.bought > 0 && i.name).map(i => i.name);
         description = names.length ? `Making ${dishProduct.name}: ${names.join(', ')}` : `Making ${dishProduct.name}`;
+        items = dishIngRs
+          .filter(i => i.bought > 0 && i.name && i.total > 0)
+          .map(i => ({ name: `${i.name} (${i.bought} ${i.unit})`, amount: i.total }));
+        if (items.length) {
+          description = `Making ${dishProduct.name}: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
+        }
         category = 'Eatery';
       } else {
         if (expenseIngredients.length === 0 || !expenseIngredients.some(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)) {
@@ -159,6 +169,12 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
         }
         const ingredientNames = expenseIngredients.map(i => i.name.trim()).filter(Boolean);
         description = `Ingredients: ${ingredientNames.length ? ingredientNames.join(', ') : 'Eatery supplies'}`;
+        items = expenseIngredients
+          .filter(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)
+          .map(i => ({ name: i.name.trim(), amount: Math.round((parseFloat(i.cost) || 0) * 100) / 100 }));
+        if (items.length) {
+          description = `Ingredients: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
+        }
         category = 'Eatery';
       }
     } else {
@@ -178,6 +194,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
       amount: amtNum,
       category,
       source: 'drawer',
+      ...(items && items.length ? { items } : {}),
       ...(dishProduct && isEatery && expenseEateryMode === 'dish'
         ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
         : {}),

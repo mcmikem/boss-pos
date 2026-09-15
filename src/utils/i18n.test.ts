@@ -36,6 +36,10 @@ describe('t', () => {
       'amount', 'exact', 'change', 'stillNeed', 'subtotal', 'total',
       'completeSale', 'confirmSale', 'items', 'itemsLabel', 'cancel', 'confirm',
       'saving', 'backToProducts', 'checkout', 'closeBtn', 'off',
+      'money', 'more', 'settings', 'save', 'delete', 'sure', 'keep', 'done', 'back',
+      'expenses', 'logExpense', 'totalSpent', 'topExpense', 'history', 'tapRowDetails',
+      'todaysSummary', 'youKept', 'youLost', 'closeDayCta',
+      'addProduct', 'outOfStock',
     ];
     for (const key of keys) {
       expect(t('luganda', key).length).toBeGreaterThan(0);

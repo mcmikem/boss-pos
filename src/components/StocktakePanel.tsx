@@ -64,9 +64,10 @@ export default function StocktakePanel({ products, onUpdateProduct, formatCurren
 
   return (
     <div className="space-y-3">
-      <button onClick={onBack}
+      {/* Consistent back (#24): every sub-panel uses the same Back button. */}
+      <button onClick={onBack} aria-label="Back to stock"
         className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
-        <ArrowRightLeft className="w-4 h-4" /> Back to stock
+        <ArrowRightLeft className="w-4 h-4" /> Back
       </button>
 
       <div className="flex items-center gap-3">

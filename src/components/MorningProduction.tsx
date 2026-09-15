@@ -90,6 +90,9 @@ export default function MorningProduction({
           <p className="text-xs text-zinc-500 font-bold">Log what the kitchen made — adds to stock for today</p>
         </div>
       </div>
+      <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2 leading-snug">
+        One place for kitchen batches: logging here updates Stock automatically — don't add the same pieces in Stock, or they count twice.
+      </p>
 
       <div className="boss-card p-3 border-l-4 border-l-amber-500">
         <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>

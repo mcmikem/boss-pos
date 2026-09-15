@@ -3,6 +3,7 @@
 // behind the bottom nav again (sheet at z-80, safe-area footer padding,
 // min-h-0 shrink chain inside).
 import type { ReactNode } from 'react';
+import { useEffect } from 'react';
 import { X } from 'lucide-react';
 
 interface SheetProps {
@@ -14,6 +15,13 @@ interface SheetProps {
 }
 
 export default function Sheet({ onClose, title, icon, children, footer }: SheetProps) {
+  // Consistent back (#24): every sheet closes with ✕ top-right, backdrop tap,
+  // or Escape / swipe-back — never a reinvented gesture per screen.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-[80] flex flex-col">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />

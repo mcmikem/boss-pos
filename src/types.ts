@@ -105,12 +105,21 @@ export interface Sale {
   efrisAt?: string;
 }
 
+export interface ExpenseItem {
+  name: string;
+  amount: number;
+}
+
 export interface Expense {
   id: string;
   timestamp: string;
   description: string;
   amount: number;
   category: string;
+  // Line items: exactly what was bought at what price, so the receipt shows
+  // the breakdown (Flour 30,000 · Oil 15,000) instead of one grouped total.
+  // Legacy rows omit this — the description + total still stand on their own.
+  items?: ExpenseItem[];
   // Accountability: where the money came from + who recorded it. Legacy rows
   // omit these — assumed drawer-paid (safe default for theft detection).
   source?: 'drawer' | 'cash' | 'momo' | 'owner' | 'bank';

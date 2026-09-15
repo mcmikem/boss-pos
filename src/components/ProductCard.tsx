@@ -13,9 +13,10 @@ interface ProductCardProps {
   compact?: boolean;
   pinned?: boolean;
   onTogglePin?: (productId: string) => void;
+  simple?: boolean;
 }
 
-const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact, pinned, onTogglePin }: ProductCardProps) {
+const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact, pinned, onTogglePin, simple }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
   const hasVariants = !!product.variants && product.variants.length > 0;
@@ -53,6 +54,56 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         <div className="flex items-center gap-2 shrink-0 ml-3">
           {inCart && <span className="text-xs font-bold text-gold-brand tabular-nums">×{cartQtyLabel}</span>}
           <div className="w-11 h-11 bg-gold-brand text-black rounded-xl flex items-center justify-center font-black text-lg" aria-hidden="true">+</div>
+        </div>
+      </button>
+    );
+  }
+
+  // Simple mode (#7): beginners get exactly ONE obvious tap target — the whole
+  // card is a single button. No pin star, no stepper, no nested buttons.
+  // Tapping adds one; variants still open their picker via onAddToCart.
+  if (simple) {
+    return (
+      <button
+        onClick={() => !isOutOfStock && onAddToCart(product)}
+        disabled={isOutOfStock}
+        aria-label={isOutOfStock ? `${product.name}, sold out` : `Add ${product.name} to cart, ${formatCurrency(minPrice)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
+        className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col text-left focus-visible:outline-2 focus-visible:outline-gold-brand w-full min-h-[64px] ${
+          isOutOfStock
+            ? 'opacity-40 border-dashed border-rose-800/40'
+            : inCart
+            ? 'border-gold-brand shadow-[0_0_15px_rgba(255,204,0,0.12)]'
+            : 'border-white/5 hover:border-gold-brand/30'
+        }`}
+      >
+        <div className="relative w-full" style={{ paddingTop: '100%' }}>
+          {product.imageUrl ? (
+            <img referrerPolicy="no-referrer" src={product.imageUrl} alt=""
+              className="absolute inset-0 w-full h-full object-cover"
+              onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+          ) : (
+            <div className={`absolute inset-0 w-full h-full bg-gradient-to-br ${catVis.gradient} flex items-center justify-center`}>
+              <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
+            </div>
+          )}
+          {isOutOfStock ? (
+            <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-rose-300 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-white/15 shadow-md uppercase tracking-[0.08em] leading-none">Sold out</div>
+          ) : inCart ? (
+            <div className="absolute top-2 right-2 bg-gold-brand text-black text-[10px] font-bold px-2.5 py-1 rounded-lg border border-black/20 shadow-md tracking-[0.08em] leading-none tabular-nums">{cartQtyLabel} in cart</div>
+          ) : !product.isService ? (
+            <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-zinc-200 text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-white/15 shadow-md tracking-[0.08em] leading-none">{product.stockQty}</div>
+          ) : null}
+        </div>
+        <div className="p-3 flex flex-col gap-1 flex-1 min-h-0 w-full">
+          <span className="text-[15px] font-bold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
+            {product.name}
+          </span>
+          <span className="flex items-center justify-between mt-auto gap-2">
+            <span className="text-xs font-semibold text-zinc-400 truncate tabular-nums">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}</span>
+            <span className="shrink-0 h-10 px-4 bg-gold-brand text-black rounded-xl flex items-center justify-center font-black text-xs uppercase tracking-wider" aria-hidden="true">
+              {hasVariants ? 'Choose' : <Plus className="w-5 h-5" />}
+            </span>
+          </span>
         </div>
       </button>
     );

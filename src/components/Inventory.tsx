@@ -79,6 +79,8 @@ export default function Inventory({
   const [newSaleUnit, setNewSaleUnit] = useState('');
   const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
   const [newRecipe, setNewRecipe] = useState<Recipe | null>(null);
+  // Services never carry stock — the toggle hides the stock fields below.
+  const [newIsService, setNewIsService] = useState(false);
 
   const [editName, setEditName] = useState('');
   const [editCost, setEditCost] = useState('');
@@ -291,7 +293,10 @@ export default function Inventory({
     }
 
     let finalStock = editingProduct.stockQty;
-    if (stockAdjustment > 0 || adjustmentType === 'set') {
+    if (editIsService) {
+      // Services hold no stock, ever — wipe any legacy balance.
+      finalStock = 0;
+    } else if (editCategory !== 'Eatery' && (stockAdjustment > 0 || adjustmentType === 'set')) {
       if (adjustmentType === 'set') {
         finalStock = Math.max(0, stockAdjustment);
         triggerToast(`Set stock to ${finalStock}`, 'success');
@@ -318,7 +323,7 @@ export default function Inventory({
       name: nameTrimmed,
       cost: costNum,
       price: priceNum,
-      lowStockThreshold: thresholdNum,
+      lowStockThreshold: editIsService ? 0 : thresholdNum,
       category: editCategory,
       supplierId: editSupplierId || undefined,
       stockQty: finalStock,
@@ -380,8 +385,11 @@ export default function Inventory({
       category: newCategory,
       cost: costNum,
       price: priceNum,
-      stockQty: stockNum,
-      lowStockThreshold: thresholdNum,
+      // Eatery snacks hold no manual stock — Morning Production is the only
+      // inflow. Services never hold stock either.
+      stockQty: (newIsService || newCategory === 'Eatery') ? 0 : stockNum,
+      lowStockThreshold: newIsService ? 0 : thresholdNum,
+      isService: newIsService || undefined,
       supplierId: newSupplierId || undefined,
         imei: newImei || undefined,
         barcode: newBarcode || undefined,
@@ -396,6 +404,7 @@ export default function Inventory({
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
     setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewExpiry(''); setNewImageUrl(''); setNewSaleUnit('');
+    setNewIsService(false);
     setNewVariants([]);
     triggerToast(`Added "${newProd.name}"`, 'success');
   };
@@ -571,7 +580,7 @@ export default function Inventory({
           </button>
           <button onClick={() => setShowStocktake(true)}
             className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-cyan-400/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
-            title="Count the shelves and reconcile with system stock">
+            title="Count the shelves and match system stock">
             <ListChecks className="w-4 h-4" /> Count
           </button>
           <span className="text-xs font-bold text-zinc-500 uppercase">Sort</span>
@@ -623,8 +632,13 @@ export default function Inventory({
             const exp = !product.isService ? expiryStatus(product.expiryDate) : 'ok';
             const expDays = exp !== 'ok' ? daysUntilExpiry(product.expiryDate) : null;
 
+            // One-button row (#7): the whole row is the single action that
+            // opens the item — delete lives inside the editor, not here.
             return (
-              <div key={product.id} onClick={() => handleOpenEdit(product)}
+              <div key={product.id} role="button" tabIndex={0}
+                onClick={() => handleOpenEdit(product)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOpenEdit(product); } }}
+                aria-label={`Open ${product.name} for editing`}
                 className={`boss-card p-4 flex items-center justify-between cursor-pointer hover:border-gold-brand/40 group active:scale-[0.995] ${
                   isOutOfStock ? 'border-dashed border-rose-950 bg-rose-950/5' : ''
                 }`}>
@@ -743,7 +757,9 @@ export default function Inventory({
               rows.forEach((r, idx) => onAddProduct({
                 id: `p-${now}-${idx}`, name: r.name.trim(),
                 category: bulkCategory || categories[0] || 'General',
-                cost: 0, price: parseFloat(r.price) || 0, stockQty: 1, lowStockThreshold: 1,
+                cost: 0, price: parseFloat(r.price) || 0,
+                // Kitchen snacks start at zero — the batch arrives via Morning Production.
+                stockQty: (bulkCategory || categories[0] || '') === 'Eatery' ? 0 : 1, lowStockThreshold: 1,
               }));
               setShowBulk(false);
               triggerToast(`${rows.length} products added — open each later for details`, 'success');
@@ -817,6 +833,15 @@ export default function Inventory({
                 </div>
               </div>
 
+              <div className="flex items-center gap-3 bg-zinc-900 rounded-xl px-4 py-3 border border-zinc-800">
+                <label className="text-xs text-zinc-400 font-bold uppercase">Service?</label>
+                <button onClick={() => setNewIsService(!newIsService)}
+                  className={`relative w-11 h-6 rounded-full transition-all ${newIsService ? 'bg-gold-brand' : 'bg-zinc-700'}`}>
+                  <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${newIsService ? 'left-5' : 'left-0.5'}`}></span>
+                </button>
+                <span className="text-xs text-zinc-500">{newIsService ? 'No stock tracking' : 'Stock tracked'}</span>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Cost Price</label>
@@ -830,6 +855,24 @@ export default function Inventory({
                 </div>
               </div>
 
+              {newIsService ? (
+                <p className="text-[11px] font-bold text-zinc-500 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-3 py-2.5 leading-snug">
+                  Service — no stock to count. It sells without touching stock.
+                </p>
+              ) : newCategory === 'Eatery' ? (
+                <>
+                  <div className="bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2.5">
+                    <p className="text-[11px] font-bold text-amber-300/90 leading-snug">
+                      Kitchen snack — starts at zero. Today's batch arrives through Sell → Morning Production, which is the only place its stock comes from.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Alert when below</label>
+                    <input type="number" step="any" value={newThreshold} onChange={(e) => setNewThreshold(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+                  </div>
+                </>
+              ) : (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Stock Quantity</label>
@@ -842,6 +885,7 @@ export default function Inventory({
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
                 </div>
               </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1049,11 +1093,13 @@ export default function Inventory({
               </div>
             )}
 
+            {!editIsService && (
             <div>
               <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Alert when stock below</label>
               <input type="number" value={editThreshold} onChange={(e) => setEditThreshold(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
             </div>
+            )}
 
             <div>
               <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Product Image</label>
@@ -1137,10 +1183,24 @@ export default function Inventory({
 
             {editCategory === 'Eatery' && renderRecipeCard(editRecipe, setEditRecipe, editPrice, setEditPrice, setEditVariants)}
 
-            <div className="bg-zinc-900 p-4 rounded-xl space-y-3 border border-zinc-800/60">
+            {editIsService ? (
+              <p className="text-[11px] font-bold text-zinc-500 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-3 py-2.5 leading-snug">
+                Service — no stock to adjust. It sells without touching stock.
+              </p>
+            ) : editCategory === 'Eatery' ? (
+            <div className="bg-zinc-900 p-4 rounded-xl space-y-2 border border-zinc-800/60">
               <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                <Truck className="w-3.5 h-3.5 text-gold-brand" /> Adjust Stock
+                <Truck className="w-3.5 h-3.5 text-gold-brand" /> Stock from production
               </h4>
+              <p className="text-xs text-zinc-300 font-bold">
+                Today's balance: <span className="text-gold-brand font-black tabular-nums">{editingProduct.stockQty}</span>
+              </p>
+              <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2 leading-snug">
+                Kitchen snacks can't be typed in here — log the batch in Sell → Morning Production. To fix a wrong entry, delete it there and the balance corrects itself.
+              </p>
+            </div>
+            ) : (
+            <div className="bg-zinc-900 p-4 rounded-xl space-y-3 border border-zinc-800/60">
               <div className="flex gap-2">
                 <button onClick={() => setAdjustmentType('add')}
                   className={`flex-1 h-11 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${
@@ -1161,8 +1221,9 @@ export default function Inventory({
                   onChange={(e) => setStockAdjustment(parseQty(e.target.value))}
                   className="w-24 bg-zinc-950 border border-zinc-800 text-gold-light rounded text-center text-xs h-8 focus:border-gold-brand focus:outline-none font-bold" />
                 <span className="text-xs text-zinc-400 font-bold uppercase">(Current: {editingProduct.stockQty})</span>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="pt-2 flex gap-3">
               <button onClick={() => setEditingProduct(null)} className="flex-1 h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl">Cancel</button>

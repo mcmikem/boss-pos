@@ -14,6 +14,7 @@ import {
   Printer
 } from 'lucide-react';
 import type { Sale, Expense, Product, StoreSettings } from '../types';
+import { t } from '../utils/i18n';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { eateryDayClose } from '../utils/eateryClose';
 import ReceiptModal from './ReceiptModal';
@@ -105,13 +106,13 @@ export default function Dashboard({
   );
   const hasEatery = products.some(p => p.category === 'Eatery') || eatery.saleCount > 0;
 
-  // Evening nudge: after 8pm, once a day, turn today's numbers into the
+  // Evening nudge (#19): after 9pm, once a day, turn today's numbers into the
   // habit of closing the books — while the day is still fresh.
   const [closeNudgeDismissed, setCloseNudgeDismissed] = useState(() => {
     try { return localStorage.getItem(`boss_pos_closenudge_${todayStr}`) === '1'; } catch { return false; }
   });
   const showCloseNudge =
-    !closeNudgeDismissed && new Date().getHours() >= 20 && todayAllSales.length > 0;
+    !closeNudgeDismissed && new Date().getHours() >= 21 && todayAllSales.length > 0;
   const dismissCloseNudge = () => {
     try { localStorage.setItem(`boss_pos_closenudge_${todayStr}`, '1'); } catch {}
     setCloseNudgeDismissed(true);
@@ -158,7 +159,7 @@ export default function Dashboard({
             {settings.shopName || 'My Shop'}
           </p>
           <h2 className="text-3xl font-black text-white uppercase tracking-tight font-display">
-            Today's Summary
+            {t(settings.language, 'todaysSummary')}
           </h2>
         </div>
         
@@ -184,12 +185,12 @@ export default function Dashboard({
               <h3 className="text-xs font-black text-white uppercase tracking-widest">Day done?</h3>
               <p className="text-xs text-zinc-300 font-bold mt-1 leading-relaxed">
                 Today: {todayAllSales.length} sale{todayAllSales.length !== 1 ? 's' : ''} · {formatCurrency(todaySalesSum)}.
-                {netProfit >= 0 ? ` You kept ${formatCurrency(netProfit)}.` : ` You lost ${formatCurrency(-netProfit)}.`} Close the books while it's fresh.
+                {netProfit >= 0 ? ` ${t(settings.language, 'youKept')} ${formatCurrency(netProfit)}.` : ` ${t(settings.language, 'youLost')} ${formatCurrency(-netProfit)}.`} Close the books while it's fresh.
               </p>
               <div className="flex gap-2 mt-3">
                 <button type="button" onClick={() => onNavigate('registers')}
                   className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                  Close the day
+                  {t(settings.language, 'closeDayCta')}
                 </button>
                 <button type="button" onClick={dismissCloseNudge}
                   className="h-11 px-4 border border-zinc-700 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl hover:text-zinc-200 active:scale-95 transition-all cursor-pointer">
@@ -271,11 +272,46 @@ export default function Dashboard({
           <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Magoba</p>
             <p className={`text-lg sm:text-xl font-black font-display truncate tabular-nums ${netProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`} title={formatCurrency(netProfit)}>{formatCurrency(netProfit)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">After costs & expenses</p>
+            {/* Profit in words (#17): beginners read "You kept X", not signs. */}
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">
+              {netProfit >= 0 ? `${t(settings.language, 'youKept')} ${formatCurrency(netProfit)}` : `${t(settings.language, 'youLost')} ${formatCurrency(-netProfit)}`}
+            </p>
           </div>
         </button>
 
       </section>
+
+      {/* Loss/profit drill-down: a bare "Lost 20,000" means nothing without the
+          maths. Expandable so beginners see exactly how today added up. */}
+      <details className="boss-card p-4" id="profit-breakdown">
+        <summary className="text-xs font-black text-gold-brand uppercase tracking-widest cursor-pointer hover:text-gold-light touch-target">
+          How did today add up?
+        </summary>
+        <div className="mt-2 space-y-1 text-xs font-bold tabular-nums">
+          <div className="flex justify-between gap-2">
+            <span className="text-zinc-500 uppercase">Sales in</span>
+            <span className="text-zinc-100">+{formatCurrency(todaySalesSum)}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-zinc-500 uppercase">Ingredient cost</span>
+            <span className="text-amber-300">−{formatCurrency(todayCostSum)}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-zinc-500 uppercase">Spending ({todayExpenses.length})</span>
+            <span className="text-rose-300">−{formatCurrency(todayExpensesSum)}</span>
+          </div>
+          <div className="flex justify-between gap-2 pt-1 border-t border-white/5">
+            <span className="text-zinc-300 uppercase">= {netProfit >= 0 ? t(settings.language, 'youKept') : t(settings.language, 'youLost')}</span>
+            <span className={netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(netProfit >= 0 ? netProfit : -netProfit)}</span>
+          </div>
+          {[...todayExpenses].sort((a, b) => b.amount - a.amount).slice(0, 3).map(e => (
+            <div key={e.id} className="flex justify-between gap-2 text-[11px]">
+              <span className="text-zinc-500 truncate min-w-0">{e.description}</span>
+              <span className="text-zinc-400 shrink-0">−{formatCurrency(e.amount)}</span>
+            </div>
+          ))}
+        </div>
+      </details>
 
       {hasEatery && (
         <section aria-label="Eatery profit today" id="eatery-day-close"

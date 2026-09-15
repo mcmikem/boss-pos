@@ -1,4 +1,26 @@
-import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+
+// Expense rows may carry `items` as a JSON string (server TEXT column) or as
+// an array (optimistic echo / cache). Normalize to an array so receipts can
+// always render the per-item breakdown.
+export function normalizeExpenses(rows: unknown): Expense[] {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.map((r) => {
+    const e = r as Expense & { items?: unknown };
+    let items: ExpenseItem[] | undefined;
+    try {
+      const raw = typeof e.items === 'string' && e.items ? JSON.parse(e.items) : e.items;
+      if (Array.isArray(raw)) {
+        const clean = raw.slice(0, 50).map((i) => ({
+          name: String((i as ExpenseItem)?.name || '').slice(0, 120),
+          amount: Math.max(0, Math.round((parseFloat(String((i as ExpenseItem)?.amount)) || 0) * 100) / 100),
+        })).filter((i) => i.name);
+        if (clean.length) items = clean;
+      }
+    } catch { /* legacy row without breakdown */ }
+    return items ? { ...(e as Expense), items } : (e as Expense);
+  });
+}
 
 const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
@@ -683,8 +705,8 @@ export const saleApi = {
 };
 
 export const expenseApi = {
-  list: () => api<Expense[]>('/api/expenses'),
-  create: (e: Expense) => api<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(e) }),
+  list: () => api<Expense[]>('/api/expenses').then((rows) => normalizeExpenses(rows)),
+  create: (e: Expense) => api<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(e) }).then((row) => normalizeExpenses([row])[0] || e),
   remove: (id: string) => api<{ success: boolean }>(`/api/expenses/${id}`, { method: 'DELETE' }),
 };
 

@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Wallet, Coins, Plus, Trash2, X, Settings2, Hash, Check, Edit2, TrendingDown } from 'lucide-react';
 import type { Expense, Product } from '../types';
+import { t } from '../utils/i18n';
 import QuickExpenseModal from './QuickExpenseModal';
 import ExpenseDetailModal from './ExpenseDetailModal';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
@@ -17,6 +18,7 @@ interface ExpensesProps {
   onUpdateProduct?: (p: Product) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  lang?: unknown;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -44,7 +46,7 @@ export default function Expenses({
   onAddExpense, onDeleteExpense,
   onAddExpenseCategory, onUpdateExpenseCategory, onDeleteExpenseCategory,
   onUpdateProduct,
-  formatCurrency, triggerToast,
+  formatCurrency, triggerToast, lang,
 }: ExpensesProps) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [showQuickExpense, setShowQuickExpense] = useState(false);
@@ -55,6 +57,16 @@ export default function Expenses({
   const [editingCat, setEditingCat] = useState<string | null>(null);
   const [editingCatVal, setEditingCatVal] = useState('');
   const [deleteCatConfirm, setDeleteCatConfirm] = useState<string | null>(null);
+  // Two-tap delete: the trash icon arms ("Sure?") before anything is removed,
+  // so a stray tap can't silently wipe a receipt.
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
+  const armDelete = (id: string) => {
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    setDeleteConfirmId(id);
+    deleteTimer.current = setTimeout(() => setDeleteConfirmId(null), 4000);
+  };
 
   const timeRange = useMemo(() => {
     switch (timeFilter) {
@@ -135,13 +147,13 @@ export default function Expenses({
             <Wallet className="w-5 h-5 text-rose-400" />
           </div>
           <div>
-            <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">Expenses</h2>
+            <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">{t(lang, 'expenses')}</h2>
             <p className="text-xs text-zinc-500 font-bold">{timeRange.label} • {filteredExpenses.length} entries</p>
           </div>
         </div>
         <button onClick={() => setShowQuickExpense(true)}
           className="h-11 px-4 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
-          <Plus className="w-4 h-4" /> Log Expense
+          <Plus className="w-4 h-4" /> {t(lang, 'logExpense')}
         </button>
       </div>
 
@@ -162,13 +174,13 @@ export default function Expenses({
       {/* Summary */}
       <section className="grid grid-cols-2 gap-3">
         <div className="boss-card p-4 border-l-4 border-l-rose-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Total Spent</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'totalSpent')}</p>
           <div className="flex items-baseline gap-2 mt-2">
             <span className="text-2xl font-black text-rose-400 font-display">{formatCurrency(totalSpent)}</span>
           </div>
         </div>
         <div className="boss-card p-4 border-l-4 border-l-amber-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Top Expense</p>
+          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'topExpense')}</p>
           {topCategory ? (
             <>
               <p className="text-sm font-black text-white font-display truncate mt-2">{topCategory.category}</p>
@@ -240,7 +252,7 @@ export default function Expenses({
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">
-            Expense History ({categoryFilter || (timeFilter === 'all' ? 'all' : timeRange.label)}) • tap a row for details
+            {t(lang, 'history')} ({categoryFilter || (timeFilter === 'all' ? 'all' : timeRange.label)}) • {t(lang, 'tapRowDetails')}
           </h3>
           {categoryFilter && (
             <button onClick={() => setCategoryFilter(null)}
@@ -287,12 +299,28 @@ export default function Expenses({
                   <span
                     role="button"
                     tabIndex={0}
-                    aria-label="Delete expense"
-                    onClick={(e) => { e.stopPropagation(); onDeleteExpense(exp.id); triggerToast('Deleted expense', 'info'); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onDeleteExpense(exp.id); } }}
-                    className="p-1.5 text-zinc-600 hover:text-rose-400 transition-all rounded-lg hover:bg-rose-950/30 cursor-pointer touch-target"
+                    aria-label={deleteConfirmId === exp.id ? 'Tap again to confirm delete' : 'Delete expense'}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (deleteConfirmId !== exp.id) { armDelete(exp.id); return; }
+                      if (deleteTimer.current) clearTimeout(deleteTimer.current);
+                      setDeleteConfirmId(null);
+                      onDeleteExpense(exp.id); triggerToast('Deleted expense', 'info');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      e.stopPropagation();
+                      if (deleteConfirmId !== exp.id) { armDelete(exp.id); return; }
+                      setDeleteConfirmId(null);
+                      onDeleteExpense(exp.id);
+                    }}
+                    className={`px-2 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all rounded-lg cursor-pointer touch-target ${
+                      deleteConfirmId === exp.id
+                        ? 'bg-rose-600 text-white'
+                        : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'
+                    }`}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {deleteConfirmId === exp.id ? t(lang, 'sure') : <Trash2 className="w-3.5 h-3.5" />}
                   </span>
                 </div>
               </button>
@@ -306,6 +334,7 @@ export default function Expenses({
         formatCurrency={formatCurrency}
         onClose={() => setSelectedExpense(null)}
         onDelete={(id) => { onDeleteExpense(id); triggerToast('Deleted expense', 'info'); }}
+        lang={lang}
       />
 
       {/* Category manager */}

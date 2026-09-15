@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { ChefHat, X, PlusCircle, ArrowRightLeft, Search, Tag } from 'lucide-react';
+import BeginnerTip from './BeginnerTip';
 import type { Product, Recipe, RecipeIngredient, ProductVariant } from '../types';
 import { RECIPE_UNITS, calculateRecipe, emptyRecipe, suggestedFor, effectiveCost } from '../utils/recipe';
 
@@ -177,10 +178,11 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
           <div className="bg-zinc-900/60 rounded-xl p-3 border border-gold-brand/20 space-y-3">
             <div className="flex justify-between items-center mb-1">
               <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe Costing — {selected.name}
+                <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe cost — {selected.name}
               </h4>
               <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery snack</span>
             </div>
+            <BeginnerTip tipKey="ingredient-cost" text="Ingredient cost = what you spend to make one piece. Sell above it to keep money." />
 
             <div className="space-y-2">
               <div className="grid grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem] gap-1.5 text-[10px] text-zinc-500 font-bold uppercase">

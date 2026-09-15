@@ -6,6 +6,7 @@ import {
   CalendarDays, Receipt, LayoutGrid, Info
 } from 'lucide-react';
 import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
+import { t } from '../utils/i18n';
 import { supplierDrift } from '../utils/cashflow';
 import CreditsLedger from './CreditsLedger';
 import ExpenseDetailModal from './ExpenseDetailModal';
@@ -108,6 +109,8 @@ export default function Analytics({
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   const [showAllDays, setShowAllDays] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  // Two-tap delete: arm ("Sure?") before anything is removed.
+  const [deleteExpConfirm, setDeleteExpConfirm] = useState<string | null>(null);
   const [expenseCatFilter, setExpenseCatFilter] = useState<string | null>(null);
   const [branchFilter, setBranchFilter] = useState<string>('All');
   const branchOptions = useMemo(() => {
@@ -783,7 +786,23 @@ const colorsMap: { [key: string]: string } = {
             <div className="boss-card p-5 flex flex-col justify-between min-h-32 min-w-0" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Profit Left <Info className="w-3 h-3 text-zinc-600" /></span>
               <h3 className={`text-2xl font-black font-display mt-1 truncate tabular-nums ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`} title={formatCurrency(displayNetProfit)}>{formatCurrency(displayNetProfit)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase truncate">{displayNetProfit >= 0 ? 'You kept this' : 'You lost this'} • after all costs</p>
+              <p className="text-xs text-zinc-500 font-bold uppercase truncate">{displayNetProfit >= 0 ? t(settings.language, 'youKept') : t(settings.language, 'youLost')} • after all costs</p>
+              {timeFilter === 'Daily' && (
+                <details className="mt-2">
+                  <summary className="text-[10px] font-black text-gold-brand/80 uppercase tracking-wider cursor-pointer hover:text-gold-brand">How?</summary>
+                  <div className="mt-1 space-y-0.5 text-[11px] font-bold tabular-nums">
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Sales in</span><span className="text-zinc-100">+{formatCurrency(revenue)}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Stock cost</span><span className="text-amber-300">−{formatCurrency(cogs)}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Spending</span><span className="text-rose-300">−{formatCurrency(totalExpenses)}</span></div>
+                    {expenseCategoryBreakdown.slice(0, 3).map(c => (
+                      <div key={c.category} className="flex justify-between gap-2">
+                        <span className="text-zinc-500 uppercase truncate min-w-0">{c.category}</span>
+                        <span className="text-zinc-400 shrink-0">−{formatCurrency(c.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           </div>
 
@@ -949,7 +968,14 @@ const colorsMap: { [key: string]: string } = {
                 );
               })}
               {dailyBreakdown.length === 0 && (
-                <div className="p-6 text-center text-zinc-500 text-xs font-bold uppercase">No sales or expenses in this period.</div>
+                // Empty reports that teach (#4): one action, not just "no data".
+                <div className="p-6 text-center">
+                  <p className="text-zinc-500 text-xs font-bold uppercase">No sales or expenses in this period.</p>
+                  <button onClick={() => onNavigate('sales')}
+                    className="mt-3 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-widest rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                    + Start a Sale
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1129,11 +1155,26 @@ const colorsMap: { [key: string]: string } = {
                   <div className="flex items-center gap-2 shrink-0">
                     <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(exp.amount)}</p>
                     <span
-                      role="button" tabIndex={0} aria-label="Delete expense"
-                      onClick={(e) => { e.stopPropagation(); onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info'); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onDeleteExpense(exp.id); } }}
-                      className="p-1.5 text-zinc-600 hover:text-rose-400 lg:opacity-0 lg:group-hover:opacity-100 transition-all rounded-lg hover:bg-rose-950/30 cursor-pointer">
-                      <Trash2 className="w-3.5 h-3.5" />
+                      role="button" tabIndex={0} aria-label={deleteExpConfirm === exp.id ? 'Tap again to confirm delete' : 'Delete expense'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (deleteExpConfirm !== exp.id) { setDeleteExpConfirm(exp.id); return; }
+                        setDeleteExpConfirm(null);
+                        onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.stopPropagation();
+                        if (deleteExpConfirm !== exp.id) { setDeleteExpConfirm(exp.id); return; }
+                        setDeleteExpConfirm(null);
+                        onDeleteExpense(exp.id);
+                      }}
+                      className={`px-2 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all rounded-lg cursor-pointer ${
+                        deleteExpConfirm === exp.id
+                          ? 'bg-rose-600 text-white'
+                          : 'text-zinc-600 hover:text-rose-400 lg:opacity-0 lg:group-hover:opacity-100 hover:bg-rose-950/30'
+                      }`}>
+                      {deleteExpConfirm === exp.id ? t(settings.language, 'sure') : <Trash2 className="w-3.5 h-3.5" />}
                     </span>
                   </div>
                 </button>
@@ -1151,6 +1192,7 @@ const colorsMap: { [key: string]: string } = {
             formatCurrency={formatCurrency}
             onClose={() => setSelectedExpense(null)}
             onDelete={(id) => { onDeleteExpense(id); triggerToast('Deleted expense', 'info'); }}
+            lang={settings.language}
           />
         </>
       )}

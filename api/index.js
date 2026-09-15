@@ -209,6 +209,7 @@ async function initDB() {
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Eatery'`; } catch {}
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
+  try { await sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS items TEXT DEFAULT ''`; } catch {}
   for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'bookings', 'repair_jobs', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
@@ -366,6 +367,20 @@ function text(v, max) {
 function num(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// Expense line-items: [{name, amount}] stored as JSON text so the receipt can
+// show exactly what was bought at what price (not just a grouped total).
+function itemsJson(v) {
+  try {
+    const arr = typeof v === 'string' ? (v ? JSON.parse(v) : []) : v;
+    if (!Array.isArray(arr)) return '';
+    const clean = arr.slice(0, 50).map(i => ({
+      name: String((i && i.name) || '').slice(0, 120),
+      amount: Math.max(0, Math.round((parseFloat(i && i.amount) || 0) * 100) / 100),
+    })).filter(i => i.name);
+    return clean.length ? JSON.stringify(clean) : '';
+  } catch { return ''; }
 }
 
 // Stock and sale quantities allow up to 3 decimals (2.5 kg tomatoes, 0.5 m
@@ -1458,8 +1473,9 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const e = req.body;
   const description = text(e.description, 300);
   const category = text(e.category, 100);
-  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,client_write_id)
-    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${e.clientWriteId||null})
+  const items = itemsJson(e.items);
+  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,items,client_write_id)
+    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${items},${e.clientWriteId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
@@ -2385,7 +2401,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('supplier_prices', 'id', ['id', 'supplier_id', 'product_id', 'price', 'updated_at'], supplierPriceRows).then(n => counts.supplierPrices = n),
     batchUpsert('staff', 'id', ['id', 'name', 'role', 'pin_hash', 'active', 'created_at'], staffRows).then(n => counts.staff = n),
     batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id'], saleRows).then(n => counts.sales = n),
-    batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100) }))).then(n => counts.expenses = n),
+    batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category', 'items'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100), items: itemsJson(e.items) }))).then(n => counts.expenses = n),
     batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
     batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
