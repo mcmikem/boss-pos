@@ -122,14 +122,16 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
       <div className="p-3 flex flex-col gap-1 flex-1 min-h-0">
         {/* Mistake 7 fix: title stands out without shouting — sentence case,
             semibold (not black/uppercase), tight leading for easy scanning. */}
-        <h3 className="text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
+        {/* Names first (scanning), price second: new users look for the item,
+            not the number. */}
+        <h3 className="text-sm sm:text-[15px] font-semibold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
           {product.name}
         </h3>
         {/* Mistake 9 fix: trust signal (stock) lives next to the title/price,
             not only as a far-away badge — "what is it, can I trust it, how much". */}
         <div className="flex items-center justify-between mt-auto gap-1">
           <div className="min-w-0">
-            <p className="text-[13px] font-bold text-gold-brand font-display leading-tight truncate">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-semibold"> / {product.saleUnit}</span> : null}</p>
+            <p className="text-xs sm:text-[13px] font-bold text-gold-brand font-display leading-tight truncate tabular-nums">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-semibold"> / {product.saleUnit}</span> : null}</p>
             {isLowStock && !isOutOfStock && !product.isService ? (
               <p className="text-[11px] font-semibold text-amber-400/90 mt-0.5">Only {product.stockQty} left</p>
             ) : marginPct !== null ? (

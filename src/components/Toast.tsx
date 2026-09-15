@@ -1,20 +1,31 @@
 import { useEffect, useRef } from 'react';
 import { CheckCircle, AlertTriangle, Info, X } from 'lucide-react';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+export type TriggerToast = (message: string, type: 'success' | 'error' | 'info', action?: ToastAction) => void;
+
 interface ToastProps {
   message: string;
   type: 'success' | 'error' | 'info';
+  action?: ToastAction;
   onClose: () => void;
 }
 
-export default function Toast({ message, type, onClose }: ToastProps) {
+export default function Toast({ message, type, action, onClose }: ToastProps) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const actionRef = useRef(action);
+  actionRef.current = action;
 
   useEffect(() => {
+    // Action toasts linger so there's time to read and tap.
     const timer = setTimeout(() => {
       onCloseRef.current();
-    }, 4000);
+    }, actionRef.current ? 6000 : 4000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -31,9 +42,17 @@ export default function Toast({ message, type, onClose }: ToastProps) {
   };
 
   return (
-    <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up ${bgStyles[type]}`}>
+    <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up max-w-[calc(100vw-2rem)] ${bgStyles[type]}`}>
       {icons[type]}
       <span className="text-sm font-medium tracking-wide">{message}</span>
+      {action && (
+        <button
+          onClick={() => { action.onClick(); onClose(); }}
+          className="ml-1 shrink-0 h-9 px-3 bg-gold-brand text-black font-black text-[11px] rounded-lg uppercase tracking-wider cursor-pointer active:scale-95"
+        >
+          {action.label}
+        </button>
+      )}
       <button 
         onClick={onClose} 
         className="ml-2 hover:opacity-80 active:scale-90 transition-all"

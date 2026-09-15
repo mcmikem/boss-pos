@@ -22,7 +22,7 @@ import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import Toast from './components/Toast';
+import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
 import PinGate from './components/PinGate';
 import MorningBrief from './components/MorningBrief';
 import NotificationsBell from './components/NotificationsBell';
@@ -220,6 +220,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [isQuickSale, setIsQuickSale] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
+  const [toastAction, setToastAction] = useState<ToastAction | undefined>(undefined);
   const [apiError, setApiError] = useState(false);
   const [isOnline, setIsOnline] = useState(() => {
     try { return typeof navigator !== 'undefined' ? navigator.onLine : true; } catch { return true; }
@@ -246,9 +247,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const readyRef = useRef(false);
 
-  const triggerToast = (msg: string, type: 'success' | 'error' | 'info') => {
+  const triggerToast: TriggerToast = (msg, type, action) => {
     setToastMessage(msg);
     setToastType(type);
+    setToastAction(action);
   };
 
   const formatSyncedAgo = (ts: number) => {
@@ -655,7 +657,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // A replay lost the race against another device (server 409 CONFLICT).
   const onSyncConflict = (e: Event) => {
     const n = (e as CustomEvent).detail || 1;
-    triggerToast(`Another device saved a newer version — ${n} offline change(s) were skipped to avoid overwriting it.`, 'error');
+    triggerToast(`Another device saved a newer version — ${n} offline change(s) were skipped to avoid overwriting it.`, 'error', {
+      label: 'Sync now',
+      onClick: () => { handleForceSync(); },
+    });
     fetchAllData();
   };
   useEffect(() => {
@@ -1246,7 +1251,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     const sale = sales.find(s => s.id === saleId);
     if (!sale || sale.refunded) return;
     if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
-    if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)})? Stock goes back in.`)) return;
+    if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)}) for good? The items go back into stock and it disappears from reports.`)) return;
     // Tombstone FIRST so a stale boot cache can never resurrect it.
     addDeletedSale(saleId);
     try { logVoidDay(saleId); } catch {}
@@ -1274,10 +1279,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     triggerToast(`${sale.orderNumber} deleted`, 'info');
   };
 
-  const handleRefundSale = async (saleId: string) => {
+  const handleRefundSale = async (saleId: string, skipPin = false) => {
     const saleToRefund = sales.find(s => s.id === saleId);
     if (!saleToRefund || saleToRefund.refunded) return;
-    if (!(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return;
+    if (!skipPin && !(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
@@ -1303,6 +1308,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       return;
     }
     triggerToast(`${saleToRefund.orderNumber} refunded. Stock restored.`, 'info');
+  };
+
+  // New-cashier safety net: undo your own just-made sale (≤60s old)
+  // without a manager PIN. Anything older goes through the normal refund path.
+  const handleUndoSale = async (saleId: string) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale || sale.refunded) return;
+    const ageMs = Date.now() - Date.parse(sale.timestamp);
+    if (!Number.isFinite(ageMs) || ageMs > 60_000) {
+      triggerToast('Too late to undo — ask a manager to refund it instead', 'error');
+      return;
+    }
+    await handleRefundSale(saleId, true);
   };
 
   const handleAddExpense = async (newExpense: Expense) => {
@@ -1672,6 +1690,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             productionRegisters={productionRegisters}
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
+            onUndoSale={handleUndoSale}
           />
           </ErrorBoundary>
         );
@@ -1793,6 +1812,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             productionRegisters={productionRegisters}
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
+            onUndoSale={handleUndoSale}
           />
           </ErrorBoundary>
         );
@@ -1900,6 +1920,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] max-w-7xl mx-auto w-full">
+        {!isOnline && (
+          <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-950/25 px-4 py-3 mb-4 flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" aria-hidden="true" />
+            <p className="text-xs font-bold text-amber-200 leading-snug">
+              You're offline — keep selling.
+              {pendingCount > 0
+                ? ` ${pendingCount} change${pendingCount !== 1 ? 's' : ''} will sync when you're back.`
+                : " Everything syncs when you're back."}
+            </p>
+          </div>
+        )}
         {/* First-run install banner: new devices see this before anything else.
             Dismissed forever on "Not now". iPhones get manual steps (no prompt). */}
         {!installDismissed && (() => {
@@ -1980,7 +2011,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         )}
       </nav>
 
-      {toastMessage && <Toast message={toastMessage} type={toastType} onClose={() => setToastMessage(null)} />}
+      {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}
 
       {showStaffSwitcher && staffConfigured && (
         <StaffSwitcher

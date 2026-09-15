@@ -1178,7 +1178,8 @@ export default function Inventory({
                 </button>
               ) : (
                 <div className="bg-rose-950/20 border border-rose-500/30 rounded-xl p-3 space-y-2">
-                  <p className="text-xs font-bold text-rose-400 text-center uppercase">Delete "{editingProduct.name}" permanently?</p>
+                  <p className="text-xs font-bold text-rose-400 text-center uppercase">Delete "{editingProduct.name}" for good?</p>
+                  <p className="text-[10px] text-zinc-500 font-bold text-center uppercase">Past sales keep the name — only new sales are affected.</p>
                   <div className="flex gap-2">
                     <button onClick={() => setConfirmDelete(false)} className="flex-1 h-9 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-lg">Cancel</button>
                     <button onClick={() => {

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { Sale, Expense, Product, StoreSettings } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
+import { eateryDayClose } from '../utils/eateryClose';
 import ReceiptModal from './ReceiptModal';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 
@@ -23,7 +24,7 @@ interface DashboardProps {
   expenses: Expense[];
   products: Product[];
   formatCurrency: (val: number) => string;
-  onNavigate: (tab: 'sales' | 'inventory' | 'analytics') => void;
+  onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'registers') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
   settings: StoreSettings;
@@ -96,6 +97,26 @@ export default function Dashboard({
   
   const maxHourlySale = Math.max(...hourlySales, 10);
 
+  // Eatery end-of-day: food sold → ingredients cost → dish profit → minus
+  // today's spending = kept or lost. Only shown when the shop sells food.
+  const eatery = useMemo(
+    () => eateryDayClose(todayStr, sales, products, expenses),
+    [todayStr, sales, products, expenses],
+  );
+  const hasEatery = products.some(p => p.category === 'Eatery') || eatery.saleCount > 0;
+
+  // Evening nudge: after 8pm, once a day, turn today's numbers into the
+  // habit of closing the books — while the day is still fresh.
+  const [closeNudgeDismissed, setCloseNudgeDismissed] = useState(() => {
+    try { return localStorage.getItem(`boss_pos_closenudge_${todayStr}`) === '1'; } catch { return false; }
+  });
+  const showCloseNudge =
+    !closeNudgeDismissed && new Date().getHours() >= 20 && todayAllSales.length > 0;
+  const dismissCloseNudge = () => {
+    try { localStorage.setItem(`boss_pos_closenudge_${todayStr}`, '1'); } catch {}
+    setCloseNudgeDismissed(true);
+  };
+
   // Top 5 products by qty sold today
   const productSales = useMemo(() => {
     const map: Record<string, { qty: number; total: number }> = {};
@@ -152,6 +173,33 @@ export default function Dashboard({
           </button>
         )}
       </section>
+
+      {showCloseNudge && (
+        <section aria-label="Close today" className="boss-card p-5 border border-gold-brand/30 bg-gold-brand/5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gold-brand/15 border border-gold-brand/30 flex items-center justify-center shrink-0">
+              <Receipt className="w-5 h-5 text-gold-brand" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-xs font-black text-white uppercase tracking-widest">Day done?</h3>
+              <p className="text-xs text-zinc-300 font-bold mt-1 leading-relaxed">
+                Today: {todayAllSales.length} sale{todayAllSales.length !== 1 ? 's' : ''} · {formatCurrency(todaySalesSum)}.
+                {netProfit >= 0 ? ` You kept ${formatCurrency(netProfit)}.` : ` You lost ${formatCurrency(-netProfit)}.`} Close the books while it's fresh.
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button type="button" onClick={() => onNavigate('registers')}
+                  className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                  Close the day
+                </button>
+                <button type="button" onClick={dismissCloseNudge}
+                  className="h-11 px-4 border border-zinc-700 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl hover:text-zinc-200 active:scale-95 transition-all cursor-pointer">
+                  Not yet
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         
@@ -228,6 +276,83 @@ export default function Dashboard({
         </button>
 
       </section>
+
+      {hasEatery && (
+        <section aria-label="Eatery profit today" id="eatery-day-close"
+          className={`boss-card p-5 border-t-4 ${eatery.verdict === 'lost' ? 'border-t-rose-500' : eatery.verdict === 'kept' ? 'border-t-emerald-500' : 'border-t-gold-brand'}`}>
+          <div className="flex justify-between items-center gap-2 mb-3">
+            <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Eatery — today</h3>
+            {eatery.saleCount > 0 && (
+              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider bg-black/30 border border-white/5 rounded-full px-2.5 py-1">
+                {eatery.saleCount} order{eatery.saleCount !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          {eatery.verdict === 'none' ? (
+            <p className="text-sm text-zinc-400 font-bold text-center py-4">
+              No food sold yet today — tonight's profit will show here.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">End of day</p>
+              <p className={`text-3xl font-black font-display tabular-nums mt-1 ${eatery.verdict === 'kept' ? 'text-emerald-400' : eatery.verdict === 'lost' ? 'text-rose-400' : 'text-gold-brand'}`}
+                title={formatCurrency(eatery.left)}>
+                {eatery.verdict === 'kept' && `You kept ${formatCurrency(eatery.left)}`}
+                {eatery.verdict === 'lost' && `Lost ${formatCurrency(-eatery.left)} today`}
+                {eatery.verdict === 'flat' && 'Broke even today'}
+              </p>
+              <p className="text-xs text-zinc-500 font-bold uppercase mt-1 tabular-nums">
+                from {formatCurrency(eatery.revenue)} of food sold
+              </p>
+
+              <div className="mt-4 space-y-1.5 border-t border-white/5 pt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Food sold</span>
+                  <span className="text-sm font-black text-white tabular-nums">{formatCurrency(eatery.revenue)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Ingredients cost</span>
+                  <span className="text-sm font-black text-amber-300 tabular-nums">−{formatCurrency(eatery.foodCost)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Dish profit</span>
+                  <span className={`text-sm font-black tabular-nums ${eatery.dishProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {formatCurrency(eatery.dishProfit)}
+                    <span className="text-[10px] text-zinc-500 font-bold"> · {Math.round(eatery.marginPct)}%</span>
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Spending today</span>
+                  <span className="text-sm font-black text-rose-400 tabular-nums">−{formatCurrency(eatery.expenses)}</span>
+                </div>
+                <p className="text-[10px] text-zinc-600 font-bold uppercase">Spending covers the whole shop (charcoal, stock, rent…)</p>
+              </div>
+
+              {eatery.dishes.length > 0 && (
+                <div className="mt-3 space-y-1.5 border-t border-white/5 pt-3">
+                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Best dishes</p>
+                  {eatery.dishes.slice(0, 4).map(d => (
+                    <div key={d.productId} className="flex items-center justify-between bg-black/30 rounded-lg px-3 py-2 min-w-0">
+                      <p className="text-xs font-bold text-white uppercase truncate min-w-0">
+                        {d.name} <span className="text-zinc-500 tabular-nums">×{d.qty}</span>
+                      </p>
+                      <p className={`text-xs font-black tabular-nums shrink-0 ml-2 ${d.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {d.profit >= 0 ? '+' : '−'}{formatCurrency(Math.abs(d.profit))}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button type="button" onClick={() => onNavigate('analytics')}
+                className="mt-4 w-full h-11 rounded-2xl text-xs font-black uppercase tracking-wider border border-white/10 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand transition-all active:scale-[0.98] cursor-pointer">
+                Full reports
+              </button>
+            </>
+          )}
+        </section>
+      )}
 
       {lowStockItems.length > 0 && (
         <section className="bg-amber-950/25 border border-amber-500/20 p-4 rounded-3xl flex items-start gap-3">

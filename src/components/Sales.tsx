@@ -13,6 +13,7 @@ import KeyboardShortcuts from './KeyboardShortcuts';
 import CustomChargeModal from './CustomChargeModal';
 import ServiceQtyModal from './ServiceQtyModal';
 import ConfirmSaleModal from './ConfirmSaleModal';
+import type { TriggerToast } from './Toast';
 import CashTransferModal from './CashTransferModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
@@ -76,7 +77,7 @@ interface SalesProps {
   formatCurrency: (val: number) => string;
   cart: SaleItem[];
   setCart: Dispatch<SetStateAction<SaleItem[]>>;
-  triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  triggerToast: TriggerToast;
   settings?: StoreSettings;
   onAddExpense?: (expense: Expense) => void;
   expenseCategories?: string[];
@@ -86,6 +87,7 @@ interface SalesProps {
   staffName?: string;
   setStaffName: (name: string) => void;
   onSaveCustomProduct?: (p: Product) => void;
+  onUndoSale?: (saleId: string) => void;
   staffConfigured?: boolean;
   onOpenStaffSwitcher?: () => void;
   tillBranch?: string;
@@ -106,7 +108,7 @@ const localOrderNumber = () => {
 };
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [],
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale, categories, staffName, setStaffName, onSaveCustomProduct, onUndoSale, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [],
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
@@ -220,6 +222,11 @@ export default function Sales({
   const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
+  // Undo window for the just-completed sale: 10s to tap Undo, then it lapses
+  // (a manager can still refund from Reports).
+  const [undoSaleId, setUndoSaleId] = useState<string | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
   const [lastSaleItems, setLastSaleItems] = useState<SaleItem[] | null>(null);
 
   useEffect(() => {
@@ -358,7 +365,10 @@ export default function Sales({
       triggerToast(`Added: ${product.name}`, 'success');
       setIsScannerOpen(false);
     } else {
-      triggerToast(`Product not found (${barcode})`, 'error');
+      triggerToast(`Product not found (${barcode})`, 'error', {
+        label: 'Custom item',
+        onClick: () => setIsCustomChargeOpen(true),
+      });
     }
   };
 
@@ -425,9 +435,14 @@ export default function Sales({
     ? Math.min(parseFloat(discount) || 0, 100) / 100 * subtotal
     : Math.min(Math.max(0, parseFloat(discount) || 0), subtotal);
   const total = Math.max(0, subtotal - discountNum);
-  const isDisabled = cart.length === 0 || (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total);
+  // Credit without a name is money given to nobody — block it everywhere
+  // (buttons + F2 + confirm modal) until the collector is named.
+  const creditNameless = paymentMethod === 'Credit / Book' && customerName.trim() === '';
+  const isDisabled = cart.length === 0 || creditNameless || (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total);
   const disabledReason = cart.length === 0
     ? 'Cart is empty'
+    : creditNameless
+    ? 'Add the customer name — credit needs someone to collect from'
     : (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total)
     ? `Need ${formatCurrency(total - parseFloat(customCashReceived))} more`
     : '';
@@ -436,6 +451,11 @@ export default function Sales({
   const handleCompleteSale = async () => {
     if (isCompleting) return false;
     if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
+    // F2 / QuickSale bypass the disabled buttons, so the name gate lives here too.
+    if (paymentMethod === 'Credit / Book' && customerName.trim() === '') {
+      triggerToast('Add the customer name first — credit needs someone to collect from', 'error');
+      return false;
+    }
 
     // Re-validate stock against the live catalog. The cart can go stale across
     // tab switches or stock edits, so never sell more than is actually there.
@@ -533,6 +553,9 @@ export default function Sales({
     setIsCompleting(false);
     playChargeFeedback();
     triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndoSaleId(newSale.id);
+    undoTimer.current = setTimeout(() => setUndoSaleId(null), 10_000);
     return true;
   };
   handleCompleteSaleRef.current = handleCompleteSale;
@@ -794,6 +817,18 @@ export default function Sales({
           </div>
         )}
 
+        {undoSaleId && onUndoSale && (
+          <div className="flex items-center justify-between gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 h-12" role="status">
+            <p className="text-xs font-black text-emerald-300 uppercase tracking-wider truncate">Sale done — wrong items?</p>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => { const id = undoSaleId; if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); if (id) onUndoSale(id); }}
+                className="h-9 px-4 bg-emerald-500 text-black font-black text-[11px] rounded-lg uppercase tracking-wider cursor-pointer active:scale-95">Undo</button>
+              <button onClick={() => { if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); }}
+                className="h-9 px-3 text-emerald-300/70 hover:text-emerald-200 font-bold text-[11px] uppercase tracking-wider cursor-pointer">Keep</button>
+            </div>
+          </div>
+        )}
+
         {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
           <button onClick={repeatLastSale}
             className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
@@ -993,9 +1028,17 @@ export default function Sales({
                 />
               ))}
               {filteredProducts.length === 0 && (
-                <div className="col-span-full py-16 text-center boss-card rounded-xl">
+                <div className="col-span-full py-16 text-center boss-card rounded-xl px-4">
                   <Tag className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
                   <p className="text-sm text-zinc-400 font-bold uppercase tracking-wider">No products found</p>
+                  {searchQuery.trim() ? (
+                    <button onClick={() => setIsCustomChargeOpen(true)}
+                      className="mt-4 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                      Sell “{searchQuery.trim().slice(0, 24)}” as a custom item
+                    </button>
+                  ) : (
+                    <p className="text-xs text-zinc-500 font-bold mt-2 uppercase">Add products in Stock to start selling</p>
+                  )}
                 </div>
               )}
             </div>
@@ -1214,7 +1257,9 @@ export default function Sales({
       <div className="lg:hidden">
         {cart.length > 0 && !isMobileCartOpen && !isQuickSale && (
           <button onClick={() => setIsMobileCartOpen(true)} id="mobile-cart-fab"
-            className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-[55] bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer">
+            key={cart.reduce((sum, item) => sum + item.qty, 0)}
+            aria-label={`Open cart, ${cart.reduce((sum, item) => sum + item.qty, 0)} items, total ${formatCurrency(total)}`}
+            className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-[55] bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer animate-fab-pop">
             <ShoppingCart className="w-5 h-5" />
             <span className="text-sm uppercase font-display font-black">Cart ({cart.reduce((sum, item) => sum + item.qty, 0)}) • {formatCurrency(total)}</span>
           </button>
@@ -1261,7 +1306,7 @@ export default function Sales({
                   onChange={(e) => setCustomCashReceived(e.target.value)}
                   className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
                 {featsOn('quickCash') && (
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-2">
                   {(() => {
                     if (total <= 0) return null;
                     const s = new Set<number>();
@@ -1269,8 +1314,11 @@ export default function Sales({
                     [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) s.add(n); });
                     s.add(Math.ceil(total / 5000) * 5000);
                     return Array.from(s).filter(a => a >= total).sort((a, b) => a - b).slice(0, 4).map(amt => (
+                      // Big tender buttons: thumbs hit these mid-rush, so they
+                      // fill the row instead of huddling as small chips.
                       <button key={amt} onClick={() => setCustomCashReceived(String(amt))}
-                        className={`px-3 py-1.5 text-xs font-black rounded-lg border transition-all min-h-[36px] cursor-pointer active:scale-95 ${
+                        aria-label={amt === total ? 'Exact amount' : `Customer gave ${amt.toLocaleString()}`}
+                        className={`flex-1 min-w-[72px] px-4 min-h-[52px] text-sm font-black rounded-xl border transition-all cursor-pointer active:scale-95 tabular-nums ${
                           parseFloat(customCashReceived) === amt ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/5'
                         }`}>
                         {amt === total ? t(lang, 'exact') : amt.toLocaleString()}
@@ -1407,6 +1455,10 @@ export default function Sales({
                 return count === 0 && quickSearchQuery ? (
                 <div className="p-6 text-center">
                   <p className="text-xs text-zinc-500 font-bold uppercase">No products match "{quickSearchQuery}"</p>
+                  <button onClick={() => { setIsQuickSale(false); setQuickSearchQuery(''); setIsCustomChargeOpen(true); }}
+                    className="mt-3 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                    Sell it as a custom item
+                  </button>
                 </div>
                 ) : null;
               })()}
@@ -1427,6 +1479,12 @@ export default function Sales({
                   </button>
                 ))}
               </div>
+              {paymentMethod === 'Credit / Book' && (
+                <input type="text" placeholder={t(lang, 'customerNameEx')} value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  aria-label={t(lang, 'customerName')}
+                  className="w-full bg-[#141414] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
+              )}
               {paymentMethod === 'Cash' && (
                 <div className="bg-[#141414] border border-white/5 p-3 rounded-2xl space-y-2">
                   <div className="flex justify-between items-center gap-2">
@@ -1606,8 +1664,8 @@ export default function Sales({
       {showClearConfirm && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
           <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl">
-            <h3 className="text-sm font-black text-white uppercase tracking-wider text-center mb-2">Clear Cart?</h3>
-            <p className="text-xs text-zinc-400 text-center mb-4">This will remove all {cart.reduce((s, i) => s + i.qty, 0)} items from the cart.</p>
+            <h3 className="text-sm font-black text-white uppercase tracking-wider text-center mb-2">Clear cart?</h3>
+            <p className="text-xs text-zinc-400 text-center mb-4">Remove all {cart.reduce((s, i) => s + i.qty, 0)} items? You can add them back, but this can't be undone.</p>
             <div className="flex gap-2">
               <button onClick={() => setShowClearConfirm(false)}
                 className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider cursor-pointer">Cancel</button>

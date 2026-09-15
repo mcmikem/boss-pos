@@ -196,6 +196,10 @@ export default function Expenses({
           <div className="text-center py-8">
             <Coins className="w-10 h-10 text-zinc-700 mx-auto mb-2" />
             <p className="text-xs text-zinc-500 font-bold uppercase">No expenses in this period</p>
+            <button onClick={() => setShowQuickExpense(true)}
+              className="mt-3 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+              Log your first expense
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -246,7 +250,22 @@ export default function Expenses({
           )}
         </div>
         {filteredExpenses.length === 0 ? (
-          <div className="boss-card p-6 text-center text-zinc-500 text-xs font-bold uppercase">No expenses recorded.</div>
+          <div className="boss-card p-6 text-center">
+            <p className="text-zinc-500 text-xs font-bold uppercase">
+              {categoryFilter ? `No ${categoryFilter} expenses in this period.` : 'No expenses recorded.'}
+            </p>
+            {categoryFilter ? (
+              <button onClick={() => setCategoryFilter(null)}
+                className="mt-3 h-11 px-5 border border-zinc-700 text-zinc-300 font-black uppercase tracking-wider rounded-xl text-xs hover:border-gold-brand hover:text-gold-brand active:scale-95 transition-all cursor-pointer">
+                Show all
+              </button>
+            ) : (
+              <button onClick={() => setShowQuickExpense(true)}
+                className="mt-3 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                Log your first expense
+              </button>
+            )}
+          </div>
         ) : (
           <div className="space-y-2">
             {filteredExpenses.slice(0, 100).map(exp => (

@@ -114,6 +114,10 @@ export default function PinGate({ onUnlock, shopName }: PinGateProps) {
       </div>
 
       <input ref={inputRef} type="text" className="absolute opacity-0 pointer-events-none" readOnly tabIndex={-1} />
+
+      <p className="text-[11px] text-zinc-600 font-bold mt-6 max-w-[260px] text-center leading-relaxed">
+        Forgot the PIN? Ask your manager — PINs can be reset in Settings.
+      </p>
     </div>
   );
 }
