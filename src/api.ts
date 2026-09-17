@@ -1,4 +1,4 @@
-import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote } from './types';
 import { stashSyncReview } from './utils/syncReview';
 
 // Expense rows may carry `items` as a JSON string (server TEXT column) or as
@@ -755,6 +755,12 @@ export const repairJobApi = {
   create: (o: RepairJob) => api<RepairJob>('/api/repair-jobs', { method: 'POST', body: JSON.stringify(o) }),
   update: (o: RepairJob) => api<RepairJob>(`/api/repair-jobs/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/repair-jobs/${id}`, { method: 'DELETE' }),
+};
+
+export const quoteApi = {
+  list: () => api<Quote[]>('/api/quotes'),
+  create: (o: Quote) => api<Quote>('/api/quotes', { method: 'POST', body: JSON.stringify(o) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/quotes/${id}`, { method: 'DELETE' }),
 };
 
 export const creditEatApi = {

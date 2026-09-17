@@ -111,13 +111,18 @@ export default function MorningProduction({
             Yesterday's leftover → today's opening
           </p>
           {carryable.map(r => (
-            <div key={r.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-xs font-black text-white truncate">{r.productName}</p>
-                <p className="text-[10px] text-zinc-500 font-bold uppercase">
-                  Made {r.made} • Sold {r.sold} • Lost {r.lost} → left {r.leftover}
-                </p>
-              </div>
+              <div key={r.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-white truncate">{r.productName}</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                    Made {r.made} • Sold {r.sold} • Expired {r.lost}{r.carried > 0 ? ` • Carried ${r.carried}` : ''} → open {r.leftover}
+                  </p>
+                  {r.carried > 0 && r.gap !== 0 && (
+                    <p className="text-[10px] font-black uppercase mt-0.5 text-amber-300">
+                      Tray says {r.carried}, math says {r.leftover} — {Math.abs(r.gap)} {r.gap > 0 ? 'missing' : 'extra'}
+                    </p>
+                  )}
+                </div>
               <button
                 onClick={() => {
                   setProdItem(r.productName);

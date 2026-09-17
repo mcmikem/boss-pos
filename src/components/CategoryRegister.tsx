@@ -179,21 +179,24 @@ export default function CategoryRegister({
   const allCashOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
   const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
 
-  // Daily close-out: for each dish, produced - sold - lost on the chosen day.
+  // Daily close-out: for each dish, produced - sold - expired - carried.
   // A positive remainder is stock that "vanished" (shrinkage); negative means
   // sales were covered from earlier production (normal when leftover existed).
+  // Carried (remaining) is explained — tomorrow's opening, never shrinkage.
   const balanceRows = useMemo(() => {
     const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === balanceDate);
     return catProducts.map(p => {
       const made = catProduction.filter(x => x.productId === p.id && x.date === balanceDate)
         .reduce((s, x) => s + (x.qty || 0), 0);
-      const lost = catWastage.filter(x => x.productId === p.id && x.date === balanceDate)
+      const lost = catWastage.filter(x => x.productId === p.id && x.date === balanceDate && x.reason !== 'remaining')
+        .reduce((s, x) => s + (x.qty || 0), 0);
+      const carried = catWastage.filter(x => x.productId === p.id && x.date === balanceDate && x.reason === 'remaining')
         .reduce((s, x) => s + (x.qty || 0), 0);
       const sold = daySales.flatMap(s => s.items)
         .filter(i => i.productId === p.id)
         .reduce((s, i) => s + (i.qty || 0), 0);
-      return { product: p, made, sold, lost, onHand: p.stockQty || 0, recon: made - sold - lost };
-    }).filter(r => r.made + r.sold + r.lost > 0 || r.onHand > 0);
+      return { product: p, made, sold, lost, carried, onHand: p.stockQty || 0, recon: made - sold - lost - carried };
+    }).filter(r => r.made + r.sold + r.lost + r.carried > 0 || r.onHand > 0);
   }, [catProducts, catProduction, catWastage, sales, balanceDate]);
 
   const totalShrinkage = useMemo(() => balanceRows.reduce((s, r) => s + Math.max(0, r.recon), 0), [balanceRows]);
@@ -256,8 +259,9 @@ export default function CategoryRegister({
   // ---- Production (read-only here: morning log lives on Sell → Eatery) ----
   const todayProdCost = catProduction.filter(p => p.date === todayStr()).reduce((s, p) => s + p.total, 0);
 
-  // ---- Wastage ----
-  const todayWastage = catWastage.filter(w => w.date === todayStr()).reduce((s, w) => s + w.lossAmount, 0);
+  // ---- Wastage: expired is a true loss; remaining carries to tomorrow ----
+  const todayWastage = catWastage.filter(w => w.date === todayStr() && w.reason !== 'remaining').reduce((s, w) => s + w.lossAmount, 0);
+  const todayCarried = catWastage.filter(w => w.date === todayStr() && w.reason === 'remaining').reduce((s, w) => s + w.lossAmount, 0);
   const todayLossCount = catWastage.filter(w => w.date === todayStr()).length;
 
   // ---- Money Out (Mobile Money / Owner / Float for tomorrow) ----
@@ -361,7 +365,7 @@ export default function CategoryRegister({
     const item = activeItem(catProducts.map(p => p.name), wasteCustomItem, wasteItem);
     if (!item) { triggerToast('Select the item', 'error'); return; }
     const qty = parseInt(wasteQty, 10) || 0;
-    if (qty <= 0) { triggerToast('Enter how many were lost', 'error'); return; }
+    if (qty <= 0) { triggerToast('Enter how many', 'error'); return; }
     const cost = parseFloat(wasteCost) || 0;
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     onAddWastage({
@@ -375,7 +379,7 @@ export default function CategoryRegister({
       lossAmount: Math.round(qty * cost),
       reason: wasteReason,
     });
-    triggerToast('Loss logged', 'success');
+    triggerToast(wasteReason === 'remaining' ? `Carried to tomorrow — not a loss` : 'Loss logged', 'success');
     setWasteItem(''); setWasteCustomItem(''); setWasteProductId(null); setWasteQty(''); setWasteCost('');
     setShowWasteForm(false);
   };
@@ -489,7 +493,7 @@ export default function CategoryRegister({
       {isOn(features, 'closeWizard' as FeatureKey) && (() => {
         const steps = [
           { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalShrinkage} unmatched`, target: 'close-balance' },
-          { key: 'losses', label: 'Log today\u2019s losses', hint: `${todayLossCount} logged \u2022 ${formatCurrency(todayWastage)}`, target: 'close-losses' },
+          { key: 'losses', label: 'Log today\u2019s leftovers & losses', hint: `${todayLossCount} logged \u2022 lost ${formatCurrency(todayWastage)}${todayCarried > 0 ? ` \u2022 carried ${formatCurrency(todayCarried)}` : ''}`, target: 'close-losses' },
           { key: 'money', label: 'Move today\u2019s money', hint: `${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`, target: 'close-money' },
         ];
         const done = steps.filter(s => closeTicks[s.key]).length;
@@ -567,6 +571,9 @@ export default function CategoryRegister({
         <div className="boss-card p-3 border-l-4 border-l-rose-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Lost today</p>
           <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
+          {todayCarried > 0 && (
+            <p className="text-[10px] text-amber-300 font-bold uppercase mt-0.5">+ {formatCurrency(todayCarried)} carried → tomorrow</p>
+          )}
         </div>
         <div className="boss-card p-3 border-l-4 border-l-emerald-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Outstanding</p>
@@ -672,12 +679,13 @@ export default function CategoryRegister({
                     <th className="text-right py-1.5 px-2 font-bold text-amber-400">Made</th>
                     <th className="text-right py-1.5 px-2 font-bold text-emerald-400">Sold</th>
                     <th className="text-right py-1.5 px-2 font-bold text-rose-400">Lost</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">Carried</th>
                     <th className="text-right py-1.5 px-2 font-bold text-cyan-400">On-hand</th>
                     <th className="text-right py-1.5 pl-2 font-bold">Check</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {balanceRows.map(({ product, made, sold, lost, onHand, recon }) => {
+                  {balanceRows.map(({ product, made, sold, lost, carried, onHand, recon }) => {
                     const status = recon > 0 ? 'miss' : recon < 0 ? 'fromStock' : 'ok';
                     return (
                       <tr key={product.id} className="border-t border-white/5">
@@ -685,12 +693,13 @@ export default function CategoryRegister({
                         <td className="py-2 px-2 text-right font-mono text-amber-400">{made || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-emerald-400">{sold || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-rose-400">{lost || '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-amber-300">{carried || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-cyan-400">{onHand}</td>
                         <td className="py-2 pl-2 text-right">
                           {status === 'ok' ? (
                             <span className="text-emerald-400 font-black">✓</span>
                           ) : status === 'miss' ? (
-                            <span className="text-amber-400 font-black" title={`${recon} made but not sold/lost`}>+{recon}</span>
+                            <span className="text-amber-400 font-black" title={`${recon} made but not sold, lost, or carried`}>+{recon}</span>
                           ) : (
                             <span className="text-zinc-500 font-bold" title="Sold more than made — covered from earlier stock">−{Math.abs(recon)}</span>
                           )}
@@ -705,7 +714,7 @@ export default function CategoryRegister({
               <div className="mt-3 bg-amber-950/30 border border-amber-600/30 rounded-xl px-3 py-2.5 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                 <p className="text-[11px] font-bold text-amber-300 uppercase">
-                  {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} produced but not sold or lost — check for shrinkage
+                  {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} produced but not sold, lost, or carried — check for shrinkage
                 </p>
               </div>
             )}
@@ -870,8 +879,8 @@ export default function CategoryRegister({
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-rose-500" />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">How Many Lost</label>
-                <input type="number" min="1" value={wasteQty} onChange={e => setWasteQty(e.target.value)}
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">How Many</label>
+                <input type="number" min="1" value={wasteQty} onChange={(e) => setWasteQty(e.target.value)}
                   placeholder="e.g. 12" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-rose-500" />
               </div>
               <div>
@@ -895,11 +904,12 @@ export default function CategoryRegister({
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-zinc-400 uppercase">
-                Loss value: <span className="text-rose-400 font-black text-base">{formatCurrency((parseInt(wasteQty, 10) || 0) * (parseFloat(wasteCost) || 0))}</span>
+                {wasteReason === 'remaining' ? 'Carried value: ' : 'Loss value: '}
+                <span className={`${wasteReason === 'remaining' ? 'text-amber-300' : 'text-rose-400'} font-black text-base`}>{formatCurrency((parseInt(wasteQty, 10) || 0) * (parseFloat(wasteCost) || 0))}</span>
               </p>
               <button onClick={handleSubmitWastage}
                 className="h-11 px-5 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> Log Loss
+                <Check className="w-4 h-4" /> {wasteReason === 'remaining' ? 'Carry over' : 'Log Loss'}
               </button>
             </div>
           </div>
@@ -922,12 +932,16 @@ export default function CategoryRegister({
                     <p className="text-sm font-black text-white truncate">{w.item}
                       <span className={`ml-2 text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${w.reason === 'expired' ? 'bg-rose-600/20 text-rose-400' : 'bg-amber-600/20 text-amber-400'}`}>{w.reason}</span>
                     </p>
-                    <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(w.date)} • {w.qty} lost × {formatCurrency(w.costEach)}</p>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(w.date)} • {w.qty} × {formatCurrency(w.costEach)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(w.lossAmount)}</p>
-                  <button onClick={() => { onDeleteWastage(w.id); triggerToast('Loss entry deleted', 'info'); }}
+                  {w.reason === 'remaining' ? (
+                    <p className="text-sm font-black text-amber-300 font-display" title="Carried to tomorrow — not a loss">{formatCurrency(w.lossAmount)} →</p>
+                  ) : (
+                    <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(w.lossAmount)}</p>
+                  )}
+                  <button onClick={() => { onDeleteWastage(w.id); triggerToast('Entry deleted', 'info'); }}
                     className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

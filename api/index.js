@@ -161,6 +161,12 @@ async function initDB() {
     status TEXT DEFAULT 'received', expecteddate TEXT DEFAULT '',
     completeddate TEXT, notes TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS quotes (
+    id TEXT PRIMARY KEY, customername TEXT DEFAULT '', customerphone TEXT DEFAULT '',
+    items TEXT NOT NULL DEFAULT '[]',
+    discount DOUBLE PRECISION DEFAULT 0, total DOUBLE PRECISION DEFAULT 0,
+    createdat TEXT NOT NULL
+  )`;
   await sql`CREATE TABLE IF NOT EXISTS cash_transfers (
     id TEXT PRIMARY KEY, fromcategory TEXT NOT NULL, tocategory TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, reason TEXT DEFAULT '', createdat TEXT NOT NULL,
@@ -210,7 +216,7 @@ async function initDB() {
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS items TEXT DEFAULT ''`; } catch {}
-  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'bookings', 'repair_jobs', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers']) {
+  for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'bookings', 'repair_jobs', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers', 'quotes']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_cwid ON sales(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
@@ -225,6 +231,7 @@ async function initDB() {
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_cwid ON production_register(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_wastage_cwid ON wastage_log(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_momotrans_cwid ON momo_transfers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_cwid ON quotes(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refunded BOOLEAN DEFAULT false`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN refundedat TEXT`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS uploads (
@@ -1997,6 +2004,30 @@ app.delete('/api/repair-jobs/:id', asHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// === QUOTES (contractor price lists — drafts until converted to a sale) ===
+app.get('/api/quotes', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM quotes ORDER BY createdat DESC`;
+  res.json(rows.map(mapQuote));
+}));
+
+app.post('/api/quotes', asHandler(async (req, res) => {
+  const o = req.body;
+  const items = JSON.stringify(Array.isArray(o.items) ? o.items : []);
+  const inserted = await sql`INSERT INTO quotes (id,customername,customerphone,items,discount,total,createdat,client_write_id)
+    VALUES (${o.id},${text(o.customerName, 150)},${text(o.customerPhone, 50)},${items},${num(o.discount)},${num(o.total)},${o.createdAt || new Date().toISOString()},${o.clientWriteId || null})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
+  if (inserted.length === 0) {
+    const existing = await sql`SELECT * FROM quotes WHERE client_write_id=${o.clientWriteId}`;
+    return res.json(existing.length ? mapQuote(existing[0]) : o);
+  }
+  res.json(o);
+}));
+
+app.delete('/api/quotes/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM quotes WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 // === CREDIT EATS (Ababanjibwa Sente) API ===
 app.get('/api/credit-eats', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM credit_eats ORDER BY date DESC, createdat DESC`;
@@ -2080,18 +2111,22 @@ app.get('/api/wastage-log', asHandler(async (req, res) => {
 app.post('/api/wastage-log', asHandler(async (req, res) => {
   const w = req.body;
   const qty = Math.max(0, Math.round(num(w.qty)));
+  // Missing reason means a true loss (matches the till's math): only an
+  // explicit 'remaining' carries to tomorrow and leaves stock untouched.
+  const reason = w.reason === 'remaining' ? 'remaining' : 'expired';
   const inserted = await sql`INSERT INTO wastage_log (id,date,item,category,qty,costeach,lossamount,reason,createdat,client_write_id,product_id)
-    VALUES (${w.id},${w.date},${w.item},${w.category||'Eatery'},${qty},${num(w.costEach)},${num(w.lossAmount)},${w.reason||'remaining'},${w.createdAt||new Date().toISOString()},${w.clientWriteId||null},${w.productId||null})
+    VALUES (${w.id},${w.date},${w.item},${w.category||'Eatery'},${qty},${num(w.costEach)},${num(w.lossAmount)},${reason},${w.createdAt||new Date().toISOString()},${w.clientWriteId||null},${w.productId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM wastage_log WHERE client_write_id=${w.clientWriteId}`;
     return res.json(existing.length ? mapWastageLog(existing[0]) : w);
   }
-  // A loss removes from live stock (never below zero).
-  if (w.productId && qty > 0) {
+  // Expired is gone from the shelf — drop it from live stock (never below
+  // zero). Remaining IS tomorrow's opening, so it stays sellable.
+  if (w.productId && qty > 0 && reason !== 'remaining') {
     const upd = await sql`UPDATE products SET stockQty = GREATEST(0, stockQty - ${qty}) WHERE id=${w.productId} RETURNING id, name, stockqty`;
     if (upd.length) {
-      await logStockMovement(sql, { productId: w.productId, productName: upd[0].name, delta: -qty, type: 'wastage', qtyAfter: upd[0].stockqty, note: `Lost ${qty} × ${w.item} (${w.reason || 'remaining'})` });
+      await logStockMovement(sql, { productId: w.productId, productName: upd[0].name, delta: -qty, type: 'wastage', qtyAfter: upd[0].stockqty, note: `Expired ${qty} × ${w.item}` });
     }
   }
   res.json(w);
@@ -2100,8 +2135,9 @@ app.post('/api/wastage-log', asHandler(async (req, res) => {
 app.delete('/api/wastage-log/:id', asHandler(async (req, res) => {
   const old = await sql`SELECT * FROM wastage_log WHERE id=${req.params.id}`;
   await sql`DELETE FROM wastage_log WHERE id=${req.params.id}`;
-  // Reverse the stock removal when a loss entry is deleted.
-  if (old.length && old[0].product_id && (old[0].qty || 0) > 0) {
+  // Reverse the stock removal — but only for rows that removed stock.
+  // Remaining rows never touched stock, so restoring them would invent it.
+  if (old.length && old[0].product_id && (old[0].qty || 0) > 0 && old[0].reason !== 'remaining') {
     const upd = await sql`UPDATE products SET stockQty = stockQty + ${old[0].qty} WHERE id=${old[0].product_id} RETURNING id, name, stockqty`;
     if (upd.length) {
       await logStockMovement(sql, { productId: old[0].product_id, productName: upd[0].name, delta: old[0].qty, type: 'adjust', qtyAfter: upd[0].stockqty, note: `Loss entry removed (${old[0].item})` });
@@ -2794,6 +2830,15 @@ function mapRepairJob(r) {
     status: r.status, expectedDate: r.expecteddate || '',
     completedDate: r.completeddate || undefined,
     notes: r.notes || '', createdAt: r.createdat,
+  };
+}
+
+function mapQuote(r) {
+  let items = [];
+  try { const v = JSON.parse(r.items || '[]'); if (Array.isArray(v)) items = v; } catch {}
+  return {
+    id: r.id, customerName: r.customername || '', customerPhone: r.customerphone || '',
+    items, discount: r.discount || 0, total: r.total || 0, createdAt: r.createdat,
   };
 }
 

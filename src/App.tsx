@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
 import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
@@ -158,6 +158,16 @@ function isIOSDevice(): boolean {
   return false;
 }
 
+// Laptop/desktop browsers often never fire beforeinstallprompt (engagement +
+// installability criteria), so "no prompt" must show manual steps — never
+// a dead row with no Go button.
+function isDesktopLike(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(pointer: fine)').matches;
+  } catch { return false; }
+}
+
 // Inline add-staff form used in Settings (first setup + later adds).
 function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'cashier', pin: string) => void }) {
   const [name, setName] = useState('');
@@ -248,6 +258,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [setupDismissed, setSetupDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_setup_done') === '1'; } catch { return false; }
   });
+  // One-item carousel: only the current step shows, Next cycles the undone ones.
+  const [setupIdx, setSetupIdx] = useState(0);
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
   useEffect(() => {
@@ -1711,8 +1723,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const handleAddWastage = async (w: WastageLog) => {
     setWastageLogs(prev => [w, ...prev]);
+    // Mirror the server: expired leaves the shelf now; remaining stays —
+    // it IS tomorrow's opening stock.
+    const touchesStock = w.productId && w.qty > 0 && w.reason !== 'remaining';
+    if (touchesStock) {
+      setProducts(prev => prev.map(prod =>
+        prod.id === w.productId && !prod.isService
+          ? { ...prod, stockQty: Math.max(0, (prod.stockQty || 0) - w.qty) }
+          : prod
+      ));
+    }
     try { await wastageLogApi.create(w); } catch {
       setWastageLogs(prev => prev.filter(x => x.id !== w.id));
+      if (touchesStock) {
+        setProducts(prev => prev.map(prod =>
+          prod.id === w.productId && !prod.isService
+            ? { ...prod, stockQty: (prod.stockQty || 0) + w.qty }
+            : prod
+        ));
+      }
       triggerToast('Failed to save loss — not added', 'error');
     }
   };
@@ -1720,8 +1749,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleDeleteWastage = async (id: string) => {
     const prev = wastageLogs.find(w => w.id === id);
     setWastageLogs(prev => prev.filter(w => w.id !== id));
+    // Remaining rows never touched stock — only reverse expired removals.
+    const touchedStock = prev?.productId && (prev.qty || 0) > 0 && prev.reason !== 'remaining';
+    if (touchedStock && prev) {
+      setProducts(list => list.map(prod =>
+        prod.id === prev.productId && !prod.isService
+          ? { ...prod, stockQty: (prod.stockQty || 0) + prev.qty }
+          : prod
+      ));
+    }
     try { await wastageLogApi.remove(id); } catch {
       if (prev) setWastageLogs(list => [prev, ...list]);
+      if (touchedStock && prev) {
+        setProducts(list => list.map(prod =>
+          prod.id === prev.productId && !prod.isService
+            ? { ...prod, stockQty: Math.max(0, (prod.stockQty || 0) - prev.qty) }
+            : prod
+        ));
+      }
       triggerToast('Failed to delete loss', 'error');
     }
   };
@@ -1782,8 +1827,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               window.matchMedia('(display-mode: standalone)').matches ||
               (window.navigator as unknown as { standalone?: boolean }).standalone === true
             );
-            // Setup checklist ordering (#3): the 3 value-blockers first (stock →
-            // sale → PIN). Shop name + install collapse under "Later".
+            // Slim carousel: one current step + Next, so setup never eats the
+            // sell screen. Install always has an action (prompt, or the help
+            // banner on laptops where no prompt ever fires).
+            const showInstallHelp = () => {
+              try { localStorage.removeItem('boss_pos_install_dismissed'); } catch {}
+              setInstallDismissed(false);
+              try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+            };
             const steps = [
               { key: 'stock', label: 'Add your first products', done: products.length > 0, act: () => setActiveTab('inventory') },
               { key: 'sale', label: 'Make your first sale', done: sales.length > 0 },
@@ -1791,7 +1842,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             ];
             const laterSteps = [
               { key: 'name', label: 'Name your shop', done: !!settings.shopName && settings.shopName !== 'My Shop', act: () => setIsSettingsOpen(true) },
-              { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { runInstallPrompt(); } : undefined },
+              { key: 'install', label: installed ? 'App installed' : 'Install the app', done: installed, act: installPrompt ? () => { runInstallPrompt(); } : showInstallHelp },
             ];
             const allSteps = [...steps, ...laterSteps];
             const doneCount = allSteps.filter(s => s.done).length;
@@ -1810,20 +1861,32 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((doneCount / allSteps.length) * 100)}%` }} />
                 </div>
                 <div className="space-y-1.5">
-                  {steps.map(s => (
-                    <div key={s.key} className="flex items-center gap-2">
-                      <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-black ${
-                        s.done ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/40' : 'bg-[#0A0A0A] text-zinc-500 border border-white/10'
-                      }`}>{s.done ? '✓' : '•'}</span>
-                      <span className={`flex-1 min-w-0 text-xs font-bold uppercase tracking-wider truncate ${s.done ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{s.label}</span>
-                      {!s.done && s.act && (
-                        <button onClick={s.act}
-                          className="h-8 px-3 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer shrink-0">
-                          Go
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                  {(() => {
+                    const pool = steps.filter(s => !s.done);
+                    const focusList = pool.length > 0 ? pool : laterSteps.filter(s => !s.done);
+                    if (focusList.length === 0) return null;
+                    const focus = focusList[setupIdx % focusList.length];
+                    const next = focusList[(setupIdx + 1) % focusList.length];
+                    return (
+                      <div className="flex items-center gap-2">
+                        <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-black bg-[#0A0A0A] text-zinc-500 border border-white/10">•</span>
+                        <span className="flex-1 min-w-0 text-xs font-bold uppercase tracking-wider truncate text-zinc-100">{focus.label}</span>
+                        {focus.act && (
+                          <button onClick={focus.act}
+                            className="h-8 px-3 bg-gold-brand/10 border border-gold-brand/40 text-gold-brand rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-gold-brand/20 transition-all cursor-pointer shrink-0">
+                            Go
+                          </button>
+                        )}
+                        {focusList.length > 1 && (
+                          <button onClick={() => setSetupIdx(i => i + 1)}
+                            title={`Next: ${next.label}`} aria-label={`Next setup step: ${next.label}`}
+                            className="w-8 h-8 rounded-lg bg-[#0A0A0A] border border-white/10 text-zinc-400 hover:text-gold-brand hover:border-gold-brand/40 flex items-center justify-center shrink-0 transition-all cursor-pointer">
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <details className="pt-1">
                     <summary className="text-[10px] font-black text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-zinc-300 touch-target">
                       Later ({laterSteps.filter(s => s.done).length}/{laterSteps.length})
@@ -2119,7 +2182,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             if (isStandalone()) return null;
           } catch { return null; }
           const ios = isIOSDevice();
-          if (!installPrompt && !ios) return null;
+          const desktop = !ios && isDesktopLike();
+          if (!installPrompt && !ios && !desktop) return null;
           return (
             <div className="boss-card p-4 rounded-2xl border border-gold-brand/40 bg-gold-brand/5 mb-4">
               <div className="flex items-start gap-3">
@@ -2131,10 +2195,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <p className="text-[11px] text-zinc-400 font-bold mt-0.5 leading-snug">
                     {ios
                       ? 'On iPhone: tap Share, then "Add to Home Screen" — it opens fast and works offline.'
-                      : 'One tap — opens fast, works offline, syncs faster.'}
+                      : installPrompt
+                        ? 'One tap — opens fast, works offline, syncs faster.'
+                        : 'On this laptop: browser menu ⋮ → “Install page as app” (Chrome/Edge) — then it opens fast and works offline.'}
                   </p>
                   <div className="flex gap-2 mt-2.5">
-                    {!ios && (
+                    {!ios && installPrompt && (
                       <button onClick={() => { runInstallPrompt(); }}
                         className="h-10 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
                         Install
@@ -2142,7 +2208,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     )}
                     <button onClick={dismissInstall}
                       className="h-10 px-4 border border-zinc-700 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl hover:text-zinc-200 transition-all cursor-pointer">
-                      {ios ? 'Got it' : 'Not now'}
+                      {ios || !installPrompt ? 'Got it' : 'Not now'}
                     </button>
                   </div>
                 </div>
@@ -2918,10 +2984,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     <button onClick={() => {
                       const list = peekOutbox();
                       if (!list.length) return;
-                      const kept = list.slice(1);
-                      try { localStorage.setItem('boss_pos_outbox', JSON.stringify(kept)); } catch {}
-                      try { window.dispatchEvent(new Event('boss-pos-outbox-updated')); } catch {}
-                      setPendingCount(kept.length);
+                      // Route through dropOutboxEntry (not a raw localStorage
+                      // write) so the IndexedDB mirror drops it too — otherwise
+                      // the next flush prefers the longer mirror and resurrects it.
+                      dropOutboxEntry(list[0].id);
+                      setPendingCount(outboxCount());
                       triggerToast('Dropped oldest queued change', 'info');
                     }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Drop oldest</button>
                   </div>

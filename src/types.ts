@@ -241,8 +241,9 @@ export interface DesignOrder {
   createdAt: string;
 }
 
-// Contractor quotation: a priced cart snapshot that is NOT a sale. Stored on
-// this till only (localStorage) — quotes are drafts until converted.
+// Contractor quotation: a priced cart snapshot that is NOT a sale. Synced to
+// the server (with a localStorage cache for offline) — quotes are drafts
+// until converted back into the cart.
 export interface Quote {
   id: string;
   customerName: string;
@@ -251,6 +252,7 @@ export interface Quote {
   discount: number;
   total: number;
   createdAt: string;
+  clientWriteId?: string;
 }
 
 // Salon / barbershop appointment book: who is coming, when, for what, and

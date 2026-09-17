@@ -148,9 +148,18 @@ function localDayKeySafe(ts: string): string {
   }
 }
 
-export function getOpeningCapital(day: string, cat: string, _eodCapital?: Record<string, number>): number {
-  void _eodCapital;
-  return getClosingCapital(prevDayKey(day), cat, undefined) || 0;
+export function getOpeningCapital(day: string, cat: string, eodCapital?: Record<string, number>): number {
+  // This device's own yesterday closing wins (each drawer keeps its own cash).
+  // Only when this device never recorded one (new phone, wiped storage) fall
+  // back to the synced keep-aside target — opening at zero would fake an
+  // "unaccounted cash" flag on day one. An explicit local 0 stays 0.
+  try {
+    if (localStorage.getItem(capKey(prevDayKey(day), cat)) !== null) {
+      return getClosingCapital(prevDayKey(day), cat, undefined);
+    }
+  } catch {}
+  if (eodCapital && typeof eodCapital[cat] === 'number') return Math.max(0, Math.round(eodCapital[cat]));
+  return 0;
 }
 
 // ---- Collected / moved-out helpers (pure, testable) ----
@@ -215,6 +224,12 @@ export interface MissingProduction {
   onHand: number;
 }
 
+// A "remaining" log is tomorrow's opening stock, NOT a loss — only expired
+// (and legacy rows from before reasons existed) count as truly lost.
+function isTrueLoss(x: WastageLog): boolean {
+  return x.reason !== 'remaining';
+}
+
 /**
  * Eatery / daily-make items sold today with zero production logged today.
  * Services and buy-resell stock are ignored (they don't need a morning log).
@@ -246,7 +261,7 @@ export function findMissingProduction(
             .filter((x) => !x.productId && x.item === prod.name && x.date === dayKey)
             .reduce((s, x) => s + (x.qty || 0), 0);
     const lost = wastage
-      .filter((x) => (x.productId === prod.id || (!x.productId && x.item === prod.name)) && x.date === dayKey)
+      .filter((x) => (x.productId === prod.id || (!x.productId && x.item === prod.name)) && x.date === dayKey && isTrueLoss(x))
       .reduce((s, x) => s + (x.qty || 0), 0);
     if (madeByName <= 0 && line.qty > 0) {
       out.push({
@@ -329,7 +344,12 @@ export interface LeftoverRow {
   made: number;
   sold: number;
   lost: number;
+  carried: number;
   leftover: number;
+  // Expected open (made − sold − expired) minus the tray count the cashier
+  // actually logged. >0 = pieces vanished, <0 = over-counted, 0 = agreement.
+  // Only meaningful when carried > 0 (no log = no claim, not theft).
+  gap: number;
 }
 
 export function leftoverFor(
@@ -353,9 +373,14 @@ export function leftoverFor(
       .filter((i) => i.productId === p.id)
       .reduce((s, i) => s + (i.qty || 0), 0);
     const lost = wastage
-      .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey)
+      .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey && isTrueLoss(x))
       .reduce((s, x) => s + (x.qty || 0), 0);
-    out.push({ productId: p.id, productName: p.name, made, sold, lost, leftover: Math.max(0, made - sold - lost) });
+    const carried = wastage
+      .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey && x.reason === 'remaining')
+      .reduce((s, x) => s + (x.qty || 0), 0);
+    const leftover = Math.max(0, made - sold - lost);
+    const gap = Math.round((leftover - carried) * 1000) / 1000;
+    out.push({ productId: p.id, productName: p.name, made, sold, lost, carried, leftover, gap });
   }
   return out.filter((r) => r.leftover > 0 || r.made > 0).sort((a, b) => b.leftover - a.leftover);
 }

@@ -3,10 +3,11 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star
+  CalendarCheck, Wrench, FileText, Star, Footprints
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog } from '../types';
-import { nextOrderNumber } from '../api';
+import { nextOrderNumber, quoteApi } from '../api';
+import { reconcileCartPrices } from '../utils/cart';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
 import KeyboardShortcuts from './KeyboardShortcuts';
@@ -190,11 +191,16 @@ export default function Sales({
     const entry = parked.find(p => p.id === id);
     if (!entry) return;
     if (cart.length > 0 && !window.confirm(`Replace the current cart with ${entry.name}'s parked sale?`)) return;
-    setCart(entry.items);
+    // Parked prices go stale (owner repriced at lunch): reprice to the live
+    // catalog on recall. Variant lines and deleted products keep their snapped
+    // price — only genuine catalog changes rewrite the cart. Stock shortages
+    // are still caught at charge time by the oversell guard.
+    const { cart: fresh, changed } = reconcileCartPrices(entry.items, products);
+    setCart(fresh);
     if (entry.paymentMethod) setPaymentMethod(entry.paymentMethod as never);
     setCustomerName(entry.customerName || '');
     setParked(unparkCart(id));
-    triggerToast(`Recalled ${entry.name}'s sale`, 'info');
+    triggerToast(changed ? `Recalled ${entry.name}'s sale — prices updated to today's` : `Recalled ${entry.name}'s sale`, 'info');
   };
   const renderParkedRows = () => parked.length > 0 ? (
     <div className="space-y-1.5">
@@ -239,8 +245,9 @@ export default function Sales({
   });
   const [streetCount, setStreetCount] = useState(0);
   const [streetTotal, setStreetTotal] = useState(0);
-  // Contractor quotations live on this till only (localStorage): priced cart
-  // snapshots that are not sales until converted back into the cart.
+  // Contractor quotations sync to the server; localStorage is the offline
+  // cache. On load the server wins by id and locally-created (still-queued)
+  // rows are kept, so an offline-written quote never vanishes on refresh.
   const [showQuotes, setShowQuotes] = useState(false);
   const [quotes, setQuotes] = useState<Quote[]>(() => {
     try { return JSON.parse(localStorage.getItem('boss_pos_quotes') || '[]'); } catch { return []; }
@@ -248,6 +255,19 @@ export default function Sales({
   useEffect(() => {
     try { localStorage.setItem('boss_pos_quotes', JSON.stringify(quotes)); } catch {}
   }, [quotes]);
+  useEffect(() => {
+    let cancelled = false;
+    quoteApi.list()
+      .then(server => {
+        if (cancelled) return;
+        setQuotes(prev => {
+          const ids = new Set(server.map(q => q.id));
+          return [...server, ...prev.filter(q => !ids.has(q.id))];
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   // Till language for the sell screen (Luganda mid-sale, English elsewhere).
   const lang = settings?.language;
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
@@ -678,9 +698,10 @@ export default function Sales({
   };
   handleCompleteSaleRef.current = handleCompleteSale;
 
-  // Save the current cart as a contractor quotation (not a sale). Converting
-  // brings the items back into the cart to ring the real sale later.
-  const saveQuote = () => {
+  // Save the current cart as a contractor quotation (not a sale). Syncs to
+  // the server (offline-safe: the api layer queues and echoes); rolls back
+  // on a real failure. Converting brings items back to ring the sale later.
+  const saveQuote = async () => {
     if (cart.length === 0) { triggerToast('Cart is empty — nothing to quote', 'error'); return; }
     const q: Quote = {
       id: `q-${Date.now()}`,
@@ -690,9 +711,17 @@ export default function Sales({
       discount: discountNum,
       total,
       createdAt: new Date().toISOString(),
+      clientWriteId: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     };
     setQuotes(prev => [q, ...prev]);
-    triggerToast('Quote saved — convert it when they agree', 'success');
+    try {
+      const saved = await quoteApi.create(q);
+      setQuotes(prev => prev.map(x => x.id === q.id ? { ...saved, items: Array.isArray(saved.items) && saved.items.length ? saved.items : x.items } : x));
+      triggerToast('Quote saved — convert it when they agree', 'success');
+    } catch {
+      setQuotes(prev => prev.filter(x => x.id !== q.id));
+      triggerToast('Failed to save quote — not added', 'error');
+    }
   };
 
   const convertQuote = (q: Quote) => {
@@ -888,7 +917,7 @@ export default function Sales({
               placeholder={t(lang, 'searchItems')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-xl !text-base transition-all outline-none"
+              className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 lg:h-14 pl-11 pr-4 rounded-xl !text-base lg:!text-lg transition-all outline-none"
               id="search-inventory-input"
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -908,10 +937,12 @@ export default function Sales({
               <span className="flex items-center justify-center gap-1.5"><User className="w-4 h-4 text-zinc-500" /><span className="hidden sm:inline text-zinc-500">Seller</span></span>
             )}
           </button>
+          {/* Laptop: icon-only squares, names on hover. Phones keep labels. */}
           <button onClick={() => setIsCustomChargeOpen(true)}
-            className="shrink-0 h-12 px-3 sm:px-4 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
+            title="Custom charge — sell something not on the list" aria-label="Custom charge"
+            className="shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
             id="open-custom-charge-btn">
-            + Custom
+            <Plus className="w-5 h-5" /><span className="lg:hidden">+ Custom</span>
           </button>
           {/* Spent everywhere (#18): log spending without leaving Sell. */}
           <button onClick={() => setShowQuickExpense(true)}
@@ -920,20 +951,28 @@ export default function Sales({
             <Wallet className="w-4 h-4" /> Spent
           </button>
           <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
-            className="shrink-0 h-12 px-3 sm:px-4 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            title="Quick sale — search, tap, done" aria-label="Quick sale"
+            className="shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
             id="open-quick-sale-btn">
-            <Zap className="w-4 h-4" /> Quick Sale
+            <Zap className="w-4 h-4" /> <span className="lg:hidden">Quick Sale</span>
           </button>
           <button onClick={() => setStreetMode(v => { const n = !v; try { localStorage.setItem('boss_pos_street_mode', n ? '1' : '0'); } catch {} return n; })}
             title="Street mode: each tap sells one item for cash instantly — for stalls and rush counters"
-            className={`shrink-0 h-12 px-3 sm:px-4 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5 border ${streetMode ? 'bg-emerald-400 text-black border-emerald-400' : 'bg-[#141414] border-white/5 text-zinc-300 hover:border-emerald-400/40'}`}
+            aria-label={streetMode ? 'Street mode on — tap to switch off' : 'Street mode off — tap to switch on'}
+            className={`shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5 border ${streetMode ? 'bg-emerald-400 text-black border-emerald-400' : 'bg-[#141414] border-white/5 text-zinc-300 hover:border-emerald-400/40'}`}
             id="street-mode-btn">
-            <Zap className="w-4 h-4" /> Street
+            <Footprints className="w-4 h-4" /> <span className="lg:hidden">Street</span>
           </button>
           <button onClick={() => setShowQuotes(true)}
-            className="shrink-0 h-12 px-3 sm:px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            title={quotes.length > 0 ? `Quotes (${quotes.length} saved)` : 'Quotes — price lists that are not sales yet'} aria-label={quotes.length > 0 ? `Quotes, ${quotes.length} saved` : 'Quotes'}
+            className="relative shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
             id="open-quotes-btn">
-            <FileText className="w-4 h-4" /> Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}
+            <FileText className="w-4 h-4" /> <span className="lg:hidden">Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}</span>
+            {quotes.length > 0 && (
+              <span className="hidden lg:flex absolute -top-1.5 -right-1.5 bg-gold-brand text-black text-[9px] font-black w-5 h-5 rounded-full items-center justify-center border-2 border-[#0A0A0A]">
+                {quotes.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1188,7 +1227,15 @@ export default function Sales({
               <Quotes quotes={quotes} shopName={settings?.shopName || 'My Shop'}
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
                 onConvert={convertQuote}
-                onDelete={(id) => setQuotes(prev => prev.filter(x => x.id !== id))} />
+                onDelete={async (id) => {
+                  const prevQ = quotes.find(x => x.id === id);
+                  setQuotes(prev => prev.filter(x => x.id !== id));
+                  try { await quoteApi.remove(id); }
+                  catch {
+                    if (prevQ) setQuotes(prev => [prevQ, ...prev]);
+                    triggerToast('Failed to delete quote', 'error');
+                  }
+                }} />
             </Suspense>
           </div>
         ) : (

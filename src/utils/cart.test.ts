@@ -65,4 +65,17 @@ describe('reconcileCartPrices', () => {
     expect(changed).toBe(false);
     expect(next).toBe(cart);
   });
+  it('parked recall: reprices to lunch prices but keeps deleted-product lines', () => {
+    const cart = [
+      line({ unitPrice: 800, lineTotal: 7200 }),
+      line({ productId: 'p-gone', productName: 'Gone', unitPrice: 500, lineTotal: 500 }),
+    ];
+    const repriced = { ...chapati, price: 900 };
+    const { cart: next, changed } = reconcileCartPrices(cart, [repriced]);
+    expect(changed).toBe(true);
+    expect(next[0].unitPrice).toBe(900);
+    // Deleted product: snapped price survives the recall, never zeroed.
+    expect(next[1].unitPrice).toBe(500);
+    expect(next[1].lineTotal).toBe(500);
+  });
 });
