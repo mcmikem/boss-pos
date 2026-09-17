@@ -13,7 +13,7 @@ interface ProfitAnalyzerModalProps {
 export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, formatCurrency }: ProfitAnalyzerModalProps) {
   if (!isOpen) return null;
 
-  const eateryProducts = products.filter(p => p.category === 'Eatery').sort((a, b) => {
+  const eateryProducts = products.filter(p => p.category === 'Eatery' || p.category === 'Drinks').sort((a, b) => {
     const marginA = a.price > 0 ? ((a.price - a.cost) / a.price) * 100 : -Infinity;
     const marginB = b.price > 0 ? ((b.price - b.cost) / b.price) * 100 : -Infinity;
     return marginA - marginB;
@@ -100,8 +100,8 @@ export default function ProfitAnalyzerModal({ isOpen, onClose, products, cart, f
           }) : (
             <div className="text-center py-8">
               <ChefHat className="w-10 h-10 text-zinc-600 mx-auto mb-2" />
-              <p className="text-xs text-zinc-500 font-bold uppercase">No eatery products found</p>
-              <p className="text-[10px] text-zinc-600 mt-1">Add products with category "Eatery" in Stock to see profit analysis</p>
+              <p className="text-xs text-zinc-500 font-bold uppercase">No eatery or drinks products found</p>
+              <p className="text-[10px] text-zinc-600 mt-1">Add products with category "Eatery" or "Drinks" in Stock to see profit analysis</p>
             </div>
           )}
         </div>

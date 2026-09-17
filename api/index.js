@@ -554,6 +554,57 @@ const EATERY_MENU = [
   { id:'prod-110',name:'Cookies on a Plate',category:'Eatery',cost:1200,price:2500,stockQty:40,lowStockThreshold:8,supplierId:'sup-5',variants:null },
 ];
 
+// Drinks catalog (Uganda, Jan 2026 street prices). Sodas are bought by the
+// carton from the depot and resold per bottle, so `cost` is the per-bottle
+// carton cost and `price` is the kiosk retail price — both editable in Stock.
+//   Crown Beverages depot (Pepsi/Mirinda): 12x500ml @15,000 (->1,250/btl),
+//     12x330ml @10,000 (->833), 6x2L @21,500 (->3,583), 24x300ml @18,500 (->771).
+//   Coca-Cola depot: 12x500ml @15,500 (->1,292), 12x350ml @10,000 (->833),
+//     12x1L @21,000 (->1,750). 1L PET RRP UGX 2,500 (CCBU, May 2026).
+//   Rock Boom 12x320ml @19,000 (->1,583); Riham Sky View 12x320ml @11,000 (->917).
+//   Retail: 350ml->1,000; 500ml->1,500 (Coke 1,700); 1L->2,500; 2L->4,500-5,500.
+// Obutunda (passion-fruit) & Omunanansi (pineapple+ginger) are NOT depot sodas:
+// the shop makes them fresh daily, so they carry a `recipe` (ingredient costs
+// drive COGS in Stock -> Recipe Costing) instead of a carton cost.
+const DRINKS_MENU = [
+  { id:'prod-200',name:'Coca-Cola 350ml',category:'Drinks',cost:833,price:1000,stockQty:48,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-201',name:'Coca-Cola 500ml',category:'Drinks',cost:1292,price:1700,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-202',name:'Coca-Cola 1L',category:'Drinks',cost:1750,price:2500,stockQty:24,lowStockThreshold:6,supplierId:'sup-5',variants:null },
+  { id:'prod-203',name:'Coca-Cola 2L',category:'Drinks',cost:3600,price:5500,stockQty:12,lowStockThreshold:4,supplierId:'sup-5',variants:null },
+  { id:'prod-204',name:'Fanta Orange 350ml',category:'Drinks',cost:833,price:1000,stockQty:48,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-205',name:'Fanta Orange 500ml',category:'Drinks',cost:1292,price:1500,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-206',name:'Fanta Passion 500ml',category:'Drinks',cost:1292,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-207',name:'Sprite 500ml',category:'Drinks',cost:1292,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-208',name:'Krest Bitter Lemon 500ml',category:'Drinks',cost:1292,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-209',name:'Novida Pineapple 500ml',category:'Drinks',cost:1000,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-210',name:'Mirinda Fruity (Orange) 330ml',category:'Drinks',cost:833,price:1000,stockQty:48,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-211',name:'Mirinda Fruity (Orange) 500ml',category:'Drinks',cost:1250,price:1500,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-212',name:'Mirinda Green Apple 500ml',category:'Drinks',cost:1250,price:1500,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-213',name:'Mirinda Pineapple 500ml',category:'Drinks',cost:1250,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-214',name:'Mirinda Fruity 2L',category:'Drinks',cost:3583,price:4500,stockQty:12,lowStockThreshold:4,supplierId:'sup-5',variants:null },
+  { id:'prod-215',name:'Pepsi 500ml',category:'Drinks',cost:1250,price:1500,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-216',name:'Mountain Dew 500ml',category:'Drinks',cost:1250,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-217',name:'7UP 500ml',category:'Drinks',cost:1542,price:2000,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-218',name:'Evervess Tonic 500ml',category:'Drinks',cost:1250,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-220',name:'Minute Maid Mango 400ml',category:'Drinks',cost:1500,price:2000,stockQty:24,lowStockThreshold:6,supplierId:'sup-5',variants:null },
+  { id:'prod-221',name:'Minute Maid Mango 1L',category:'Drinks',cost:4000,price:5000,stockQty:12,lowStockThreshold:4,supplierId:'sup-5',variants:null },
+  { id:'prod-222',name:'Rock Boom Energy 320ml',category:'Drinks',cost:1583,price:2000,stockQty:36,lowStockThreshold:12,supplierId:'sup-5',variants:null },
+  { id:'prod-223',name:'Riham Sky View Soda 320ml',category:'Drinks',cost:917,price:1500,stockQty:24,lowStockThreshold:8,supplierId:'sup-5',variants:null },
+  { id:'prod-230',name:'Obutunda (Passion Fruit Juice)',category:'Drinks',cost:465,price:1000,stockQty:30,lowStockThreshold:6,supplierId:'sup-5',variants:null,
+    recipe:{ ingredients:[
+      { id:'ing-obutunda-1',name:'Passion fruits (obutunda)',qty:25,unit:'pcs',unitCost:200,wastePct:10 },
+      { id:'ing-obutunda-2',name:'Sugar',qty:0.5,unit:'kg',unitCost:4500,wastePct:0 },
+      { id:'ing-obutunda-3',name:'Drinking water',qty:5,unit:'litres',unitCost:200,wastePct:0 },
+    ], yield:20, overhead:500, targetMarginPct:55 } },
+  { id:'prod-231',name:'Omunanansi (Pineapple Ginger Juice)',category:'Drinks',cost:681,price:1500,stockQty:20,lowStockThreshold:5,supplierId:'sup-5',variants:null,
+    recipe:{ ingredients:[
+      { id:'ing-omunanansi-1',name:'Pineapple (enanaasi)',qty:2,unit:'pcs',unitCost:2500,wastePct:15 },
+      { id:'ing-omunanansi-2',name:'Fresh ginger',qty:0.2,unit:'kg',unitCost:8000,wastePct:5 },
+      { id:'ing-omunanansi-3',name:'Sugar',qty:0.3,unit:'kg',unitCost:4500,wastePct:0 },
+      { id:'ing-omunanansi-4',name:'Drinking water',qty:4,unit:'litres',unitCost:200,wastePct:0 },
+    ], yield:15, overhead:500, targetMarginPct:55 } },
+];
+
 async function ensureDefaultSettings() {
   // Only stamped into a brand-new (empty) database. The live IMAC DB already
   // has its own settings rows, so this is a no-op there — 'My Shop' is just
@@ -634,9 +685,10 @@ async function seedDatabase() {
     { id:'prod-93',name:'T-Shirt (Premium)',category:'Tailoring',cost:10000,price:17000,stockQty:20,lowStockThreshold:5,supplierId:'sup-1' },
     { id:'prod-94',name:'Name Branding (Jersey/Shirt)',category:'Tailoring',cost:1000,price:4000,stockQty:9999,lowStockThreshold:0,isService:true,supplierId:'sup-3' },
     ...EATERY_MENU,
+    ...DRINKS_MENU,
   ];
-  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','expirydate','variants','saleunit'],
-    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, expirydate: p.expiryDate || null, variants: p.variants ? JSON.stringify(p.variants) : null, saleunit: p.saleUnit || null })));
+  await batchInsert('products', ['id','name','category','cost','price','stockqty','lowstockthreshold','supplierid','isservice','imei','barcode','expirydate','variants','saleunit','recipe'],
+    products.map(p => ({ id: p.id, name: p.name, category: p.category, cost: p.cost, price: p.price, stockqty: p.stockQty, lowstockthreshold: p.lowStockThreshold, supplierid: p.supplierId || null, isservice: p.isService || false, imei: p.imei || null, barcode: p.barcode || null, expirydate: p.expiryDate || null, variants: p.variants ? JSON.stringify(p.variants) : null, saleunit: p.saleUnit || null, recipe: p.recipe ? JSON.stringify(p.recipe) : null })));
 
   const expenses = [
     { id:'exp-1',timestamp:'2026-07-15T08:30:00Z',description:'Phone accessories restock',amount:85000,category:'Stock Purchase' },
@@ -707,6 +759,20 @@ async function syncEateryMenu() {
   return inserted;
 }
 
+async function syncDrinksMenu() {
+  let inserted = 0;
+  for (const p of DRINKS_MENU) {
+    const r = await sql`
+      INSERT INTO products (id,name,category,cost,price,stockQty,lowStockThreshold,supplierId,isService,imageUrl,variants,saleUnit,recipe)
+      VALUES (${p.id},${p.name},${p.category},${p.cost},${p.price},${p.stockQty},${p.lowStockThreshold},${p.supplierId},false,null,${p.variants ? JSON.stringify(p.variants) : null},${p.saleUnit || null},${p.recipe ? JSON.stringify(p.recipe) : null})
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
+    `;
+    inserted += r.length;
+  }
+  return inserted;
+}
+
 async function ensureCatalogSynced() {
   const rows = await sql`SELECT value FROM settings WHERE key='catalogSynced'`;
   if (rows.length && rows[0].value === 'true') return;
@@ -715,11 +781,26 @@ async function ensureCatalogSynced() {
   if (process.env.SEED_CATALOG !== '1') return;
   await syncLibraryProducts();
   await syncEateryMenu();
+  await syncDrinksMenu();
   await sql`INSERT INTO settings (key,value) VALUES ('catalogSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
 }
 
 initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
   console.error('Catalog sync failed:', err);
+});
+
+// Drinks are additive (ON CONFLICT DO NOTHING) and run for every shop — the
+// live till asked for them explicitly, so they must land even where
+// catalogSynced is already true or SEED_CATALOG was never set.
+async function ensureDrinksSynced() {
+  const rows = await sql`SELECT value FROM settings WHERE key='drinksSynced'`;
+  if (rows.length && rows[0].value === 'true') return;
+  await syncDrinksMenu();
+  await sql`INSERT INTO settings (key,value) VALUES ('drinksSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
+}
+
+initPromise = initPromise.then(() => ensureDrinksSynced()).catch(err => {
+  console.error('Drinks sync failed:', err);
 });
 
 initPromise = initPromise.then(() => migrateSquareImages()).catch(err => {
@@ -2104,7 +2185,8 @@ app.delete('/api/momo-transfers/:id', asHandler(async (req, res) => {
 app.post('/api/sync-products', asHandler(async (req, res) => {
   const libCount = await syncLibraryProducts();
   const eateryCount = await syncEateryMenu();
-  res.json({ success: true, updated: libCount + eateryCount });
+  const drinksCount = await syncDrinksMenu();
+  res.json({ success: true, updated: libCount + eateryCount + drinksCount });
 }));
 
 // === STOCK MOVEMENTS AUDIT TRAIL ===

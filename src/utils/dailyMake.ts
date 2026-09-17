@@ -1,11 +1,15 @@
 // Which categories actually MAKE goods fresh each morning with daily
-// input/capital (flour, oil, charcoal for Eatery)? Only those get "Daily
+// input/capital (flour, oil, charcoal for Eatery; passion fruits, pineapples,
+// sugar for fresh Drinks like Obutunda & Omunanansi)? Only those get "Daily
 // production" and the made-sold-lost balance in Registers. Buy-resell
 // (Electronics, Stationery, …) and make-to-order (Tailoring, Graphics, …)
 // must never show them — inviting a "production" entry for a phone charger
 // or a suit is how nonsense data starts.
+// NOTE: depot sodas (Coca-Cola, Mirinda, Rock Boom…) inside Drinks are
+// buy-resell — only the fresh-juice lines are made. The Registers hint below
+// says so, so nobody logs "production" for a crate of Coke.
 
-export const DAILY_MAKE_CATEGORIES = ['Eatery'];
+export const DAILY_MAKE_CATEGORIES = ['Eatery', 'Drinks'];
 
 export function isDailyMakeCategory(cat: string): boolean {
   return DAILY_MAKE_CATEGORIES.includes((cat || '').trim());
@@ -21,4 +25,5 @@ export const CATEGORY_WORKFLOW_HINT: Record<string, string> = {
   Stationery: 'Buy-resell: top up stock in Stock; log damages as losses below.',
   Library: 'Buy-resell: top up stock in Stock; log damages as losses below.',
   Sports: 'Buy-resell: top up stock in Stock; log damages as losses below.',
+  Drinks: 'Sodas (Coca-Cola, Mirinda, Rock Boom…) are buy-resell: top up stock in Stock. Only fresh juices (Obutunda, Omunanansi) are made each morning — log those above.',
 };

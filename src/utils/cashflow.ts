@@ -286,7 +286,7 @@ export function detectRecipeDrift(
   const cutoff = Date.now() - windowDays * 86400000;
   const out: RecipeDrift[] = [];
   const eatery = products.filter(
-    (p) => p.category === 'Eatery' && p.recipe && p.recipe.ingredients.length > 0 && p.recipe.yield > 0,
+    (p) => (p.category === 'Eatery' || p.category === 'Drinks') && p.recipe && p.recipe.ingredients.length > 0 && p.recipe.yield > 0,
   );
   for (const p of eatery) {
     const batchCost =
@@ -298,7 +298,7 @@ export function detectRecipeDrift(
       .filter((e) => {
         const d = (e.description || '').toLowerCase();
         const n = p.name.toLowerCase();
-        return d.includes(`making ${n}`) || (e.category === 'Eatery' && d.includes(n.split(' ')[0]));
+        return d.includes(`making ${n}`) || ((e.category === 'Eatery' || e.category === 'Drinks') && d.includes(n.split(' ')[0]));
       })
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
     if (!hit) continue;

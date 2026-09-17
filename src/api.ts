@@ -1,4 +1,5 @@
 import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer } from './types';
+import { stashSyncReview } from './utils/syncReview';
 
 // Expense rows may carry `items` as a JSON string (server TEXT column) or as
 // an array (optimistic echo / cache). Normalize to an array so receipts can
@@ -180,7 +181,9 @@ export async function outboxCountAsync(): Promise<number> {
 // 404 from an already-drained replay must not wedge the outbox forever.
 // A 409 CONFLICT (a product edit that lost the race to a newer edit on another
 // device) is also dropped — retrying forever can't change the outcome, and the
-// newest version already won on the server. The caller is told so it can warn.
+// newest version already won on the server. Dropped entries are stashed in the
+// sync review queue (utils/syncReview) so nothing vanishes silently; the
+// caller is told so it can warn.
 export function peekOutbox(): OutboxEntry[] {
   return getOutbox();
 }
@@ -249,20 +252,25 @@ export async function flushOutbox(): Promise<number> {
         if (body.code === 'CONFLICT') {
           conflicts++;
           flushed++;
+          try { stashSyncReview('conflict', entry); } catch {}
           continue;
         }
         if (body.code === 'INSUFFICIENT_STOCK') {
-          // Stock race lost offline — retrying can't create stock. Drop and warn.
+          // Stock race lost offline — retrying can't create stock. Stash for
+          // review (never silently vanish) and warn.
           dropped++;
           flushed++;
+          try { stashSyncReview('stock', entry); } catch {}
           continue;
         }
       }
-      // Permanent client errors (except 401/429) never succeed on retry — drop to avoid infinite queue.
+      // Permanent client errors (except 401/429) never succeed on retry — stash
+      // for review and drop to avoid an infinite queue.
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         await res.json().catch(() => ({}));
         dropped++;
         flushed++;
+        try { stashSyncReview('refused', entry); } catch {}
         continue;
       }
       remaining.push(entry);

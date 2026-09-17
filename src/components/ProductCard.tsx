@@ -30,7 +30,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   const inCart = cartQty > 0;
   const catVis = CATEGORY_VISUALS[product.category] || DEFAULT_CATEGORY_VISUAL;
   const CatIcon = catVis.icon;
-  const isEatery = product.category === 'Eatery';
+  const isEatery = product.category === 'Eatery' || product.category === 'Drinks';
   const effCost = isEatery ? effectiveCost(product) : product.cost;
   const marginPct = isEatery && effCost > 0 && product.price > 0 ? ((product.price - effCost) / product.price) * 100 : null;
 

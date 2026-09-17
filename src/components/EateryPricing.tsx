@@ -39,7 +39,7 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
   const dishes = useMemo(() => {
     const q = search.toLowerCase().trim();
     return products
-      .filter(p => p.category === 'Eatery')
+      .filter(p => p.category === 'Eatery' || p.category === 'Drinks')
       .filter(p => !q || p.name.toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, search]);

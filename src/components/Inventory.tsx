@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import { 
   Search, Plus, AlertTriangle, Edit, Package, Save, X,
-  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat
+  PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat, Upload
 } from 'lucide-react';
-import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Recipe, RecipeIngredient } from '../types';
+import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Expense, Recipe, RecipeIngredient } from '../types';
 import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
 import StocktakePanel from './StocktakePanel';
@@ -12,6 +12,8 @@ import { parseQty } from '../utils/units';
 import { expiryStatus, daysUntilExpiry } from '../utils/dates';
 import { staleProducts } from '../utils/stale';
 import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, supplierWhatsAppUrl } from '../utils/suppliers';
+import { parseProductsCsv, PRODUCTS_TEMPLATE, type ImportResult } from '../utils/csvImport';
+import { downloadBlob } from '../utils/download';
 
 interface InventoryProps {
   products: Product[];
@@ -25,6 +27,7 @@ interface InventoryProps {
   onDeleteProduct: (productId: string) => void;
   onUpsertQuote: (supplierId: string, productId: string, price: number) => void;
   onDeleteQuote: (quoteId: string) => void;
+  onAddExpense?: (expense: Expense) => void;
   onAddCategory: (name: string) => void;
   onUpdateCategory: (oldName: string, newName: string) => void;
   onDeleteCategory: (name: string) => void;
@@ -44,6 +47,7 @@ export default function Inventory({
   onDeleteProduct,
   onUpsertQuote,
   onDeleteQuote,
+  onAddExpense,
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
@@ -59,6 +63,9 @@ export default function Inventory({
   
   const [stockAdjustment, setStockAdjustment] = useState<number>(0);
   const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
+  // Cash paid for arriving stock — saved as a Stock Purchase expense in the
+  // same tap, so stock and money can never drift apart. Empty = no expense.
+  const [stockPaid, setStockPaid] = useState('');
 
   const [newName, setNewName] = useState('');
   const [newCategory, setNewCategory] = useState('Electronics');
@@ -75,6 +82,12 @@ export default function Inventory({
   const [showStocktake, setShowStocktake] = useState(false);
   const [bulkCategory, setBulkCategory] = useState('');
   const [bulkRows, setBulkRows] = useState<{ name: string; price: string }[]>([{ name: '', price: '' }]);
+  // CSV import: file → parsed preview → confirmed bulk add. Parsed result is
+  // kept (not applied) until the owner taps Import, so nothing lands by accident.
+  const [showImport, setShowImport] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importFileName, setImportFileName] = useState('');
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [newImageUrl, setNewImageUrl] = useState('');
   const [newSaleUnit, setNewSaleUnit] = useState('');
   const [newVariants, setNewVariants] = useState<ProductVariant[]>([]);
@@ -254,6 +267,7 @@ export default function Inventory({
     setEditRecipe(product.recipe ? JSON.parse(JSON.stringify(product.recipe)) : null);
     setStockAdjustment(0);
     setAdjustmentType('add');
+    setStockPaid('');
     setConfirmDelete(false);
   };
 
@@ -293,6 +307,7 @@ export default function Inventory({
     }
 
     let finalStock = editingProduct.stockQty;
+    let receivedQty = 0;
     if (editIsService) {
       // Services hold no stock, ever — wipe any legacy balance.
       finalStock = 0;
@@ -302,6 +317,7 @@ export default function Inventory({
         triggerToast(`Set stock to ${finalStock}`, 'success');
       } else if (adjustmentType === 'add') {
         finalStock = Math.round((finalStock + stockAdjustment) * 1000) / 1000;
+        receivedQty = stockAdjustment;
         triggerToast(`Added ${stockAdjustment} units!`, 'success');
       } else {
         finalStock = Math.max(0, Math.round((finalStock - stockAdjustment) * 1000) / 1000);
@@ -338,6 +354,23 @@ export default function Inventory({
     };
 
     onUpdateProduct(updated);
+    // Close the loop: arriving stock cost money, so log it as a Stock
+    // Purchase in the same save. Empty = free transfer, no expense.
+    const paidNum = parseFloat(stockPaid) || 0;
+    if (receivedQty > 0 && paidNum > 0 && onAddExpense) {
+      onAddExpense({
+        id: `exp-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        description: `Restock: ${nameTrimmed} ×${receivedQty}`,
+        amount: paidNum,
+        category: 'Stock Purchase',
+        source: 'drawer',
+        items: [{ name: `${nameTrimmed} ×${receivedQty}`, amount: paidNum }],
+        linkedProductId: editingProduct.id,
+        linkedProductName: nameTrimmed,
+      });
+      triggerToast(`Stock + ${formatCurrency(paidNum)} purchase logged`, 'success');
+    }
     setEditingProduct(null);
     triggerToast(`Updated ${nameTrimmed}`, 'success');
   };
@@ -473,7 +506,7 @@ export default function Inventory({
           <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
             <ChefHat className="w-3.5 h-3.5 text-gold-brand" /> Recipe Costing
           </h4>
-          <span className="text-[10px] text-zinc-600 uppercase font-bold">Eatery snack</span>
+          <span className="text-[10px] text-zinc-600 uppercase font-bold">Fresh-made recipe</span>
         </div>
 
         <div className="space-y-2">
@@ -558,6 +591,55 @@ export default function Inventory({
     );
   };
 
+  // CSV import helpers: rows already on the shelf (same name + category)
+  // are skipped so re-importing an export can never double the stock.
+  const importKey = (name: string, category: string) =>
+    `${name.trim().toLowerCase()}::${category.trim().toLowerCase()}`;
+  const existingKeys = new Set(products.map(p => importKey(p.name, p.category || '')));
+  const freshImportRows = (importResult?.products || []).filter(r => !existingKeys.has(importKey(r.name, r.category)));
+  const importDupes = (importResult?.products.length || 0) - freshImportRows.length;
+
+  const readImportFile = (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { triggerToast('CSV too large (max 2MB)', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        setImportFileName(f.name);
+        setImportResult(parseProductsCsv(String(reader.result || ''), categories[0] || 'General'));
+      } catch { triggerToast('Could not read that file', 'error'); }
+    };
+    reader.onerror = () => triggerToast('Could not read that file', 'error');
+    reader.readAsText(f);
+  };
+
+  const downloadImportTemplate = () => {
+    const ok = downloadBlob(new Blob([PRODUCTS_TEMPLATE], { type: 'text/csv' }), 'stock-template.csv');
+    triggerToast(ok ? 'Template downloaded — fill it in Excel, save as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
+  };
+
+  const confirmImport = () => {
+    if (freshImportRows.length === 0) { triggerToast('Nothing new to import', 'info'); return; }
+    const now = Date.now();
+    const seenCats = new Set(categories);
+    freshImportRows.forEach((r, idx) => {
+      if (r.category && !seenCats.has(r.category)) { seenCats.add(r.category); onAddCategory(r.category); }
+      onAddProduct({
+        id: `p-${now}-${idx}`, name: r.name, category: r.category,
+        cost: r.cost, price: r.price,
+        // Kitchen snacks start at zero — the batch arrives via Morning Production.
+        stockQty: r.category === 'Eatery' ? 0 : r.stockQty,
+        lowStockThreshold: r.lowStockThreshold,
+        barcode: r.barcode || undefined,
+        expiryDate: r.expiryDate,
+      });
+    });
+    setShowImport(false);
+    setImportResult(null);
+    setImportFileName('');
+    triggerToast(`${freshImportRows.length} products imported — check prices before selling`, 'success');
+  };
+
   return (
     <div className="space-y-6" id="inventory-tab-content">
       {showStocktake ? (
@@ -577,6 +659,11 @@ export default function Inventory({
             className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
             title="Bale day: add many products fast, details later">
             <Plus className="w-4 h-4" /> Bulk
+          </button>
+          <button onClick={() => { setImportResult(null); setImportFileName(''); setShowImport(true); }}
+            className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
+            title="Load a stock list from Excel/CSV instead of typing">
+            <Upload className="w-4 h-4" /> Import
           </button>
           <button onClick={() => setShowStocktake(true)}
             className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-cyan-400/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
@@ -770,6 +857,75 @@ export default function Inventory({
         </div>
       )}
 
+      {/* CSV IMPORT MODAL (Excel list in, typed stock out) */}
+      {showImport && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="boss-card w-full max-w-lg p-6 bg-zinc-950 border border-white/5 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-3 border-b border-white/5">
+              <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
+                <Upload className="w-5 h-5 text-gold-brand" /> Import stock list
+              </h3>
+              <button onClick={() => setShowImport(false)} className="text-zinc-500 hover:text-white p-1 cursor-pointer" aria-label="Close import">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500 leading-snug">From Excel: fill the template, save as CSV, pick the file. Headings: name, category, cost, price, stock, low_threshold. Items already on the shelf are skipped.</p>
+            <div className="flex gap-2">
+              <button onClick={downloadImportTemplate}
+                className="flex-1 h-11 border border-zinc-800 hover:border-gold-brand/40 text-zinc-300 font-black uppercase tracking-wider text-xs rounded-xl cursor-pointer">
+                Template
+              </button>
+              <button onClick={() => importFileRef.current?.click()}
+                className="flex-1 h-11 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer">
+                Choose CSV
+              </button>
+              <input ref={importFileRef} type="file" accept=".csv,text/csv,text/plain" className="hidden"
+                onChange={(e) => { readImportFile(e.target.files?.[0]); e.target.value = ''; }} />
+            </div>
+            {importFileName && (
+              <p className="text-[11px] text-zinc-400 font-bold truncate">File: {importFileName}</p>
+            )}
+            {importResult && (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wider">
+                  <span className="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300">{freshImportRows.length} ready</span>
+                  {importDupes > 0 && (
+                    <span className="px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400">{importDupes} already on shelf</span>
+                  )}
+                  {importResult.errors.length > 0 && (
+                    <span className="px-2.5 py-1.5 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-300">{importResult.errors.length} problem{importResult.errors.length === 1 ? '' : 's'}</span>
+                  )}
+                </div>
+                {importResult.errors.length > 0 && (
+                  <div className="bg-rose-950/20 border border-rose-900/40 rounded-xl p-3 space-y-1 max-h-28 overflow-y-auto">
+                    {importResult.errors.map((err, i) => (
+                      <p key={i} className="text-[11px] text-rose-300 font-bold leading-snug">{err}</p>
+                    ))}
+                  </div>
+                )}
+                {freshImportRows.length > 0 && (
+                  <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl divide-y divide-white/5 max-h-44 overflow-y-auto">
+                    {freshImportRows.slice(0, 8).map((r, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                        <span className="font-bold text-zinc-200 truncate min-w-0">{r.name} <span className="text-zinc-500">· {r.category} · ×{r.stockQty}</span></span>
+                        <span className="font-black text-gold-brand tabular-nums shrink-0">{formatCurrency(r.price)}</span>
+                      </div>
+                    ))}
+                    {freshImportRows.length > 8 && (
+                      <p className="px-3 py-2 text-[10px] text-zinc-500 font-bold uppercase">+{freshImportRows.length - 8} more…</p>
+                    )}
+                  </div>
+                )}
+                <button onClick={confirmImport} disabled={freshImportRows.length === 0}
+                  className={`w-full h-12 font-black uppercase tracking-widest text-xs rounded-xl transition-all ${freshImportRows.length === 0 ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-gold-brand hover:bg-gold-medium text-black cursor-pointer'}`}>
+                  Import {freshImportRows.length} product{freshImportRows.length === 1 ? '' : 's'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ADD PRODUCT MODAL */}
       {isAddingNew && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -818,7 +974,7 @@ export default function Inventory({
                       <Settings2 className="w-3 h-3" />
                     </button>
                   </label>
-                  <select value={newCategory} onChange={(e) => { const v = e.target.value; setNewCategory(v); if (v === 'Eatery' && !newRecipe) setNewRecipe(emptyRecipe()); }}
+                  <select value={newCategory} onChange={(e) => { const v = e.target.value; setNewCategory(v); if ((v === 'Eatery' || v === 'Drinks') && !newRecipe) setNewRecipe(emptyRecipe()); }}
                     className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                     {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
@@ -954,7 +1110,7 @@ export default function Inventory({
                 )}
               </div>
 
-            {newCategory === 'Eatery' && renderRecipeCard(newRecipe, setNewRecipe, newPrice, setNewPrice, setNewVariants)}
+            {(newCategory === 'Eatery' || newCategory === 'Drinks') && renderRecipeCard(newRecipe, setNewRecipe, newPrice, setNewPrice, setNewVariants)}
             </div>
 
             <div className="pt-4 flex gap-3">
@@ -1021,7 +1177,7 @@ export default function Inventory({
                     <Settings2 className="w-3 h-3" />
                   </button>
                 </label>
-                <select value={editCategory} onChange={(e) => { const v = e.target.value; setEditCategory(v); if (v === 'Eatery' && !editRecipe) setEditRecipe(emptyRecipe()); }}
+                <select value={editCategory} onChange={(e) => { const v = e.target.value; setEditCategory(v); if ((v === 'Eatery' || v === 'Drinks') && !editRecipe) setEditRecipe(emptyRecipe()); }}
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
                   {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
@@ -1181,13 +1337,13 @@ export default function Inventory({
               )}
             </div>
 
-            {editCategory === 'Eatery' && renderRecipeCard(editRecipe, setEditRecipe, editPrice, setEditPrice, setEditVariants)}
+            {(editCategory === 'Eatery' || editCategory === 'Drinks') && renderRecipeCard(editRecipe, setEditRecipe, editPrice, setEditPrice, setEditVariants)}
 
             {editIsService ? (
               <p className="text-[11px] font-bold text-zinc-500 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-3 py-2.5 leading-snug">
                 Service — no stock to adjust. It sells without touching stock.
               </p>
-            ) : editCategory === 'Eatery' ? (
+            ) : editCategory === 'Eatery' || (editCategory === 'Drinks' && !!editRecipe) ? (
             <div className="bg-zinc-900 p-4 rounded-xl space-y-2 border border-zinc-800/60">
               <h4 className="text-xs font-black text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
                 <Truck className="w-3.5 h-3.5 text-gold-brand" /> Stock from production
@@ -1196,7 +1352,9 @@ export default function Inventory({
                 Today's balance: <span className="text-gold-brand font-black tabular-nums">{editingProduct.stockQty}</span>
               </p>
               <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2 leading-snug">
-                Kitchen snacks can't be typed in here — log the batch in Sell → Morning Production. To fix a wrong entry, delete it there and the balance corrects itself.
+                {editCategory === 'Drinks'
+                  ? 'Fresh juice stock comes from what you made — log the batch in Registers → Drinks (Morning Production). Depot sodas stay editable: remove the recipe to adjust their stock here.'
+                  : "Kitchen snacks can't be typed in here — log the batch in Sell → Morning Production. To fix a wrong entry, delete it there and the balance corrects itself."}
               </p>
             </div>
             ) : (
@@ -1222,6 +1380,15 @@ export default function Inventory({
                   className="w-24 bg-zinc-950 border border-zinc-800 text-gold-light rounded text-center text-xs h-8 focus:border-gold-brand focus:outline-none font-bold" />
                 <span className="text-xs text-zinc-400 font-bold uppercase">(Current: {editingProduct.stockQty})</span>
                 </div>
+                {adjustmentType === 'add' && onAddExpense && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-500 font-bold uppercase">Paid (UGX):</span>
+                    <input type="number" min="0" value={stockPaid} placeholder={stockAdjustment > 0 && (parseFloat(editCost) || 0) > 0 ? String(Math.round(stockAdjustment * (parseFloat(editCost) || 0))) : '0 = free'}
+                      onChange={(e) => setStockPaid(e.target.value)}
+                      className="w-28 bg-zinc-950 border border-zinc-800 text-gold-light rounded text-center text-xs h-8 focus:border-gold-brand focus:outline-none font-bold" />
+                    <span className="text-[10px] text-zinc-600 font-bold uppercase">logs a Stock Purchase</span>
+                  </div>
+                )}
               </div>
             )}
 

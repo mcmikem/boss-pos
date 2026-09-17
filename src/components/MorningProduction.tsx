@@ -1,6 +1,9 @@
-// Morning kitchen log — lives on Sell → Eatery, NOT in the Close tab.
+// Morning kitchen log — lives on Sell → Eatery & Drinks, NOT in the Close tab.
 // What the kitchen made this morning (adds to stock for today's selling).
 // The Close tab only reads this data for the evening balance check.
+// Drinks note: depot sodas (Coca-Cola, Mirinda, Rock Boom…) are buy-resell —
+// restock those in Stock. Only fresh juices (Obutunda, Omunanansi, i.e. the
+// Drinks lines with a recipe) are made here.
 import { useMemo, useState } from 'react';
 import { ChefHat, Check, Trash2, ArrowRight } from 'lucide-react';
 import type { Product, ProductionRegister, Sale, WastageLog } from '../types';
@@ -22,7 +25,9 @@ export default function MorningProduction({
   products, productionRegisters, sales = [], wastageLogs = [], onAddProduction, onDeleteProduction,
   formatCurrency, triggerToast,
 }: MorningProductionProps) {
-  const eateryProducts = useMemo(() => products.filter(p => p.category === 'Eatery'), [products]);
+  const eateryProducts = useMemo(
+    () => products.filter(p => p.category === 'Eatery' || (p.category === 'Drinks' && !!p.recipe)),
+    [products]);
   const [prodDate, setProdDate] = useState(todayLocalKey());
   const [prodItem, setProdItem] = useState('');
   const [prodCustomItem, setProdCustomItem] = useState('');
@@ -32,7 +37,7 @@ export default function MorningProduction({
 
   const today = todayLocalKey();
   const todayMade = useMemo(
-    () => productionRegisters.filter(p => p.category === 'Eatery' && p.date === today),
+    () => productionRegisters.filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === today),
     [productionRegisters, today]
   );
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
@@ -65,12 +70,13 @@ export default function MorningProduction({
     if (qty <= 0) { triggerToast('Enter the number made', 'error'); return; }
     const cost = parseFloat(prodCost) || 0;
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
+    const prod = eateryProducts.find(p => p.name === item) || null;
     onAddProduction({
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: prodDate,
       item,
-      category: 'Eatery',
-      productId: prodProductId || undefined,
+      category: prod?.category === 'Drinks' ? 'Drinks' : 'Eatery',
+      productId: prodProductId || prod?.id || undefined,
       qty,
       costEach: cost,
       total: Math.round(qty * cost),

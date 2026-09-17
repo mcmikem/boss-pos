@@ -813,20 +813,20 @@ export default function CategoryRegister({
                   <FileText className="w-3.5 h-3.5" /> Bill
                 </button>
                 <button
-                  onClick={async () => {
+                  onClick={() => {
                     const due = c.total - c.paidAmount;
                     const msg = `Hello ${c.customerName}, reminder from ${shopName || 'our shop'}: ${c.qty}× ${c.item} (${formatDay(c.date)}) — balance ${formatCurrency(due)} of ${formatCurrency(c.total)}. Please clear it when you can. Thank you!`;
-                    try {
-                      const nav = navigator as unknown as { share?: (d: { title?: string; text: string }) => Promise<void> };
-                      if (nav.share) { await nav.share({ title: 'Payment reminder', text: msg }); triggerToast('Reminder shared', 'success'); return; }
-                      await navigator.clipboard.writeText(msg);
-                      triggerToast('Reminder copied — paste into WhatsApp', 'success');
-                    } catch { triggerToast('Could not share — copy manually', 'error'); }
+                    // wa.me share link needs no saved number: WhatsApp opens with
+                    // the text prefilled and the cashier just picks the customer.
+                    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                    const w = window.open(url, '_blank', 'noopener');
+                    if (w) triggerToast('Pick the customer in WhatsApp to send', 'success');
+                    else triggerToast('Could not open WhatsApp — copy manually', 'error');
                   }}
                   title={`Remind ${c.customerName}`}
-                  className="h-9 px-3 bg-amber-950/30 border border-amber-800/40 text-amber-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-amber-950/50 cursor-pointer"
+                  className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-950/50 cursor-pointer"
                 >
-                  Remind
+                  WhatsApp
                 </button>
                 </div>
               </div>

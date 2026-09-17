@@ -29,14 +29,21 @@ describe('closeTotals', () => {
     const t = closeTotals('2026-09-07', [
       sale({ id: 's-1', total: 2000, paymentMethod: 'Cash' }),
       sale({ id: 's-2', total: 5000, paymentMethod: 'MTN MoMo', items: [] }),
+      sale({ id: 's-3', total: 3000, paymentMethod: 'Airtel Money', items: [] }),
+      sale({ id: 's-4', total: 4000, paymentMethod: 'Credit / Book', items: [] }),
+      sale({ id: 's-5', total: 9999, paymentMethod: 'Cash', refunded: true }),
     ], [expense()]);
-    expect(t.saleCount).toBe(2);
-    expect(t.revenue).toBe(7000);
+    expect(t.saleCount).toBe(4);
+    expect(t.revenue).toBe(14000);
     expect(t.cash).toBe(2000);
-    expect(t.momo).toBe(5000);
+    expect(t.momo).toBe(8000);
+    expect(t.mtn).toBe(5000);
+    expect(t.airtel).toBe(3000);
+    expect(t.credit).toBe(4000);
+    expect(t.refunds).toBe(1);
     expect(t.expenses).toBe(5000);
-    // 7000 - 1000 (chapati COGS) - 5000 = 1000
-    expect(t.net).toBe(1000);
+    // 14000 - 1000 (chapati COGS) - 5000 = 8000
+    expect(t.net).toBe(8000);
   });
 
   it('ignores refunded sales and other days', () => {
@@ -56,6 +63,26 @@ describe('buildCloseSummary', () => {
     expect(msg).toContain('2026-09-07');
     expect(msg).toContain('2,000 UGX');
     expect(msg).toContain('Closed by Amina');
+  });
+
+  it('shows per-network splits, credit owed, and refunds', () => {
+    const msg = buildCloseSummary('Amina Shop', closeTotals('2026-09-07', [
+      sale({ id: 's-1', total: 2000, paymentMethod: 'Cash' }),
+      sale({ id: 's-2', total: 5000, paymentMethod: 'MTN MoMo', items: [] }),
+      sale({ id: 's-3', total: 3000, paymentMethod: 'Airtel Money', items: [] }),
+      sale({ id: 's-4', total: 4000, paymentMethod: 'Credit / Book', items: [] }),
+      sale({ id: 's-5', total: 9999, paymentMethod: 'Cash', refunded: true }),
+    ], []));
+    expect(msg).toContain('MTN: 5,000');
+    expect(msg).toContain('Airtel: 3,000');
+    expect(msg).toContain('Still on credit: 4,000');
+    expect(msg).toContain('1 refunded');
+  });
+
+  it('omits the credit line when nothing is owed', () => {
+    const msg = buildCloseSummary('Shop', closeTotals('2026-09-07', [sale()], []));
+    expect(msg).not.toContain('Still on credit');
+    expect(msg).not.toContain('refunded');
   });
 
   it('works without a seller name', () => {

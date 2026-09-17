@@ -6,6 +6,10 @@ export interface CloseTotals {
   revenue: number;
   cash: number;
   momo: number;
+  mtn: number;
+  airtel: number;
+  credit: number;
+  refunds: number;
   expenses: number;
   net: number;
 }
@@ -14,13 +18,17 @@ export interface CloseTotals {
 export function closeTotals(dateStr: string, sales: Sale[], expenses: Expense[]): CloseTotals {
   const day = dateStr || new Date().toISOString().slice(0, 10);
   const daySales = sales.filter(s => (s.timestamp || '').slice(0, 10) === day && !s.refunded);
+  const refunded = sales.filter(s => (s.timestamp || '').slice(0, 10) === day && s.refunded).length;
   const dayExpenses = expenses.filter(e => (e.timestamp || '').slice(0, 10) === day);
   const revenue = daySales.reduce((a, s) => a + s.total, 0);
   const cash = daySales.filter(s => s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0);
-  const momo = daySales.filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money').reduce((a, s) => a + s.total, 0);
+  const mtn = daySales.filter(s => s.paymentMethod === 'MTN MoMo').reduce((a, s) => a + s.total, 0);
+  const airtel = daySales.filter(s => s.paymentMethod === 'Airtel Money').reduce((a, s) => a + s.total, 0);
+  const momo = mtn + airtel;
+  const credit = daySales.filter(s => s.paymentMethod === 'Credit / Book').reduce((a, s) => a + s.total, 0);
   const cogs = daySales.reduce((a, s) => a + s.items.reduce((b, it) => b + (it.unitCost || 0) * it.qty, 0), 0);
   const expTotal = dayExpenses.reduce((a, e) => a + e.amount, 0);
-  return { day, saleCount: daySales.length, revenue, cash, momo, expenses: expTotal, net: revenue - cogs - expTotal };
+  return { day, saleCount: daySales.length, revenue, cash, momo, mtn, airtel, credit, refunds: refunded, expenses: expTotal, net: revenue - cogs - expTotal };
 }
 
 // One-message close-out for the owner on WhatsApp: what came in, in what
@@ -29,8 +37,9 @@ export function buildCloseSummary(shopName: string, t: CloseTotals, sellerName?:
   const n = (v: number) => Math.round(v).toLocaleString();
   const lines = [
     `Daily close — ${shopName} (${t.day})`,
-    `Sales: ${t.saleCount} · ${n(t.revenue)} UGX`,
-    `Cash: ${n(t.cash)} · MoMo: ${n(t.momo)}`,
+    `Sales: ${t.saleCount} · ${n(t.revenue)} UGX${t.refunds > 0 ? ` (${t.refunds} refunded)` : ''}`,
+    `Cash: ${n(t.cash)} · MTN: ${n(t.mtn)} · Airtel: ${n(t.airtel)}`,
+    ...(t.credit > 0 ? [`Still on credit: ${n(t.credit)}`] : []),
     `Expenses: ${n(t.expenses)}`,
     `Left (after stock + expenses): ${n(t.net)} UGX`,
   ];

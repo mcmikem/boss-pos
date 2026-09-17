@@ -331,12 +331,15 @@ export interface StoreSettings {
   showBookings?: boolean;
   showRepairs?: boolean;
   momoFeePct?: number; // MTN/Airtel cut auto-booked as expense per MoMo sale
+  loyaltyEveryN?: number; // regulars reward: every Nth visit earns loyaltyPct off
+  loyaltyPct?: number; // percent off the reward visit (1-50)
   ownerPhone?: string; // WhatsApp number for the daily close summary
   sheetsUrl?: string;
   efris?: EfrisConfig;
   branches?: string[];
   eodCapital?: Record<string, number>;
   largeText?: boolean; // accessibility: bigger type + targets (Settings → Display)
+  lockMinutes?: number; // idle auto-lock delay (10/30/60); solo sellers can relax it
   features?: Record<string, boolean>; // Till control master switches (all default ON)
   lastSheetOk?: boolean;
   lastSheetAt?: string;

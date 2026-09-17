@@ -119,18 +119,18 @@ export default function CreditsLedger({
                 Record Payment
               </button>
               <button
-                onClick={async () => {
+                onClick={() => {
                   const msg = `Hello ${record.customerName}, reminder: ${record.orderNumber} balance ${formatCurrency(record.remaining)} of ${formatCurrency(record.total)} (${record.createdAt}). Please clear it when you can. Thank you!`;
-                  try {
-                    const nav = navigator as unknown as { share?: (d: { title?: string; text: string }) => Promise<void> };
-                    if (nav.share) { await nav.share({ title: 'Payment reminder', text: msg }); triggerToast('Reminder shared', 'success'); return; }
-                    await navigator.clipboard.writeText(msg);
-                    triggerToast('Reminder copied — paste into WhatsApp', 'success');
-                  } catch { triggerToast('Could not share — copy manually', 'error'); }
+                  // wa.me share link needs no saved number: WhatsApp opens with
+                  // the text prefilled and the cashier just picks the customer.
+                  const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                  const w = window.open(url, '_blank', 'noopener');
+                  if (w) triggerToast('Pick the customer in WhatsApp to send', 'success');
+                  else triggerToast('Could not open WhatsApp — copy manually', 'error');
                 }}
-                className="px-3 py-1.5 bg-amber-950/30 text-amber-300 border border-amber-800/40 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-amber-950/50 active:scale-95 transition-all whitespace-nowrap"
+                className="px-3 py-1.5 bg-emerald-950/30 text-emerald-300 border border-emerald-800/40 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-emerald-950/50 active:scale-95 transition-all whitespace-nowrap"
               >
-                Remind
+                WhatsApp
               </button>
               </div>
             </div>

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Wallet, X, ChefHat, Plus, Trash2 } from 'lucide-react';
 import { Product, Expense, ExpenseItem } from '../types';
 
-const SHOP_CATEGORY_ORDER = ['Electronics', 'Eatery', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
+const SHOP_CATEGORY_ORDER = ['Electronics', 'Eatery', 'Drinks', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 
 interface QuickExpenseModalProps {
   isOpen: boolean;
@@ -34,17 +34,20 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     return ['General', ...ordered, ...extra];
   }, [products]);
 
-  const isEatery = expenseTab === 'Eatery';
+  const isEatery = expenseTab === 'Eatery' || expenseTab === 'Drinks';
 
-  // Dishes that have a recipe (ingredients + yield) can auto-fill the log.
+  // Dishes / fresh drinks that have a recipe (ingredients + yield) can
+  // auto-fill the log. Scoped to the open tab so Eatery shows snacks and
+  // Drinks shows Obutunda / Omunanansi.
   const recipeDishes = useMemo(() => {
     return products.filter(p =>
-      p.category === 'Eatery' &&
+      p.category === expenseTab &&
+      (p.category === 'Eatery' || p.category === 'Drinks') &&
       p.recipe && Array.isArray(p.recipe.ingredients) &&
       p.recipe.ingredients.some(i => i.name.trim()) &&
       p.recipe.yield > 0
     );
-  }, [products]);
+  }, [products, expenseTab]);
 
   if (!isOpen) return null;
 
@@ -136,7 +139,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     } else if (isEatery) {
       if (expenseEateryMode === 'dish') {
         if (!dishProduct) {
-          triggerToast('Select the snack you made', 'error');
+          triggerToast(expenseTab === 'Drinks' ? 'Select the juice you made' : 'Select the snack you made', 'error');
           return;
         }
         if (!dishIngRs.some(i => i.bought > 0 && i.price > 0)) {
@@ -156,7 +159,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
         if (items.length) {
           description = `Making ${dishProduct.name}: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
         }
-        category = 'Eatery';
+        category = expenseTab;
       } else {
         if (expenseIngredients.length === 0 || !expenseIngredients.some(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)) {
           triggerToast('Add at least one ingredient with a name and cost', 'error');
@@ -168,14 +171,14 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
           return;
         }
         const ingredientNames = expenseIngredients.map(i => i.name.trim()).filter(Boolean);
-        description = `Ingredients: ${ingredientNames.length ? ingredientNames.join(', ') : 'Eatery supplies'}`;
+        description = `Ingredients: ${ingredientNames.length ? ingredientNames.join(', ') : `${expenseTab} supplies`}`;
         items = expenseIngredients
           .filter(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)
           .map(i => ({ name: i.name.trim(), amount: Math.round((parseFloat(i.cost) || 0) * 100) / 100 }));
         if (items.length) {
           description = `Ingredients: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
         }
-        category = 'Eatery';
+        category = expenseTab;
       }
     } else {
       amtNum = parseFloat(expenseAmt) || 0;
@@ -265,11 +268,11 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                 className={`flex items-center gap-1.5 px-4 h-9 rounded-full font-bold text-xs uppercase tracking-wider whitespace-nowrap transition-all cursor-pointer active:scale-95 ${
                   expenseTab === tab
                     ? 'bg-emerald-500 text-black font-black'
-                    : tab === 'Eatery'
+                    : tab === 'Eatery' || tab === 'Drinks'
                       ? 'border border-amber-500/40 text-amber-400 hover:bg-amber-950/20'
                       : 'border border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
                 }`}>
-                {tab === 'Eatery' && <ChefHat className="w-3.5 h-3.5" />}
+                {(tab === 'Eatery' || tab === 'Drinks') && <ChefHat className="w-3.5 h-3.5" />}
                 {tab}
               </button>
             ))}
@@ -314,7 +317,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
             <>
               <div className="bg-amber-950/20 border border-amber-500/20 rounded-xl p-3">
                 <label className="text-xs text-amber-400 font-bold uppercase mb-1.5 block flex items-center gap-1.5">
-                  <ChefHat className="w-3.5 h-3.5" /> Eatery Costs
+                  <ChefHat className="w-3.5 h-3.5" /> {expenseTab === 'Drinks' ? 'Drinks Costs' : 'Eatery Costs'}
                 </label>
                 <p className="text-[10px] text-zinc-500">Log what you bought — the app works out the cost and your profit.</p>
               </div>
@@ -326,7 +329,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                 </button>
                 <button onClick={() => setExpenseEateryMode('dish')}
                   className={`h-10 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${expenseEateryMode === 'dish' ? 'bg-amber-500 text-black' : 'text-zinc-400 hover:text-zinc-200'}`}>
-                  Made a Snack
+                  {expenseTab === 'Drinks' ? 'Made Juice' : 'Made a Snack'}
                 </button>
               </div>
 
@@ -362,15 +365,15 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
                   {recipeDishes.length === 0 ? (
                     <div className="bg-zinc-900/60 border border-dashed border-zinc-700 rounded-xl p-4 text-center">
                       <p className="text-xs font-bold text-zinc-400 uppercase">No recipes yet</p>
-                      <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">Go to <span className="text-gold-brand font-bold">Sell → Eatery Pricing &amp; Recipes</span> and add the ingredients for each snack. Then they will auto-fill here.</p>
+                      <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">Go to <span className="text-gold-brand font-bold">Stock</span> and add the ingredients for {expenseTab === 'Drinks' ? 'each fresh juice (Obutunda, Omunanansi)' : 'each snack'}. Then they will auto-fill here.</p>
                     </div>
                   ) : (
                     <>
                       <div>
-                        <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">Which snack did you make?</label>
+                        <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">{expenseTab === 'Drinks' ? 'Which juice did you make?' : 'Which snack did you make?'}</label>
                         <select value={expenseDishId} onChange={(e) => selectDish(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-11 px-2 text-xs outline-none font-bold">
-                          <option value="">Pick a snack...</option>
+                          <option value="">{expenseTab === 'Drinks' ? 'Pick a juice...' : 'Pick a snack...'}</option>
                           {recipeDishes.map(p => (
                             <option key={p.id} value={p.id}>{p.name} — sells {formatCurrency(p.price)}</option>
                           ))}

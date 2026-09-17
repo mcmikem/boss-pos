@@ -25,6 +25,7 @@ import { findMissingProduction } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
+import { pastVisits, isRewardVisit, visitsToReward, clampPct, clampEveryN } from '../utils/loyalty';
 import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart } from '../utils/parked';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
@@ -119,6 +120,25 @@ const SEARCH_SYNONYMS: Record<string, string> = {
   rollex: 'rolex',
   sambusa: 'samosa',
   samusa: 'samosa',
+  coke: 'coca-cola',
+  cocacola: 'coca-cola',
+  coca: 'coca-cola',
+  fanta: 'fanta',
+  mirinda: 'mirinda',
+  mirindaa: 'mirinda',
+  sprite: 'sprite',
+  krest: 'krest',
+  novida: 'novida',
+  pepsi: 'pepsi',
+  dew: 'mountain dew',
+  rockboom: 'rock boom',
+  'rock-boom': 'rock boom',
+  minutemaid: 'minute maid',
+  'minute-maid': 'minute maid',
+  obutunda: 'obutunda',
+  omunanansi: 'omunanansi',
+  passion: 'obutunda',
+  pineapple: 'omunanansi',
 };
 const applySynonyms = (q: string) => q.split(' ').map(w => SEARCH_SYNONYMS[w] || w).join(' ');
 
@@ -127,7 +147,7 @@ const applySynonyms = (q: string) => q.split(' ').map(w => SEARCH_SYNONYMS[w] ||
 const DEMO_PRODUCTS: Product[] = [
   { id: 'demo-chapati', name: 'Chapati', category: 'Eatery', cost: 250, price: 500, stockQty: 50, lowStockThreshold: 10 },
   { id: 'demo-rolex', name: 'Rolex', category: 'Eatery', cost: 1200, price: 2000, stockQty: 30, lowStockThreshold: 5 },
-  { id: 'demo-soda', name: 'Soda', category: 'Drinks', cost: 900, price: 1500, stockQty: 40, lowStockThreshold: 8 },
+  { id: 'demo-soda', name: 'Coca-Cola 500ml', category: 'Drinks', cost: 1292, price: 1700, stockQty: 40, lowStockThreshold: 8 },
   { id: 'demo-samosa', name: 'Samosa', category: 'Eatery', cost: 550, price: 1000, stockQty: 25, lowStockThreshold: 5 },
 ];
 
@@ -497,6 +517,27 @@ export default function Sales({
     ? `Need ${formatCurrency(total - parseFloat(customCashReceived))} more`
     : '';
   const tax = 0;
+
+  // Regulars reward: a named customer on a reward visit gets a one-tap
+  // percent-off offer. Never auto-applies; hides once any manual discount
+  // is set so it can never overwrite the cashier's own math.
+  const loyaltyN = clampEveryN(settings?.loyaltyEveryN);
+  const loyaltyP = clampPct(settings?.loyaltyPct);
+  const loyaltyName = customerName.trim();
+  const loyaltyPast = useMemo(
+    () => (loyaltyName ? pastVisits(salesHistory || [], loyaltyName) : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [salesHistory, loyaltyName],
+  );
+  const loyaltyDue = loyaltyName !== '' && isRewardVisit(loyaltyPast, loyaltyN);
+  const loyaltyLeft = visitsToReward(loyaltyPast, loyaltyN);
+  const manualDiscountSet = (parseFloat(discount) || 0) > 0;
+  const showLoyalty = loyaltyName !== '' && cart.length > 0 && !manualDiscountSet;
+  const applyLoyalty = () => {
+    setDiscountType('percent');
+    setDiscount(String(loyaltyP));
+    triggerToast(`Regular reward: ${loyaltyP}% off for ${loyaltyName} (visit ${loyaltyPast + 1})`, 'success');
+  };
 
   // Money strip (#16): today's takings at a glance — cash, phone money,
   // credit out. Computed from real history only, never demo stock.
@@ -1023,7 +1064,7 @@ export default function Sales({
           </section>
         </div>
 
-        {selectedCategory === 'Eatery' && !showEateryPricing && !showProduction && (
+        {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
           <div className="mt-3 grid grid-cols-2 gap-2">
           <button onClick={() => setShowEateryPricing(true)}
             className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
@@ -1282,16 +1323,26 @@ export default function Sales({
                 ))}
               </div>
 
-              {paymentMethod === 'Credit / Book' && (
-                <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
-                  <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5" /> {t(lang, 'customerName')}
-                  </label>
-                  <input type="text" placeholder={t(lang, 'customerNameEx')} value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11" />
-                </div>
-              )}
+              {/* Customer name for every method (required for credit): powers
+                  the regulars reward and stamps the receipt. Slim single row
+                  so the cash sell flow stays fast. */}
+              <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5" /> {paymentMethod === 'Credit / Book' ? `${t(lang, 'customerName')} *` : 'Customer name (optional)'}
+                </label>
+                <input type="text" placeholder={paymentMethod === 'Credit / Book' ? t(lang, 'customerNameEx') : 'Regular? Enter name for reward'}
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11" />
+                {showLoyalty && (loyaltyDue ? (
+                  <button onClick={applyLoyalty}
+                    className="w-full h-11 rounded-xl bg-gold-brand/15 border border-gold-brand text-gold-brand text-xs font-black uppercase tracking-wider hover:bg-gold-brand/25 active:scale-[0.98] transition-all cursor-pointer">
+                    ★ Visit {loyaltyPast + 1} — apply {loyaltyP}% regular reward
+                  </button>
+                ) : (
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Visit {loyaltyPast + 1} — reward in {loyaltyLeft}</p>
+                ))}
+              </div>
 
               {/* Discount field */}
               <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
@@ -1450,11 +1501,23 @@ export default function Sales({
                 </button>
               ))}
             </div>
-            {paymentMethod === 'Credit / Book' && (
-              <input type="text" placeholder={t(lang, 'customerName')} value={customerName}
+            {paymentMethod === 'Credit / Book' ? (
+              <input type="text" placeholder={`${t(lang, 'customerName')} *`} value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
+            ) : (
+              <input type="text" placeholder="Name? (regulars reward)" value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
             )}
+            {showLoyalty && (loyaltyDue ? (
+              <button onClick={applyLoyalty}
+                className="w-full min-h-[48px] py-2 rounded-xl bg-gold-brand/15 border border-gold-brand text-gold-brand text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer">
+                ★ Visit {loyaltyPast + 1} — {loyaltyP}% reward
+              </button>
+            ) : (
+              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider px-1">Visit {loyaltyPast + 1} — reward in {loyaltyLeft}</p>
+            ))}
             {paymentMethod === 'Cash' && (
               <div className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl space-y-3 mt-2">
                 <input type="number" placeholder={t(lang, 'cashReceived')} value={customCashReceived}
