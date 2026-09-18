@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Wallet, X, ChefHat, Plus, Trash2 } from 'lucide-react';
 import { Product, Expense, ExpenseItem } from '../types';
+import { todayLocalKey, middayStamp } from '../utils/dates';
 
 const SHOP_CATEGORY_ORDER = ['Electronics', 'Eatery', 'Drinks', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 
@@ -23,6 +24,11 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
   const [expenseIngredients, setExpenseIngredients] = useState<{ id: string; name: string; cost: string }[]>([]);
   const [expenseEateryMode, setExpenseEateryMode] = useState<'stock' | 'dish'>('stock');
   const [expenseDishId, setExpenseDishId] = useState('');
+  // Business date (default today — a 00:10 close-out can attribute to the day
+  // just ended instead of leaking into the new day) + where the money came
+  // from (provenance the drawer math depends on).
+  const [expenseDate, setExpenseDate] = useState(todayLocalKey());
+  const [expenseSource, setExpenseSource] = useState<Expense['source']>('drawer');
   const [dishIngs, setDishIngs] = useState<{ id: string; name: string; recipeQty: number; unit: string; bought: string; price: string }[]>([]);
 
   // Tabs = General (default) + every department the shop actually has products
@@ -113,6 +119,8 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     setExpenseIngredients([]);
     setExpenseDishId('');
     setDishIngs([]);
+    setExpenseDate(todayLocalKey());
+    setExpenseSource('drawer');
   };
 
   const handleSubmit = () => {
@@ -192,11 +200,11 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
 
     const newExpense: Expense = {
       id: `exp-${Date.now()}`,
-      timestamp: new Date().toISOString(),
+      timestamp: middayStamp(expenseDate),
       description,
       amount: amtNum,
       category,
-      source: 'drawer',
+      source: expenseSource || 'drawer',
       ...(items && items.length ? { items } : {}),
       ...(dishProduct && isEatery && expenseEateryMode === 'dish'
         ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
@@ -226,11 +234,11 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
       triggerToast(`About ${dishPieces.toLocaleString()} pieces • ${formatCurrency(Math.round(dishCostPerPiece))} each`, 'success');
     }
 
-    triggerToast(`Expense logged: ${formatCurrency(amtNum)}`, 'success');
+    const backdated = expenseDate !== todayLocalKey();
+    triggerToast(`Expense logged: ${formatCurrency(amtNum)}${backdated ? ` (for ${expenseDate})` : ''}`, 'success');
     clearExpenseFields();
     onClose();
   };
-
   const quickAmounts = [2000, 5000, 10000, 20000, 50000, 100000];
 
   const amountField = (
@@ -454,6 +462,28 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
               )}
             </>
           )}
+
+          {/* Business date + provenance, shared by every tab: a 00:10
+              close-out attributes to the day just ended, and the drawer math
+              needs to know which pocket the money left. */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">For day</label>
+              <input type="date" value={expenseDate} max={todayLocalKey()} onChange={(e) => setExpenseDate(e.target.value || todayLocalKey())}
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-xs outline-none focus:border-emerald-500 font-bold" />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-400 font-bold uppercase mb-1.5 block">Paid from</label>
+              <select value={expenseSource || 'drawer'} onChange={(e) => setExpenseSource(e.target.value as Expense['source'])}
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-2 text-xs outline-none focus:border-emerald-500 font-bold">
+                <option value="drawer">Drawer</option>
+                <option value="cash">Cash</option>
+                <option value="momo">MoMo</option>
+                <option value="owner">Owner</option>
+                <option value="bank">Bank</option>
+              </select>
+            </div>
+          </div>
 
           <button onClick={handleSubmit}
             className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-sm rounded-xl transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2 cursor-pointer">

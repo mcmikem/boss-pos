@@ -36,6 +36,18 @@ export function daysUntilExpiry(expiryDate: string | undefined | null, todayKey?
   return Math.round(ms / 86400000);
 }
 
+// Stamp a YYYY-MM-DD business date as a local-midday ISO string, so a
+// 00:10 close-out can attribute entries to the day that just ended instead
+// of leaking into the new day. Midday dodges every UTC-offset edge; invalid
+// input falls back to right now rather than inventing a date.
+export function middayStamp(dayKey: string | undefined | null): string {
+  if (dayKey && /^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+    const d = new Date(`${dayKey}T12:00:00`);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 // Alert tier for a product expiry: expired (passed), soon (within 30 days),
 // or ok. Services and dateless products are always ok.
 export function expiryStatus(expiryDate: string | undefined | null, todayKey?: string): 'expired' | 'soon' | 'ok' {

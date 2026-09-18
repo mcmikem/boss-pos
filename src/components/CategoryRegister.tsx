@@ -7,7 +7,7 @@ import StatementModal from './StatementModal';
 import BeginnerTip from './BeginnerTip';
 import { t } from '../utils/i18n';
 import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale, Expense } from '../types';
-import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
+import { localDayKey, localMonthKey, todayLocalKey, middayStamp } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
 import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
 import { isOn, type FeatureKey } from '../utils/features';
@@ -210,6 +210,9 @@ export default function CategoryRegister({
   const [momoComment, setMomoComment] = useState('');
   const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner'>('float');
   const [momoSentBy, setMomoSentBy] = useState(staffName || '');
+  // Business date for the move (default today — a 00:10 close-out attributes
+  // to the day just ended instead of leaking into the new day).
+  const [momoDate, setMomoDate] = useState(todayStr());
 
   const activeItem = (list: string[], custom: string, picked: string) =>
     picked === '__custom' ? custom.trim() : (list.find(i => i === picked) || '');
@@ -350,14 +353,16 @@ export default function CategoryRegister({
       category: selected,
       amount: amt,
       comment: momoComment.trim(),
-      createdAt: new Date().toISOString(),
+      createdAt: middayStamp(momoDate),
       to: momoDest,
       sentBy: momoSentBy.trim() || staffName || '',
     });
     const dest = MONEY_DEST.find(d => d.key === momoDest)?.label || 'recorded';
-    triggerToast(`Confirmed: ${formatCurrency(amt)} ${dest}`, 'success');
+    const backdated = momoDate !== todayStr();
+    triggerToast(`Confirmed: ${formatCurrency(amt)} ${dest}${backdated ? ` (for ${momoDate})` : ''}`, 'success');
     setMomoAmount('');
     setMomoComment('');
+    setMomoDate(todayStr());
     setShowMomoForm(false);
   };
 
@@ -1055,6 +1060,11 @@ export default function CategoryRegister({
               <input type="text" value={momoSentBy} onChange={e => setMomoSentBy(e.target.value)}
                 placeholder="Staff member who sent/moved the money"
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
+            </div>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">For day</label>
+              <input type="date" value={momoDate} max={todayStr()} onChange={(e) => setMomoDate(e.target.value || todayStr())}
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500 font-bold" />
             </div>
             <div>
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Comment (optional)</label>

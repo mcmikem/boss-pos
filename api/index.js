@@ -216,6 +216,9 @@ async function initDB() {
   try { await sql`ALTER TABLE production_register ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE wastage_log ADD COLUMN IF NOT EXISTS product_id TEXT`; } catch {}
   try { await sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS items TEXT DEFAULT ''`; } catch {}
+  // Money provenance: where the spend came from (drawer/cash/momo/owner/bank).
+  // Older rows lack it and keep the safe assumption (drawer-paid) in the till.
+  try { await sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'drawer'`; } catch {}
   for (const t of ['sales', 'expenses', 'credit_payments', 'cash_transfers', 'tailoring_orders', 'design_orders', 'bookings', 'repair_jobs', 'credit_eats', 'production_register', 'wastage_log', 'momo_transfers', 'quotes']) {
     try { await sql.query(`ALTER TABLE "${t}" ADD COLUMN IF NOT EXISTS client_write_id TEXT`); } catch {}
   }
@@ -1562,8 +1565,9 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const description = text(e.description, 300);
   const category = text(e.category, 100);
   const items = itemsJson(e.items);
-  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,items,client_write_id)
-    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${items},${e.clientWriteId||null})
+  const source = ['drawer', 'cash', 'momo', 'owner', 'bank'].includes(e.source) ? e.source : 'drawer';
+  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,items,source,client_write_id)
+    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${items},${source},${e.clientWriteId||null})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;

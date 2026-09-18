@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus } from './dates';
+import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp } from './dates';
 
 describe('localDayKey', () => {
   it('returns a zero-padded YYYY-MM-DD', () => {
@@ -65,5 +65,19 @@ describe('expiryStatus', () => {
   it('is ok without a date', () => {
     expect(expiryStatus(undefined, '2026-09-07')).toBe('ok');
     expect(expiryStatus('', '2026-09-07')).toBe('ok');
+  });
+});
+
+describe('middayStamp', () => {
+  it('round-trips any business date through localDayKey on any timezone', () => {
+    // Local noon can never cross a calendar boundary in any real offset.
+    expect(localDayKey(middayStamp('2026-09-14'))).toBe('2026-09-14');
+    expect(localDayKey(middayStamp('2026-01-01'))).toBe('2026-01-01');
+  });
+
+  it('falls back to now on garbage instead of inventing a date', () => {
+    expect(localDayKey(middayStamp('yesterday'))).toBe(localDayKey(new Date().toISOString()));
+    expect(localDayKey(middayStamp(''))).toBe(localDayKey(new Date().toISOString()));
+    expect(localDayKey(middayStamp(null))).toBe(localDayKey(new Date().toISOString()));
   });
 });
