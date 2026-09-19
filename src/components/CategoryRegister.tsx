@@ -117,6 +117,26 @@ export default function CategoryRegister({
   const [creditCustomItem, setCreditCustomItem] = useState('');
   const [creditQty, setCreditQty] = useState('1');
   const [creditPrice, setCreditPrice] = useState('');
+  const [creditCap, setCreditCap] = useState('');
+
+  // Per-customer credit caps (per device): warn/block before the book grows.
+  // Stored as {lowercasedName: cap}; empty = unlimited.
+  const readCaps = (): Record<string, number> => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('boss_pos_credit_caps') || '{}');
+      return (raw && typeof raw === 'object') ? raw as Record<string, number> : {};
+    } catch { return {}; }
+  };
+  const capFor = (name: string): number => {
+    const v = readCaps()[name.trim().toLowerCase()];
+    return typeof v === 'number' && v > 0 ? v : 0;
+  };
+  const owesFor = (name: string): number => {
+    const n = name.trim().toLowerCase();
+    if (!n) return 0;
+    return creditEats.filter(e => !e.paid && (e.customerName || '').trim().toLowerCase() === n)
+      .reduce((s, e) => s + Math.max(0, e.total - (e.paidAmount || 0)), 0);
+  };
 
   const [showWasteForm, setShowWasteForm] = useState(false);
   const [wasteDate, setWasteDate] = useState(todayStr());
@@ -178,6 +198,7 @@ export default function CategoryRegister({
   const allFloatOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'float').reduce((s, t) => s + t.amount, 0);
   const allCashOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
   const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
+  const allBankOut = allMoneyOutToday.filter(t => t.to === 'bank').reduce((s, t) => s + t.amount, 0);
 
   // Daily close-out: for each dish, produced - sold - expired - carried.
   // A positive remainder is stock that "vanished" (shrinkage); negative means
@@ -208,7 +229,7 @@ export default function CategoryRegister({
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
-  const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner'>('float');
+  const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner' | 'bank'>('float');
   const [momoSentBy, setMomoSentBy] = useState(staffName || '');
   // Business date for the move (default today — a 00:10 close-out attributes
   // to the day just ended instead of leaking into the new day).
@@ -229,6 +250,22 @@ export default function CategoryRegister({
     const qty = Math.max(1, parseInt(creditQty, 10) || 1);
     const unitPrice = Math.max(0, parseFloat(creditPrice) || 0);
     if (unitPrice <= 0) { triggerToast('Enter the unit price', 'error'); return; }
+    const newTotal = Math.round(qty * unitPrice);
+    // CapGate: save/refresh this customer's cap, then block-or-override.
+    const capTyped = Math.max(0, Math.round(parseFloat(creditCap) || 0));
+    const caps = readCaps();
+    if (capTyped > 0) {
+      caps[name.toLowerCase()] = capTyped;
+      try { localStorage.setItem('boss_pos_credit_caps', JSON.stringify(caps)); } catch {}
+    }
+    const cap = capTyped > 0 ? capTyped : capFor(name);
+    const alreadyOwes = owesFor(name);
+    if (cap > 0 && alreadyOwes + newTotal > cap) {
+      const ok = window.confirm(
+        `${name} owes ${formatCurrency(alreadyOwes)} of a ${formatCurrency(cap)} cap. This adds ${formatCurrency(newTotal)} (total ${formatCurrency(alreadyOwes + newTotal)}).\n\nOK = lend anyway • Cancel = stop and collect first.`,
+      );
+      if (!ok) { triggerToast('Stopped — collect old debt first', 'info'); return; }
+    }
     onAddCreditEat({
       id: `ce-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       customerName: name,
@@ -242,7 +279,7 @@ export default function CategoryRegister({
       paid: false,
     });
     triggerToast('Added to Ababanjibwa Sente', 'success');
-    setCreditName(''); setCreditItem(''); setCreditCustomItem(''); setCreditQty('1'); setCreditPrice('');
+    setCreditName(''); setCreditItem(''); setCreditCustomItem(''); setCreditQty('1'); setCreditPrice(''); setCreditCap('');
     setShowCreditForm(false);
   };
 
@@ -275,6 +312,7 @@ export default function CategoryRegister({
   const floatOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'float').reduce((s, t) => s + t.amount, 0);
   const cashOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
   const ownerOutToday = todayMoneyOut.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
+  const bankOutToday = todayMoneyOut.filter(t => t.to === 'bank').reduce((s, t) => s + t.amount, 0);
   const catMomoTransfers = momoTransfers.filter(t => t.category === selected);
 
   // Daily capital kept for this department; profit to send = collected − capital.
@@ -295,7 +333,8 @@ export default function CategoryRegister({
     floatOut: floatOutToday,
     cashOut: cashOutToday,
     ownerOut: ownerOutToday,
-  }), [selected, todayKey, eodCapital, capForSelected, collectedToday, drawerExpensesToday, floatOutToday, cashOutToday, ownerOutToday]);
+    bankOut: bankOutToday,
+  }), [selected, todayKey, eodCapital, capForSelected, collectedToday, drawerExpensesToday, floatOutToday, cashOutToday, ownerOutToday, bankOutToday]);
 
   // Theft flags for ALL departments (once per day → bell, not spam).
   const theftFlags = useMemo(() => buildTheftFlags({
@@ -328,12 +367,13 @@ export default function CategoryRegister({
 
   // Per-department view of today's money, for the reconciliation table.
   const todayMoneyOutByCat = useMemo(() => {
-    const map: { [cat: string]: { float: number; cash: number; owner: number } } = {};
+    const map: { [cat: string]: { float: number; cash: number; owner: number; bank: number } } = {};
     momoTransfers.forEach(t => {
       if (localDayKey(t.createdAt) !== todayStr()) return;
-      const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0 });
+      const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, bank: 0 });
       if (t.to === 'cash') d.cash += t.amount;
       else if (t.to === 'owner') d.owner += t.amount;
+      else if (t.to === 'bank') d.bank += t.amount;
       else d.float += t.amount;
     });
     return map;
@@ -343,6 +383,7 @@ export default function CategoryRegister({
     { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
     { key: 'cash' as const, label: 'Cash', icon: '💵', hint: 'Kept as physical cash — e.g. retained capital for tomorrow / handed out' },
     { key: 'owner' as const, label: 'Given to Owner (Mike)', icon: '👑', hint: 'Handed to the business owner (McMike), or eatery profits sent' },
+    { key: 'bank' as const, label: 'Bank', icon: '🏦', hint: 'Deposited to the bank account — out of drawer and phone' },
   ];
 
   const handleSubmitMomo = () => {
@@ -628,6 +669,7 @@ export default function CategoryRegister({
             Float: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
             {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
             {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
+            {' · '}Bank: <span className="text-sky-300 font-black">{formatCurrency(bankOutToday)}</span>
           </p>
         </div>
       </section>
@@ -637,7 +679,7 @@ export default function CategoryRegister({
         <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
           <Wallet className="w-3.5 h-3.5 text-cyan-400" /> Where the money is today (all departments)
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Sold today</p>
             <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
@@ -654,9 +696,13 @@ export default function CategoryRegister({
             <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Owner (Mike)</p>
             <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
           </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Banked</p>
+            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(allBankOut)}</p>
+          </div>
         </div>
         <p className="text-[10px] text-zinc-600 mt-2">
-          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allFloatOut + allCashOut + allOwnerOut))}</span> — still in the drawers.
+          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allFloatOut + allCashOut + allOwnerOut + allBankOut))}</span> — still in the drawers.
         </p>
 
         {/* Reconciliation: who sold, moved, and where it should still be, per dept */}
@@ -669,14 +715,15 @@ export default function CategoryRegister({
                 <th className="text-right px-2 text-emerald-500">Float</th>
                 <th className="text-right px-2 text-zinc-300">Cash</th>
                 <th className="text-right px-2 text-amber-400">Owner</th>
+                <th className="text-right px-2 text-sky-300">Bank</th>
                 <th className="text-right pl-2 text-gold-brand">In drawers</th>
               </tr>
             </thead>
             <tbody>
               {segments.map(cat => {
                 const sold = todayCollectedByCategory[cat] || 0;
-                const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0 };
-                const left = sold - m.float - m.cash - m.owner;
+                const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+                const left = sold - m.float - m.cash - m.owner - m.bank;
                 return (
                   <tr key={cat} className={`border-t border-white/5 ${cat === selected ? 'text-white' : 'text-zinc-400'}`}>
                     <td className="py-1.5 pr-2">{cat}</td>
@@ -684,6 +731,7 @@ export default function CategoryRegister({
                     <td className="text-right px-2 text-emerald-400">{formatCurrency(m.float)}</td>
                     <td className="text-right px-2 text-zinc-300">{formatCurrency(m.cash)}</td>
                     <td className="text-right px-2 text-amber-400">{formatCurrency(m.owner)}</td>
+                    <td className="text-right px-2 text-sky-300">{formatCurrency(m.bank)}</td>
                     <td className="text-right pl-2 font-black">{formatCurrency(Math.max(0, left))}</td>
                   </tr>
                 );
@@ -784,6 +832,24 @@ export default function CategoryRegister({
                 <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Customer Name</label>
                 <input type="text" value={creditName} onChange={e => setCreditName(e.target.value)}
                   placeholder="e.g. Nakato Sarah" autoFocus
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+                {creditName.trim() && (() => {
+                  const owes = owesFor(creditName);
+                  const typed = Math.max(0, Math.round(parseFloat(creditCap) || 0));
+                  const cap = typed > 0 ? typed : capFor(creditName);
+                  if (owes <= 0 && cap <= 0) return null;
+                  const over = cap > 0 && owes >= cap;
+                  return (
+                    <p className={`text-[10px] font-black uppercase mt-1 ${over ? 'text-rose-400' : 'text-zinc-500'}`}>
+                      Owes {formatCurrency(owes)}{cap > 0 ? ` / cap ${formatCurrency(cap)}` : ' • no cap set'}
+                    </p>
+                  );
+                })()}
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cap (optional)</label>
+                <input type="number" min="0" value={creditCap} onChange={e => setCreditCap(e.target.value)}
+                  placeholder={(() => { const c = capFor(creditName); return c > 0 ? String(c) : 'e.g. 50000'; })()}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
               </div>
               <div>
@@ -1006,7 +1072,7 @@ export default function CategoryRegister({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Collected today</p>
             <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(collectedToday)}</p>
@@ -1022,6 +1088,10 @@ export default function CategoryRegister({
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Cash / Owner</p>
             <p className="text-base font-black text-amber-400 font-display">{formatCurrency(cashOutToday + ownerOutToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Banked</p>
+            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(bankOutToday)}</p>
           </div>
         </div>
 

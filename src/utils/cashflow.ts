@@ -28,11 +28,12 @@ export interface DayCashInput {
   floatOut: number;
   cashOut: number;
   ownerOut: number;
+  bankOut?: number;
 }
 
 export interface DayCashResult extends DayCashInput {
   available: number; // opening + collected - drawerExpenses
-  movedOut: number; // float + cash + owner
+  movedOut: number; // float + cash + owner + bank
   unaccounted: number; // available - movedOut - closing
   status: 'balanced' | 'drawer-cash' | 'missing' | 'over-moved';
   message: string;
@@ -46,8 +47,9 @@ export function computeDayCash(input: DayCashInput): DayCashResult {
   const floatOut = Math.max(0, Math.round(input.floatOut || 0));
   const cashOut = Math.max(0, Math.round(input.cashOut || 0));
   const ownerOut = Math.max(0, Math.round(input.ownerOut || 0));
+  const bankOut = Math.max(0, Math.round(input.bankOut || 0));
   const available = openingCapital + collected - drawerExpenses;
-  const movedOut = floatOut + cashOut + ownerOut;
+  const movedOut = floatOut + cashOut + ownerOut + bankOut;
   const unaccounted = available - movedOut - closingCapital;
   let status: DayCashResult['status'] = 'balanced';
   let message = 'Every shilling is accounted for.';
@@ -71,6 +73,7 @@ export function computeDayCash(input: DayCashInput): DayCashResult {
     floatOut,
     cashOut,
     ownerOut,
+    bankOut,
     available,
     movedOut,
     unaccounted,
@@ -186,13 +189,14 @@ export function collectedByCategory(
 export function moneyOutByCategory(
   transfers: MomoTransfer[],
   dayKey: string,
-): Record<string, { float: number; cash: number; owner: number }> {
-  const map: Record<string, { float: number; cash: number; owner: number }> = {};
+): Record<string, { float: number; cash: number; owner: number; bank: number }> {
+  const map: Record<string, { float: number; cash: number; owner: number; bank: number }> = {};
   for (const t of transfers) {
     if (localDayKey(t.createdAt) !== dayKey) continue;
-    const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0 });
+    const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, bank: 0 });
     if (t.to === 'cash') d.cash += t.amount || 0;
     else if (t.to === 'owner') d.owner += t.amount || 0;
+    else if (t.to === 'bank') d.bank += t.amount || 0;
     else d.float += t.amount || 0;
   }
   return map;
@@ -488,7 +492,7 @@ export function buildTheftFlags(args: {
   categories: string[];
   collected: Record<string, number>;
   drawerExpenses: Record<string, number>;
-  moneyOut: Record<string, { float: number; cash: number; owner: number }>;
+  moneyOut: Record<string, { float: number; cash: number; owner: number; bank?: number }>;
   eodCapital?: Record<string, number>;
   sales: Sale[];
   products: Product[];
@@ -500,7 +504,7 @@ export function buildTheftFlags(args: {
   for (const cat of args.categories) {
     const opening = getOpeningCapital(args.dayKey, cat, args.eodCapital);
     const closing = getClosingCapital(args.dayKey, cat, args.eodCapital);
-    const m = args.moneyOut[cat] || { float: 0, cash: 0, owner: 0 };
+    const m = args.moneyOut[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
     const r = computeDayCash({
       category: cat,
       dayKey: args.dayKey,
@@ -511,6 +515,7 @@ export function buildTheftFlags(args: {
       floatOut: m.float,
       cashOut: m.cash,
       ownerOut: m.owner,
+      bankOut: m.bank || 0,
     });
     if (r.status === 'missing') {
       flags.push({

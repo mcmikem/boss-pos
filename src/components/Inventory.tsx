@@ -63,6 +63,26 @@ export default function Inventory({
   
   const [stockAdjustment, setStockAdjustment] = useState<number>(0);
   const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
+  // Why the stock moved — logged to a per-device journal so "where did 10
+  // sodas go?" always has an answer (damage, theft, gifts, miscounts).
+  const [adjustReason, setAdjustReason] = useState('');
+  const ADJUST_REASONS: Record<string, string[]> = {
+    add: ['Restock purchase', 'Found stock', 'Transfer in'],
+    remove: ['Damaged', 'Expired', 'Stolen', 'Given free', 'Miscount'],
+    set: ['Stock-take count', 'Miscount correction'],
+  };
+  interface AdjustEntry { ts: string; productId: string; name: string; type: string; qty: number; reason: string }
+  const readAdjustLog = (): AdjustEntry[] => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('boss_pos_adjust_log') || '[]');
+      return Array.isArray(raw) ? raw : [];
+    } catch { return []; }
+  };
+  const logAdjustment = (e: AdjustEntry) => {
+    try {
+      localStorage.setItem('boss_pos_adjust_log', JSON.stringify([e, ...readAdjustLog()].slice(0, 100)));
+    } catch {}
+  };
   // Cash paid for arriving stock — saved as a Stock Purchase expense in the
   // same tap, so stock and money can never drift apart. Empty = no expense.
   const [stockPaid, setStockPaid] = useState('');
@@ -276,6 +296,7 @@ export default function Inventory({
     setEditRecipe(product.recipe ? JSON.parse(JSON.stringify(product.recipe)) : null);
     setStockAdjustment(0);
     setAdjustmentType('add');
+    setAdjustReason('');
     setStockPaid('');
     setConfirmDelete(false);
   };
@@ -317,21 +338,31 @@ export default function Inventory({
 
     let finalStock = editingProduct.stockQty;
     let receivedQty = 0;
+    let movedQty = 0;
     if (editIsService) {
       // Services hold no stock, ever — wipe any legacy balance.
       finalStock = 0;
     } else if (editCategory !== 'Eatery' && (stockAdjustment > 0 || adjustmentType === 'set')) {
       if (adjustmentType === 'set') {
         finalStock = Math.max(0, stockAdjustment);
+        movedQty = stockAdjustment;
         triggerToast(`Set stock to ${finalStock}`, 'success');
       } else if (adjustmentType === 'add') {
         finalStock = Math.round((finalStock + stockAdjustment) * 1000) / 1000;
         receivedQty = stockAdjustment;
+        movedQty = stockAdjustment;
         triggerToast(`Added ${stockAdjustment} units!`, 'success');
       } else {
         finalStock = Math.max(0, Math.round((finalStock - stockAdjustment) * 1000) / 1000);
+        movedQty = stockAdjustment;
         triggerToast(`Removed ${stockAdjustment} units`, 'info');
       }
+      // Journal the why (default reason per button so it is never blank).
+      const reason = adjustReason || (ADJUST_REASONS[adjustmentType]?.[0] || 'Adjusted');
+      logAdjustment({
+        ts: new Date().toISOString(), productId: editingProduct.id, name: nameTrimmed,
+        type: adjustmentType, qty: movedQty, reason,
+      });
     }
 
     const cleanVariants = editVariants
@@ -732,13 +763,22 @@ export default function Inventory({
           <div className="mt-2 space-y-1.5">
             {staleList.slice(0, 20).map(({ product, daysSince }) => (
               <div key={product.id} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold text-white uppercase truncate">{product.name}</p>
                   <p className="text-[10px] text-zinc-500 font-bold uppercase">
-                    {daysSince === null ? 'Never sold' : `${daysSince}d no sale`} • {product.stockQty} left
+                    {daysSince === null ? 'Never sold' : `${daysSince}d no sale`} • {product.stockQty} left • was {formatCurrency(product.price)}
                   </p>
                 </div>
                 <p className="text-xs font-black text-amber-300 shrink-0 tabular-nums">{formatCurrency((product.cost || 0) * Math.max(0, product.stockQty))}</p>
+                <button onClick={() => {
+                    const next = Math.max(0, Math.round(product.price * 0.8));
+                    onUpdateProduct({ ...product, price: next });
+                    triggerToast(`${product.name} cut to ${formatCurrency(next)} (−20%)`, 'success');
+                  }}
+                  title={`Cut ${product.name} price by 20% to clear it`}
+                  className="shrink-0 h-9 px-3 bg-amber-950/40 border border-amber-600/40 text-amber-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-amber-950/60 active:scale-95 transition-all cursor-pointer">
+                  −20%
+                </button>
               </div>
             ))}
             {staleList.length > 20 && (
@@ -1432,6 +1472,21 @@ export default function Inventory({
                     <span className="text-[10px] text-zinc-600 font-bold uppercase">logs a Stock Purchase</span>
                   </div>
                 )}
+                {(stockAdjustment > 0 || adjustmentType === 'set') && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-500 font-bold uppercase">Why:</span>
+                    <select value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)}
+                      className="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-200 rounded-lg h-8 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
+                      <option value="">{ADJUST_REASONS[adjustmentType]?.[0] || 'Adjusted'} (default)</option>
+                      {ADJUST_REASONS[adjustmentType]?.slice(1).map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                )}
+                {editingProduct && readAdjustLog().filter(e => e.productId === editingProduct.id).slice(0, 3).map(e => (
+                  <p key={e.ts + e.qty} className="text-[10px] text-zinc-600 font-bold uppercase">
+                    {new Date(e.ts).toLocaleDateString()} • {e.type} {e.qty} • {e.reason}
+                  </p>
+                ))}
               </div>
             )}
 

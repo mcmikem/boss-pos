@@ -72,11 +72,12 @@ export default function Dashboard({
     .reduce((acc, s) => acc + s.total, 0);
 
   // Sente z'Esimu = MoMo sales + money moved onto the phone today (Float +
-  // Cash destinations from Close day). Owner payouts leave the phone, so they
-  // are excluded. Previously this tile only counted MoMo sales, so cash moved
-  // to float never showed up here.
+  // Cash destinations from Close day). Owner payouts and bank deposits leave
+  // the phone, so they are excluded. Previously this tile only counted MoMo
+  // sales, so cash moved to float never showed up here.
   const phoneTopUpToday = momoTransfers
-    .filter(t => localDayKey(t.createdAt) === todayStr && (t.to || 'float') !== 'owner')
+    .filter(t => (t.to || 'float') === 'float' || t.to === 'cash')
+    .filter(t => localDayKey(t.createdAt) === todayStr)
     .reduce((acc, t) => acc + (t.amount || 0), 0);
   const momoTotal = momoCollected + phoneTopUpToday;
 

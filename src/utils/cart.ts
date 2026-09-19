@@ -18,6 +18,7 @@ export function expectedLinePrice(item: SaleItem, products: Product[]): number |
 // Reconcile cart lines against current catalog pricing (e.g. another till
 // changed a price mid-sale). Variant-aware: a chapati line priced from its
 // variant must never be "corrected" down to the base product price.
+// Per-line discounts survive repricing (clamped to the new gross).
 export function reconcileCartPrices(
   cart: SaleItem[],
   products: Product[],
@@ -27,7 +28,8 @@ export function reconcileCartPrices(
     const want = expectedLinePrice(item, products);
     if (want === null || want === item.unitPrice) return item;
     changed = true;
-    return { ...item, unitPrice: want, lineTotal: item.qty * want };
+    const disc = Math.min(Math.max(0, item.lineDiscount || 0), want * item.qty);
+    return { ...item, unitPrice: want, lineDiscount: disc, lineTotal: Math.max(0, Math.round(want * item.qty - disc)) };
   });
   return { cart: changed ? next : cart, changed };
 }

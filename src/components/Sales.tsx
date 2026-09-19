@@ -273,6 +273,21 @@ export default function Sales({
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  // Quote follow-up: stale price lists (3+ days, never converted) get one
+  // bell nudge per day — quotes rot silently otherwise.
+  useEffect(() => {
+    if (quotes.length === 0) return;
+    try {
+      const now = Date.now();
+      const stale = quotes.filter(q => now - Date.parse(q.createdAt) >= 3 * 86400000);
+      if (stale.length === 0) return;
+      const first = stale.slice(0, 2).map(q => `${q.customerName || 'No name'} (${formatCurrency(q.total)})`).join(', ');
+      pushNotice('info', `${stale.length} quote${stale.length !== 1 ? 's' : ''} waiting 3+ days`,
+        `${first}${stale.length > 2 ? ` +${stale.length - 2} more` : ''} — open Quotes, follow up, convert to sales.`,
+        `quotes-stale:${dayKeyOf()}`);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quotes.length]);
   // Till language for the sell screen (Luganda mid-sale, English elsewhere).
   const lang = settings?.language;
   // Last-used payment method wins per device (a MoMo-heavy till stays on
@@ -376,6 +391,13 @@ export default function Sales({
         label: 'Sell custom',
         onClick: () => setIsCustomChargeOpen(true),
       });
+      // Restock nudge: one bell reminder per product per day so the shelf
+      // gap survives the rush and gets refilled from Stock later.
+      try {
+        pushNotice('info', `${product.name} is out of stock`,
+          `Tapped ${product.stockQty} left on ${dayKeyOf()}. Restock from Inventory so tomorrow's sales aren't lost.`,
+          `oos:${product.id}:${dayKeyOf()}`);
+      } catch {}
       return;
     }
     // Expiry guard: never sell expired stock; warn when expiring soon.
@@ -411,6 +433,8 @@ export default function Sales({
   };
 
   const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean, saleUnit?: string) => {
+    const netLine = (q: number, unit: number, disc: number) =>
+      Math.max(0, Math.round(q * unit - Math.min(Math.max(0, disc), q * unit)));
     setCart(prev => {
       const key = `${productId}::${variantId || ''}`;
       const existing = prev.find(i => `${i.productId}::${i.variantId || ''}` === key);
@@ -420,16 +444,17 @@ export default function Sales({
           triggerToast(`Cannot exceed remaining stock (${stockQty})!`, 'error');
           return prev;
         }
+        const disc = Math.min(existing.lineDiscount || 0, nextQty * unitPrice);
         return prev.map(item =>
           `${item.productId}::${item.variantId || ''}` === key
-            ? { ...item, qty: nextQty, lineTotal: nextQty * unitPrice }
+            ? { ...item, qty: nextQty, lineDiscount: disc, lineTotal: netLine(nextQty, unitPrice, disc) }
             : item
         );
       }
       return [...prev, {
         productId, variantId: variantId || undefined, variantLabel: variantLabel || undefined,
         productName: variantLabel ? `${productName} — ${variantLabel}` : productName,
-        qty, unitPrice, unitCost, lineTotal: unitPrice * qty, saleUnit,
+        qty, unitPrice, unitCost, lineTotal: netLine(qty, unitPrice, 0), lineDiscount: 0, saleUnit,
       } as SaleItem];
     });
   };
@@ -486,11 +511,34 @@ export default function Sales({
           triggerToast(`Cannot exceed remaining stock (${product.stockQty})!`, 'error');
           return item;
         }
-        return { ...item, qty: nextQty, lineTotal: nextQty * item.unitPrice };
+        const disc = Math.min(item.lineDiscount || 0, nextQty * item.unitPrice);
+        return { ...item, qty: nextQty, lineDiscount: disc, lineTotal: Math.max(0, Math.round(nextQty * item.unitPrice - disc)) };
       }
       return item;
     }).filter(Boolean) as SaleItem[]);
     setRemoveConfirmId(null);
+  };
+
+  // Per-line haggle: knock UGX off one row (empty clears). Clamped to the
+  // line gross so a line can never go negative. Shows as "−X off" on the row.
+  const handleLineDiscount = (productId: string, variantId: string | undefined) => {
+    const key = `${productId}::${variantId || ''}`;
+    const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
+    if (!item) return;
+    const gross = Math.round(item.qty * item.unitPrice);
+    const raw = window.prompt(`Discount off ${item.productName} (UGX, max ${gross.toLocaleString()})? Empty clears.`, item.lineDiscount ? String(item.lineDiscount) : '');
+    if (raw === null) return;
+    const val = Math.round(parseFloat(raw) || 0);
+    if (val < 0 || val > gross) {
+      triggerToast(`Enter 0 – ${gross.toLocaleString()} UGX`, 'error');
+      return;
+    }
+    setCart(prev => prev.map(i =>
+      `${i.productId}::${i.variantId || ''}` === key
+        ? { ...i, lineDiscount: val, lineTotal: gross - val }
+        : i
+    ));
+    triggerToast(val > 0 ? `−${formatCurrency(val)} off ${item.productName}` : `Line discount cleared`, val > 0 ? 'success' : 'info');
   };
 
   // Direct qty edit (tap the qty pill → type → Enter). Takes the RAW string so
@@ -514,11 +562,13 @@ export default function Sales({
       setEditingItemId(null);
       return;
     }
-    setCart(prev => prev.map(item =>
-      `${item.productId}::${item.variantId || ''}` === key
-        ? { ...item, qty: val, lineTotal: val * item.unitPrice }
-        : item
-    ));
+    setCart(prev => prev.map(item => {
+      if (`${item.productId}::${item.variantId || ''}` === key) {
+        const disc = Math.min(item.lineDiscount || 0, val * item.unitPrice);
+        return { ...item, qty: val, lineDiscount: disc, lineTotal: Math.max(0, Math.round(val * item.unitPrice - disc)) };
+      }
+      return item;
+    }));
     setEditingItemId(null);
   };
 
@@ -792,6 +842,7 @@ export default function Sales({
           <div className="min-w-0">
             <span className="text-sm font-semibold text-zinc-100 truncate max-w-[180px] block leading-snug" title={item.productName}>{item.productName}</span>
             {item.variantLabel && <span className="text-[11px] text-zinc-500 font-medium block truncate">{item.variantLabel}</span>}
+            {(item.lineDiscount || 0) > 0 && <span className="text-[11px] text-purple-300 font-bold block tabular-nums">−{formatCurrency(item.lineDiscount || 0)} off</span>}
           </div>
           <p className="text-sm font-bold text-gold-brand font-display shrink-0">{formatCurrency(item.lineTotal)}</p>
         </div>
@@ -818,6 +869,9 @@ export default function Sales({
             </button>
           )}
           <div className="flex items-center gap-1.5">
+            <button onClick={() => handleLineDiscount(item.productId, item.variantId)}
+              title="Discount off this line only" aria-label={`Discount off ${item.productName}`}
+              className={`touch-target rounded-lg flex items-center justify-center transition-all cursor-pointer text-xs font-black ${(item.lineDiscount || 0) > 0 ? 'bg-purple-950/40 text-purple-300 border border-purple-600/40' : 'bg-zinc-900 text-zinc-500 hover:text-purple-300'}`}>%</button>
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
               aria-label={`Decrease quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Minus className="w-4 h-4" /></button>
@@ -858,7 +912,9 @@ export default function Sales({
         <div className="min-w-0 flex-1">
           <h4 className="text-sm font-semibold text-zinc-100 truncate max-w-[160px] leading-snug" title={item.productName}>{item.productName}</h4>
           {item.variantLabel && <p className="text-[11px] text-zinc-500 font-medium truncate">{item.variantLabel}</p>}
-          <p className="text-xs text-gold-brand font-bold mt-0.5 tabular-nums">{formatCurrency(item.lineTotal)}</p>
+          <p className="text-xs text-gold-brand font-bold mt-0.5 tabular-nums">{formatCurrency(item.lineTotal)}
+            {(item.lineDiscount || 0) > 0 && <span className="text-purple-300"> • −{formatCurrency(item.lineDiscount || 0)}</span>}
+          </p>
         </div>
         {isEditing ? (
           <div className="flex items-center gap-1.5 shrink-0">
@@ -876,6 +932,9 @@ export default function Sales({
           </div>
         ) : (
           <div className="flex items-center gap-1.5 shrink-0">
+            <button onClick={() => handleLineDiscount(item.productId, item.variantId)}
+              title="Discount off this line only" aria-label={`Discount off ${item.productName}`}
+              className={`touch-target rounded-xl flex items-center justify-center text-xs font-black cursor-pointer ${((item.lineDiscount || 0) > 0) ? 'bg-purple-950/40 text-purple-300 border border-purple-600/40' : 'bg-zinc-900 text-zinc-500'}`}>%</button>
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
               aria-label={`Decrease quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
@@ -1829,6 +1888,7 @@ export default function Sales({
         products={products}
         cart={cart}
         formatCurrency={formatCurrency}
+        orderDiscount={discountNum}
       />
 
       {/* Variant picker */}

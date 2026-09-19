@@ -1,8 +1,8 @@
 // Boss morning briefing: one glance before the day starts — sold today vs
 // yesterday, who still owes (credit), what is running out, what hasn't
 // synced. Manager-only, every tile jumps to the screen that fixes it.
-import { useMemo } from 'react';
-import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown } from 'lucide-react';
 import type { Sale, CreditEat, Product } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
@@ -27,12 +27,34 @@ function greeting(): string {
 }
 
 export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal }: MorningBriefProps) {
+  // Minimisable: cashiers short on space collapse it; choice sticks per device.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_brief_collapsed') === '1'; } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      try { localStorage.setItem('boss_pos_brief_collapsed', prev ? '0' : '1'); } catch {}
+      return !prev;
+    });
+  };
   const brief = useMemo(() => {
     const today = localDayKey(new Date().toISOString());
     const yesterday = localDayKey(new Date(Date.now() - 86400000).toISOString());
     const t = revenueOnDay(sales, today, localDayKey);
     const y = revenueOnDay(sales, yesterday, localDayKey);
     const stockout = stockoutLosses(products, sales, 7, today);
+    // Seller of the day: top revenue among named sellers today.
+    const bySeller = new Map<string, { name: string; total: number; count: number }>();
+    for (const s of sales) {
+      if (s.refunded || localDayKey(s.timestamp) !== today) continue;
+      const name = (s.staffName || '').trim();
+      if (!name) continue;
+      const cur = bySeller.get(name) || { name, total: 0, count: 0 };
+      cur.total += s.total;
+      cur.count += 1;
+      bySeller.set(name, cur);
+    }
+    const topSeller = Array.from(bySeller.values()).sort((a, b) => b.total - a.total)[0] || null;
     return {
       today: t,
       delta: dayDelta(t.revenue, y.revenue),
@@ -40,6 +62,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       low: lowStockCount(products),
       expiring: expiringCount(products, todayLocalKey()),
       stockout,
+      topSeller,
     };
   }, [sales, products, creditEats]);
 
@@ -82,12 +105,31 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
 
   return (
     <section className="boss-card p-4 rounded-2xl mb-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Sunrise className="w-4 h-4 text-gold-brand" />
-        <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">
+      <div className="flex items-center gap-2">
+        <Sunrise className="w-4 h-4 text-gold-brand shrink-0" />
+        <h3 className="text-xs font-black text-white uppercase tracking-widest font-display flex-1 min-w-0 truncate">
           {greeting()} — today at a glance
         </h3>
+        {collapsed && (
+          <span className="text-[10px] font-black text-gold-brand tabular-nums shrink-0">{formatCurrency(brief.today.revenue)}</span>
+        )}
+        <button onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expand today at a glance' : 'Minimise today at a glance'}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expand' : 'Minimise'}
+          className="w-8 h-8 rounded-lg bg-[#0A0A0A] border border-white/10 text-zinc-400 hover:text-gold-brand hover:border-gold-brand/40 flex items-center justify-center shrink-0 transition-all cursor-pointer">
+          <ChevronDown className={`w-4 h-4 transition-transform ${collapsed ? '' : 'rotate-180'}`} />
+        </button>
       </div>
+      {!collapsed && (
+      <>
+      <div className="mt-3">
+      {brief.topSeller && brief.topSeller.count > 0 && (
+        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 truncate">
+          ★ Seller of the day: <span className="text-gold-brand">{brief.topSeller.name}</span>
+          <span className="text-zinc-500"> • {formatCurrency(brief.topSeller.total)} ({brief.topSeller.count} sale{brief.topSeller.count !== 1 ? 's' : ''})</span>
+        </p>
+      )}
       {dailyGoal !== undefined && dailyGoal > 0 && (
         <div className="mb-3" title={`Daily goal: ${dailyGoal} sales`}>
           <div className="flex items-center justify-between mb-1">
@@ -131,6 +173,9 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
             Out of {brief.stockout.lines[0]?.product.name}{brief.stockout.lines.length > 1 ? ` +${brief.stockout.lines.length - 1} more` : ''} — losing ~{formatCurrency(brief.stockout.total)}/day
           </span>
         </button>
+      )}
+      </div>
+      </>
       )}
     </section>
   );

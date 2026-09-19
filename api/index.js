@@ -3001,7 +3001,7 @@ function mapMomoTransfer(r) {
   return {
     id: r.id, category: r.category, amount: r.amount,
     comment: r.comment || '', createdAt: r.createdat,
-    to: ['float', 'cash', 'owner'].includes(r.to_type) ? r.to_type : 'float', sentBy: r.sentby || '',
+    to: ['float', 'cash', 'owner', 'bank'].includes(r.to_type) ? r.to_type : 'float', sentBy: r.sentby || '',
   };
 }
 

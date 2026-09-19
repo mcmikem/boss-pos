@@ -50,6 +50,40 @@ describe('computeDayCash', () => {
     });
     expect(r.status).toBe('over-moved');
   });
+
+  it('counts bank deposits as moved out', () => {
+    const r = computeDayCash({
+      category: 'Eatery',
+      dayKey: '2026-09-12',
+      openingCapital: 0,
+      closingCapital: 0,
+      collected: 50000,
+      drawerExpenses: 0,
+      floatOut: 20000,
+      cashOut: 0,
+      ownerOut: 0,
+      bankOut: 30000,
+    });
+    expect(r.movedOut).toBe(50000);
+    expect(r.unaccounted).toBe(0);
+    expect(r.status).toBe('balanced');
+  });
+
+  it('treats missing bankOut as zero (legacy callers)', () => {
+    const r = computeDayCash({
+      category: 'Eatery',
+      dayKey: '2026-09-12',
+      openingCapital: 0,
+      closingCapital: 0,
+      collected: 10000,
+      drawerExpenses: 0,
+      floatOut: 10000,
+      cashOut: 0,
+      ownerOut: 0,
+    });
+    expect(r.unaccounted).toBe(0);
+    expect(r.status).toBe('balanced');
+  });
 });
 
 describe('prevDayKey', () => {

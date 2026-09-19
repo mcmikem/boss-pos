@@ -75,6 +75,7 @@ export default function Analytics({
   settings
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
+  const [chartMetric, setChartMetric] = useState<'revenue' | 'profit'>('revenue');
   const [showHelp, setShowHelp] = useState(() => {
     try { return localStorage.getItem('boss_reports_help_seen') !== '1'; } catch { return true; }
   });
@@ -168,6 +169,29 @@ export default function Analytics({
     return filteredSales.reduce((acc, s) => acc + s.total, 0);
   }, [filteredSales]);
 
+  // Previous-period comparison: same length window right before this one.
+  const prevRevenue = useMemo(() => {
+    const inBranch = (s: { branch?: string }) => branchFilter === 'All' || (s.branch || '') === branchFilter;
+    if (timeFilter === 'Daily') {
+      const y = localDayKey(new Date(Date.now() - 86400000).toISOString());
+      return sales.filter(s => !s.refunded && localDayKey(s.timestamp) === y && inBranch(s)).reduce((a, s) => a + s.total, 0);
+    }
+    if (timeFilter === 'Weekly') {
+      const now = Date.now();
+      return sales.filter(s => {
+        if (s.refunded || !inBranch(s)) return false;
+        const ms = Date.parse(s.timestamp);
+        return ms >= now - 14 * 86400000 && ms < now - 7 * 86400000;
+      }).reduce((a, s) => a + s.total, 0);
+    }
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    const prevMonth = localMonthKey(d.toISOString());
+    return sales.filter(s => !s.refunded && localMonthKey(s.timestamp) === prevMonth && inBranch(s)).reduce((a, s) => a + s.total, 0);
+  }, [sales, timeFilter, branchFilter]);
+  const revenueDeltaPct = prevRevenue > 0 ? Math.round(((revenue - prevRevenue) / prevRevenue) * 100) : null;
+
   const cogs = useMemo(() => {
     return filteredSales.reduce((acc, s) => {
       return acc + s.items.reduce((itemAcc, item) => itemAcc + (item.unitCost * item.qty), 0);
@@ -214,6 +238,20 @@ export default function Analytics({
   const displayVat = serverWindowSummary && typeof serverWindowSummary.vatTotal === 'number'
     ? serverWindowSummary.vatTotal
     : filteredSales.reduce((a, s) => a + (s.tax || 0), 0);
+
+  // Profit per day (sales revenue − ingredient cost) for the Profit chart
+  // toggle. Client-side rows only — the server window has no per-day COGS.
+  const dailyProfitSeries = useMemo(() => {
+    const map = new Map<string, number>();
+    filteredSales.forEach(s => {
+      const k = localDayKey(s.timestamp);
+      const profit = s.total - s.items.reduce((a, i) => a + ((i.unitCost || 0) * i.qty), 0);
+      map.set(k, (map.get(k) || 0) + profit);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, val]) => ({ label: label.slice(5), val }));
+  }, [filteredSales]);
 
   const dailySeries = useMemo(() => {
     if (serverWindowSummary?.daily && serverWindowSummary.daily.length > 0) {
@@ -722,6 +760,11 @@ const colorsMap: { [key: string]: string } = {
               <p className="text-xs text-zinc-500 font-bold uppercase truncate">
                 Total sales{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''} • Tap Daily/Weekly/Monthly above
               </p>
+              {revenueDeltaPct !== null && (
+                <p className={`text-xs font-black uppercase mt-1 truncate tabular-nums ${revenueDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {revenueDeltaPct >= 0 ? '▲' : '▼'} {Math.abs(revenueDeltaPct)}% vs previous {timeFilter === 'Daily' ? 'day' : timeFilter === 'Weekly' ? 'week' : 'month'}
+                </p>
+              )}
               {displayVat > 0 && (
                 <p className="text-xs text-emerald-400 font-bold uppercase mt-1 truncate tabular-nums">VAT inside: {formatCurrency(displayVat)}</p>
               )}
@@ -755,7 +798,19 @@ const colorsMap: { [key: string]: string } = {
           <section className="boss-card p-5">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Sales Over Time</h3>
-              <TrendingUp className="w-4 h-4 text-gold-brand" />
+              <div className="flex items-center gap-2">
+                {timeFilter !== 'Daily' && (
+                  <div className="flex bg-[#0A0A0A] rounded-lg border border-white/5 overflow-hidden">
+                    {(['revenue', 'profit'] as const).map(m => (
+                      <button key={m} onClick={() => setChartMetric(m)}
+                        className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${chartMetric === m ? 'bg-gold-brand text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                        {m === 'revenue' ? 'Sales' : 'Profit'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <TrendingUp className="w-4 h-4 text-gold-brand" />
+              </div>
             </div>
             {timeFilter === 'Daily' ? (
               <div className="relative h-44 w-full bg-[#0A0A0A] p-4 border border-white/5 rounded-2xl overflow-hidden">
@@ -782,16 +837,18 @@ const colorsMap: { [key: string]: string } = {
               <div className="relative h-44 w-full bg-[#0A0A0A] p-4 border border-white/5 rounded-2xl overflow-hidden">
                 <div className="flex items-end justify-between gap-1 h-full">
                   {(() => {
-                    const dailyMax = Math.max(...dailySeries.map(x => x.val), 1000);
-                    return dailySeries.map((d, idx) => {
-                    const pct = dailyMax > 0 ? (d.val / dailyMax) * 100 : 0;
+                    const chartSeries = chartMetric === 'profit' ? dailyProfitSeries : dailySeries;
+                    const dailyMax = Math.max(...chartSeries.map(x => x.val), 1000);
+                    const peakColor = chartMetric === 'profit' ? 'bg-gradient-to-t from-emerald-700 to-emerald-400' : 'bg-gradient-to-t from-gold-medium to-gold-brand';
+                    return chartSeries.map((d, idx) => {
+                    const pct = dailyMax > 0 ? (Math.max(0, d.val) / dailyMax) * 100 : 0;
                     const isPeak = d.val === dailyMax;
                     return (
                       <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative">
                         <div className="absolute -top-7 bg-[#141414] border border-white/5 text-xs text-gold-brand px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none font-bold whitespace-nowrap">
                           {d.label}: {formatCurrency(d.val)}
                         </div>
-                        <div className={`w-full rounded-t transition-all duration-500 ${isPeak ? 'bg-gradient-to-t from-gold-medium to-gold-brand' : 'bg-zinc-800 group-hover:bg-zinc-700'}`}
+                        <div className={`w-full rounded-t transition-all duration-500 ${isPeak ? peakColor : 'bg-zinc-800 group-hover:bg-zinc-700'}`}
                           style={{ height: `${Math.max(pct, 4)}%` }}></div>
                         <span className="text-[9px] text-zinc-500 font-bold mt-1.5 truncate max-w-full">{d.label}</span>
                       </div>

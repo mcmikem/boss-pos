@@ -77,6 +77,7 @@ export interface SaleItem {
   variantId?: string;
   variantLabel?: string;
   saleUnit?: string; // snapshot of the product's per-unit label at sale time
+  lineDiscount?: number; // UGX knocked off this line (per-line haggle); lineTotal is net
 }
 
 export interface Sale {
@@ -171,7 +172,7 @@ export interface MomoTransfer {
   amount: number;
   comment: string;
   createdAt: string;
-  to?: 'float' | 'cash' | 'owner';
+  to?: 'float' | 'cash' | 'owner' | 'bank';
   sentBy?: string;
 }
 
