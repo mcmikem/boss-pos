@@ -82,6 +82,17 @@ export default function Analytics({
 
   // Design & print orders contribute realized revenue when delivered. Fetched
   // here (not via props) so Reports always shows fresh numbers.
+  // Dedupe: handovers rung as real sales carry a `Design order <id>` note —
+  // those orders must NOT also count via the legacy estimate below.
+  const designLinkedIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of sales) {
+      if (s.refunded) continue;
+      const m = /Design order (\S+)/.exec(s.notes || '');
+      if (m) set.add(m[1]);
+    }
+    return set;
+  }, [sales]);
   const [designOrders, setDesignOrders] = useState<DesignOrder[]>([]);
   useEffect(() => {
     let active = true;
@@ -209,8 +220,8 @@ export default function Analytics({
 
   // Delivered design & print orders count as realized revenue + profit.
   const designOrdersInWindow = useMemo(() => {
-    return designOrders.filter(o => o.status === 'delivered' && timeRange.filter(o.createdAt));
-  }, [designOrders, timeRange]);
+    return designOrders.filter(o => o.status === 'delivered' && timeRange.filter(o.createdAt) && !designLinkedIds.has(o.id));
+  }, [designOrders, timeRange, designLinkedIds]);
 
   const designRevenue = useMemo(() => {
     return designOrdersInWindow.reduce((acc, o) => acc + o.totalAmount, 0);

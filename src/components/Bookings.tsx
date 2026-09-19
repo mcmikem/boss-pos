@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { CalendarCheck, Plus, X, Search, ChevronRight, RotateCcw } from 'lucide-react';
-import type { Booking } from '../types';
+import SettleSheet from './SettleSheet';
+import type { Booking, Sale } from '../types';
 import { bookingApi } from '../api';
+import { ringServiceSale } from '../utils/serviceSale';
 import { todayLocalKey } from '../utils/dates';
 import { DEFAULT_BOOKING_MIN, findOverlap } from '../utils/bookings';
 
@@ -13,11 +15,17 @@ const STATUS_CFG: Record<string, { label: string; color: string; bg: string; dot
 
 interface BookingsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onAddSale?: (sale: Sale) => void;
+  staffName?: string;
+  tillBranch?: string;
+  formatCurrency?: (val: number) => string;
 }
 
 // Salon / barbershop appointment book. Who is coming, when, for what, and
 // what is already paid — the till still rings the actual sale at the chair.
-export default function Bookings({ triggerToast }: BookingsProps) {
+export default function Bookings({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency }: BookingsProps) {
+  const [settleId, setSettleId] = useState<string | null>(null);
+  const fmt = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('today');
@@ -122,18 +130,58 @@ export default function Bookings({ triggerToast }: BookingsProps) {
       } else {
         const created = await bookingApi.create(booking);
         setBookings(prev => [created, ...prev]);
-        triggerToast('Booking added', 'success');
+        if (created.deposit > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'booking-service',
+            label: `Booking: ${created.service}`,
+            amount: created.deposit, method: 'Cash',
+            customerName: created.customerName,
+          });
+          triggerToast(`Deposit ${fmt(created.deposit)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Booking added', 'success');
+        }
       }
       setShowPanel(false);
     } catch { triggerToast('Failed to save booking', 'error'); }
   }
 
   async function setStatus(b: Booking, status: Booking['status']) {
+    const balance = Math.max(0, Math.round(b.price - (b.deposit || 0)));
+    if (status === 'done' && balance > 0 && onAddSale) {
+      setSettleId(b.id);
+      return;
+    }
     try {
       const result = await bookingApi.update({ ...b, status });
       setBookings(prev => prev.map(x => x.id === b.id ? result : x));
       triggerToast(`${b.customerName} → ${STATUS_CFG[status]?.label}`, status === 'done' ? 'success' : 'info');
     } catch { triggerToast('Failed to update booking', 'error'); }
+  }
+
+  async function settleAndDone(b: Booking, method: Sale['paymentMethod']) {
+    const balance = Math.max(0, Math.round(b.price - (b.deposit || 0)));
+    setSettleId(null);
+    if (balance > 0 && onAddSale) {
+      await ringServiceSale({
+        onAddSale, staffName, tillBranch,
+        productId: 'booking-service',
+        label: `Booking: ${b.service}`,
+        amount: balance, method,
+        customerName: b.customerName,
+      });
+      triggerToast(
+        method === 'Credit / Book'
+          ? `${fmt(balance)} booked as credit — collect from ${b.customerName}`
+          : `Service ${fmt(balance)} rung`,
+        method === 'Credit / Book' ? 'info' : 'success',
+      );
+    }
+    try {
+      const result = await bookingApi.update({ ...b, status: 'done' });
+      setBookings(prev => prev.map(x => x.id === b.id ? result : x));
+    } catch { triggerToast('Sale recorded, but status failed to save — retry Done', 'error'); }
   }
 
   async function handleDelete(id: string) {
@@ -284,6 +332,22 @@ export default function Bookings({ triggerToast }: BookingsProps) {
           </div>
         </div>
       )}
+
+      {settleId && (() => {
+        const b = bookings.find(x => x.id === settleId);
+        if (!b) return null;
+        return (
+          <SettleSheet
+            customerName={b.customerName}
+            balance={Math.max(0, Math.round(b.price - (b.deposit || 0)))}
+            paid={b.deposit || 0}
+            pickupLabel="is done — settle the chair"
+            onPick={(method) => settleAndDone(b, method)}
+            onClose={() => setSettleId(null)}
+            formatCurrency={fmt}
+          />
+        );
+      })()}
     </div>
   );
 }

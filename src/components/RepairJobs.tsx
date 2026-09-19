@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Wrench, Plus, X, Search, ChevronRight, RotateCcw } from 'lucide-react';
-import type { RepairJob } from '../types';
+import SettleSheet from './SettleSheet';
+import type { RepairJob, Sale } from '../types';
 import { repairJobApi } from '../api';
+import { ringServiceSale } from '../utils/serviceSale';
 import { todayLocalKey } from '../utils/dates';
 
 const STATUS_CFG: Record<string, { label: string; color: string; bg: string; dot: string }> = {
@@ -15,12 +17,18 @@ const STATUS_ORDER = ['received', 'in_progress', 'ready', 'collected'];
 
 interface RepairJobsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  onAddSale?: (sale: Sale) => void;
+  staffName?: string;
+  tillBranch?: string;
+  formatCurrency?: (val: number) => string;
 }
 
 // Workshop / electronics intake: item in, fault, price, deposit, and a
 // received → in progress → ready → collected flow. The till still rings the
 // collection payment as a normal sale.
-export default function RepairJobs({ triggerToast }: RepairJobsProps) {
+export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency }: RepairJobsProps) {
+  const [settleId, setSettleId] = useState<string | null>(null);
+  const fmt = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
   const [jobs, setJobs] = useState<RepairJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('open');
@@ -112,7 +120,19 @@ export default function RepairJobs({ triggerToast }: RepairJobsProps) {
       } else {
         const created = await repairJobApi.create(job);
         setJobs(prev => [created, ...prev]);
-        triggerToast('Job booked in', 'success');
+        if (created.deposit > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'repair-service',
+            label: `Repair: ${created.itemLabel}${created.issue ? ` (${created.issue})` : ''}`,
+            amount: created.deposit, method: 'Cash',
+            customerName: created.customerName,
+            unitCost: created.partsCost || 0,
+          });
+          triggerToast(`Deposit ${fmt(created.deposit)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Job booked in', 'success');
+        }
       }
       setShowPanel(false);
     } catch { triggerToast('Failed to save job', 'error'); }
@@ -122,6 +142,11 @@ export default function RepairJobs({ triggerToast }: RepairJobsProps) {
     const idx = STATUS_ORDER.indexOf(j.status);
     if (idx === -1 || idx === STATUS_ORDER.length - 1) return;
     const next = STATUS_ORDER[idx + 1] as RepairJob['status'];
+    const balance = Math.round(j.price - (j.deposit || 0));
+    if (next === 'collected' && balance > 0 && onAddSale) {
+      setSettleId(j.id);
+      return;
+    }
     try {
       const result = await repairJobApi.update({
         ...j, status: next,
@@ -130,6 +155,31 @@ export default function RepairJobs({ triggerToast }: RepairJobsProps) {
       setJobs(prev => prev.map(x => x.id === j.id ? result : x));
       triggerToast(`${j.itemLabel} → ${STATUS_CFG[next]?.label}`, 'success');
     } catch { triggerToast('Failed to update job', 'error'); }
+  }
+
+  async function settleAndCollect(j: RepairJob, method: Sale['paymentMethod']) {
+    const balance = Math.round(j.price - (j.deposit || 0));
+    setSettleId(null);
+    if (balance > 0 && onAddSale) {
+      await ringServiceSale({
+        onAddSale, staffName, tillBranch,
+        productId: 'repair-service',
+        label: `Repair: ${j.itemLabel}${j.issue ? ` (${j.issue})` : ''}`,
+        amount: balance, method,
+        customerName: j.customerName,
+        unitCost: Math.max(0, (j.partsCost || 0) - (j.deposit || 0)),
+      });
+      triggerToast(
+        method === 'Credit / Book'
+          ? `${fmt(balance)} booked as credit — collect from ${j.customerName}`
+          : `Handover ${fmt(balance)} rung`,
+        method === 'Credit / Book' ? 'info' : 'success',
+      );
+    }
+    try {
+      const result = await repairJobApi.update({ ...j, status: 'collected' });
+      setJobs(prev => prev.map(x => x.id === j.id ? result : x));
+    } catch { triggerToast('Sale recorded, but status failed to save — retry Collect', 'error'); }
   }
 
   async function handleDelete(id: string) {
@@ -273,6 +323,22 @@ export default function RepairJobs({ triggerToast }: RepairJobsProps) {
           </div>
         </div>
       )}
+
+      {settleId && (() => {
+        const j = jobs.find(x => x.id === settleId);
+        if (!j) return null;
+        return (
+          <SettleSheet
+            customerName={j.customerName}
+            balance={Math.round(j.price - (j.deposit || 0))}
+            paid={j.deposit || 0}
+            pickupLabel="is collecting"
+            onPick={(method) => settleAndCollect(j, method)}
+            onClose={() => setSettleId(null)}
+            formatCurrency={fmt}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -1256,7 +1256,8 @@ export default function Sales({
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <DesignOrders triggerToast={triggerToast} />
+              <DesignOrders triggerToast={triggerToast} onAddSale={onAddSale}
+                staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>
         ) : showEateryPricing ? (
@@ -1290,7 +1291,8 @@ export default function Sales({
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <Bookings triggerToast={triggerToast} />
+              <Bookings triggerToast={triggerToast} onAddSale={onAddSale}
+                staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>
         ) : showRepairs ? (
@@ -1300,7 +1302,8 @@ export default function Sales({
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <RepairJobs triggerToast={triggerToast} />
+              <RepairJobs triggerToast={triggerToast} onAddSale={onAddSale}
+                staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>
         ) : showQuotes ? (

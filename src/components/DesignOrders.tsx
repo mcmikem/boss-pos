@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Palette, Plus, Calendar, X, Search, User, Layers, Ruler, Calculator, ChevronRight, RotateCcw, Printer, MessageCircle, FileText } from 'lucide-react';
-import type { DesignOrder } from '../types';
+import SettleSheet from './SettleSheet';
+import type { DesignOrder, Sale } from '../types';
 import { designOrderApi } from '../api';
+import { ringServiceSale } from '../utils/serviceSale';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import Sheet from './Sheet';
 
@@ -44,9 +46,19 @@ const RATE_PRESETS = [13000, 25000, 45000];
 interface DesignOrdersProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   shopName?: string;
+  onAddSale?: (sale: Sale) => void;
+  staffName?: string;
+  tillBranch?: string;
+  formatCurrency?: (val: number) => string;
 }
 
-export default function DesignOrders({ triggerToast, shopName = 'Design & Print' }: DesignOrdersProps) {
+// Trace tag on design sales so Reports counts each delivered order ONCE:
+// new handovers ring real sales (tagged), old ones keep the legacy estimate.
+export const DESIGN_SALE_TAG = (id: string) => `Design order ${id}`;
+
+export default function DesignOrders({ triggerToast, shopName = 'Design & Print', onAddSale, staffName, tillBranch, formatCurrency }: DesignOrdersProps) {
+  const [settleId, setSettleId] = useState<string | null>(null);
+  const fmtMoney = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
   const [orders, setOrders] = useState<DesignOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -236,16 +248,60 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
       } else {
         const created = await designOrderApi.create(order);
         setOrders(prev => [created, ...prev]);
-        triggerToast('Order created', 'success');
+        if (created.depositPaid > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'design-service',
+            label: `Design: ${created.designBrief}`,
+            amount: created.depositPaid, method: 'Cash',
+            customerName: created.customerName,
+            unitCost: (created.materialCost || 0) + (created.laborCost || 0) + (created.transportCost || 0),
+            note: DESIGN_SALE_TAG(created.id),
+          });
+          triggerToast(`Deposit ${fmtMoney(created.depositPaid)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Order created', 'success');
+        }
       }
       setShowPanel(false);
     } catch { triggerToast('Failed to save order', 'error'); }
+  }
+
+  async function settleAndDeliver(order: DesignOrder, method: Sale['paymentMethod']) {
+    const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
+    setSettleId(null);
+    if (balance > 0 && onAddSale) {
+      await ringServiceSale({
+        onAddSale, staffName, tillBranch,
+        productId: 'design-service',
+        label: `Design: ${order.designBrief}`,
+        amount: balance, method,
+        customerName: order.customerName,
+        unitCost: Math.max(0, (order.materialCost || 0) + (order.laborCost || 0) + (order.transportCost || 0) - (order.depositPaid || 0)),
+        note: DESIGN_SALE_TAG(order.id),
+      });
+      triggerToast(
+        method === 'Credit / Book'
+          ? `${fmtMoney(balance)} booked as credit — collect from ${order.customerName}`
+          : `Handover ${fmtMoney(balance)} rung`,
+        method === 'Credit / Book' ? 'info' : 'success',
+      );
+    }
+    try {
+      const result = await designOrderApi.update({ ...order, status: 'delivered' });
+      setOrders(prev => prev.map(o => o.id === order.id ? result : o));
+    } catch { triggerToast('Sale recorded, but status failed to save — retry Deliver', 'error'); }
   }
 
   async function advanceStatus(order: DesignOrder) {
     const idx = STATUS_ORDER.indexOf(order.status);
     if (idx === -1 || idx === STATUS_ORDER.length - 1) return;
     const next = STATUS_ORDER[idx + 1];
+    const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
+    if (next === 'delivered' && balance > 0 && onAddSale) {
+      setSettleId(order.id);
+      return;
+    }
     const updated: DesignOrder = {
       ...order,
       status: next as DesignOrder['status'],
@@ -1017,6 +1073,22 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
           </div>
         </div>
       )}
+
+      {/* ===== HANDOVER SETTLE: how was the balance paid? ===== */}
+      {settleId && (() => {
+        const order = orders.find(o => o.id === settleId);
+        if (!order) return null;
+        return (
+          <SettleSheet
+            customerName={order.customerName}
+            balance={Math.round(order.totalAmount - (order.depositPaid || 0))}
+            paid={order.depositPaid || 0}
+            onPick={(method) => settleAndDeliver(order, method)}
+            onClose={() => setSettleId(null)}
+            formatCurrency={fmtMoney}
+          />
+        );
+      })()}
 
       {/* FAB */}
       <button onClick={openCreate}

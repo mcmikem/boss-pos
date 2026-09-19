@@ -1,8 +1,10 @@
-import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
-import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw, Coins, Smartphone, BookOpen } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
 import Sheet from './Sheet';
+import SettleSheet from './SettleSheet';
 import type { TailoringOrder, Sale } from '../types';
-import { tailoringOrderApi, nextOrderNumber } from '../api';
+import { tailoringOrderApi } from '../api';
+import { ringServiceSale } from '../utils/serviceSale';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 
 const WORK_PRESETS: Record<string, string[]> = {
@@ -168,25 +170,14 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
   // One tailoring money movement = one real sale row (deposit at creation,
   // balance at handover). Unpaid handover = Credit/Book so collection survives.
   async function ringTailoringSale(order: TailoringOrder, amount: number, method: Sale['paymentMethod']) {
-    if (!onAddSale || amount <= 0) return;
-    let orderNumber = await nextOrderNumber();
-    if (!orderNumber) orderNumber = `Tailor #${Date.now().toString().slice(-6)}`;
-    onAddSale({
-      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      orderNumber,
-      timestamp: new Date().toISOString(),
-      items: [{
-        productId: 'tailor-service',
-        productName: `Tailoring: ${order.workDescription || order.workType}`,
-        qty: 1, unitPrice: Math.round(amount),
-        unitCost: Math.min(order.materialCost || 0, Math.round(amount)),
-        lineTotal: Math.round(amount),
-      }],
-      subtotal: Math.round(amount), tax: 0, total: Math.round(amount),
-      paymentMethod: method,
+    if (!onAddSale) return;
+    await ringServiceSale({
+      onAddSale, staffName, tillBranch,
+      productId: 'tailor-service',
+      label: `Tailoring: ${order.workDescription || order.workType}`,
+      amount, method,
       customerName: order.customerName,
-      staffName: staffName?.trim() || undefined,
-      branch: tillBranch || undefined,
+      unitCost: order.materialCost || 0,
     });
   }
 
@@ -612,39 +603,15 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       {settleId && (() => {
         const order = orders.find(o => o.id === settleId);
         if (!order) return null;
-        const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
-        const methods: { key: Sale['paymentMethod']; label: string; icon: ReactNode; cls: string }[] = [
-          { key: 'Cash', label: 'Cash', icon: <Coins className="w-4 h-4" />, cls: 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300 hover:bg-emerald-950/60' },
-          { key: 'MTN MoMo', label: 'MTN', icon: <Smartphone className="w-4 h-4" />, cls: 'bg-amber-950/40 border-amber-800/40 text-amber-300 hover:bg-amber-950/60' },
-          { key: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" />, cls: 'bg-rose-950/40 border-rose-800/40 text-rose-300 hover:bg-rose-950/60' },
-          { key: 'Credit / Book', label: 'Book it', icon: <BookOpen className="w-4 h-4" />, cls: 'bg-blue-950/40 border-blue-800/40 text-blue-300 hover:bg-blue-950/60' },
-        ];
         return (
-          <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onClick={() => setSettleId(null)}>
-            <div className="bg-[#141414] w-full max-w-md rounded-t-3xl border border-white/10 p-5 animate-slide-up"
-              onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-sm font-black text-white uppercase tracking-wider text-center">{order.customerName} is picking up</h3>
-              <p className="text-xs text-zinc-400 font-bold text-center mt-1 mb-4">
-                Balance <span className="text-gold-brand font-black text-base">{fmt(balance)}</span>
-                {order.depositPaid > 0 && <span className="text-zinc-500"> ({fmt(order.depositPaid)} already paid)</span>}
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {methods.map(m => (
-                  <button key={m.key} onClick={() => settleAndDeliver(order, m.key)}
-                    className={`h-12 rounded-2xl border text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer ${m.cls}`}>
-                    {m.icon} {m.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] text-zinc-600 font-bold uppercase text-center mt-3">
-                Cash/MoMo rings a sale now • Book it tracks the debt for collection
-              </p>
-              <button onClick={() => setSettleId(null)}
-                className="mt-3 w-full h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl cursor-pointer">
-                Not yet
-              </button>
-            </div>
-          </div>
+          <SettleSheet
+            customerName={order.customerName}
+            balance={Math.round(order.totalAmount - (order.depositPaid || 0))}
+            paid={order.depositPaid || 0}
+            onPick={(method) => settleAndDeliver(order, method)}
+            onClose={() => setSettleId(null)}
+            formatCurrency={fmt}
+          />
         );
       })()}
 
