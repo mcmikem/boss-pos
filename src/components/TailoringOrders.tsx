@@ -148,7 +148,14 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       if (editId) {
         const updated = await tailoringOrderApi.update(order);
         setOrders(prev => prev.map(o => o.id === editId ? updated : o));
-        triggerToast('Order updated', 'success');
+        // Deposit topped up on edit = fresh cash — ring the difference.
+        const topUp = Math.round((order.depositPaid || 0) - (existing?.depositPaid || 0));
+        if (topUp > 0 && onAddSale) {
+          await ringTailoringSale(updated, topUp, 'Cash');
+          triggerToast(`Top-up ${fmt(topUp)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Order updated', 'success');
+        }
       } else {
         const created = await tailoringOrderApi.create(order);
         setOrders(prev => [created, ...prev]);

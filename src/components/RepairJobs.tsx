@@ -116,7 +116,20 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
       if (editId) {
         const updated = await repairJobApi.update(job);
         setJobs(prev => prev.map(j => j.id === editId ? updated : j));
-        triggerToast('Job updated', 'success');
+        const topUp = Math.round((job.deposit || 0) - (existing?.deposit || 0));
+        if (topUp > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'repair-service',
+            label: `Repair: ${updated.itemLabel}`,
+            amount: topUp, method: 'Cash',
+            customerName: updated.customerName,
+            unitCost: updated.partsCost || 0,
+          });
+          triggerToast(`Top-up ${fmt(topUp)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Job updated', 'success');
+        }
       } else {
         const created = await repairJobApi.create(job);
         setJobs(prev => [created, ...prev]);

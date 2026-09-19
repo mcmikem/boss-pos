@@ -126,7 +126,19 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
       if (editId) {
         const updated = await bookingApi.update(booking);
         setBookings(prev => prev.map(b => b.id === editId ? updated : b));
-        triggerToast('Booking updated', 'success');
+        const topUp = Math.round((booking.deposit || 0) - (existing?.deposit || 0));
+        if (topUp > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'booking-service',
+            label: `Booking: ${updated.service}`,
+            amount: topUp, method: 'Cash',
+            customerName: updated.customerName,
+          });
+          triggerToast(`Top-up ${fmt(topUp)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Booking updated', 'success');
+        }
       } else {
         const created = await bookingApi.create(booking);
         setBookings(prev => [created, ...prev]);

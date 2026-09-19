@@ -244,7 +244,21 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
       if (editId) {
         const updated = await designOrderApi.update(order);
         setOrders(prev => prev.map(o => o.id === editId ? updated : o));
-        triggerToast('Order updated', 'success');
+        const topUp = Math.round((order.depositPaid || 0) - (existing?.depositPaid || 0));
+        if (topUp > 0 && onAddSale) {
+          await ringServiceSale({
+            onAddSale, staffName, tillBranch,
+            productId: 'design-service',
+            label: `Design: ${updated.designBrief}`,
+            amount: topUp, method: 'Cash',
+            customerName: updated.customerName,
+            unitCost: (updated.materialCost || 0) + (updated.laborCost || 0) + (updated.transportCost || 0),
+            note: DESIGN_SALE_TAG(updated.id),
+          });
+          triggerToast(`Top-up ${fmtMoney(topUp)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Order updated', 'success');
+        }
       } else {
         const created = await designOrderApi.create(order);
         setOrders(prev => [created, ...prev]);

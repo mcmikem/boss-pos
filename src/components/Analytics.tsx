@@ -119,6 +119,7 @@ export default function Analytics({
   // Two-tap delete: arm ("Sure?") before anything is removed.
   const [deleteExpConfirm, setDeleteExpConfirm] = useState<string | null>(null);
   const [expenseCatFilter, setExpenseCatFilter] = useState<string | null>(null);
+  const [saleSearch, setSaleSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState<string>('All');
   const branchOptions = useMemo(() => {
     const fromSettings = (settings.branches || []).filter(Boolean);
@@ -743,6 +744,32 @@ const colorsMap: { [key: string]: string } = {
             </section>
           )}
 
+          {(() => {
+            // Thin ice: stocked items earning under 20% — one supplier hike
+            // away from a loss. Worst first, top 8.
+            const thin = productProfitability
+              .filter(item => !item.isLossProduct && item.margin > 0 && item.margin < 20 && !item.product.isService && item.product.stockQty > 0)
+              .sort((a, b) => a.margin - b.margin)
+              .slice(0, 8);
+            if (thin.length === 0) return null;
+            return (
+              <section className="bg-amber-950/20 border border-amber-600/25 p-4 rounded-2xl">
+                <h4 className="text-sm font-black text-amber-300 uppercase tracking-wider font-display">
+                  Thin margins ({thin.length})
+                </h4>
+                <p className="text-xs text-zinc-400 mt-1">Earning under 20% — review price or supplier:</p>
+                <div className="mt-2 space-y-1">
+                  {thin.map(item => (
+                    <div key={item.product.id} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-zinc-300 truncate min-w-0"><span className="text-white font-bold uppercase">{item.product.name}</span></span>
+                      <span className="text-amber-300 font-black shrink-0 tabular-nums">+{item.margin.toFixed(0)}% • {formatCurrency(item.product.price)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
+
           {/* Credits Ledger — includes till credit sales AND Ababanjibwa Sente book */}
           <div className="lg:col-span-1">
             <CreditsLedger 
@@ -880,7 +907,16 @@ const colorsMap: { [key: string]: string } = {
                 {dailyBreakdown.length} {dailyBreakdown.length === 1 ? 'day' : 'days'} • Tap a day to open
               </span>
             </div>
-            <p className="text-xs text-zinc-500 font-bold uppercase mb-4 flex items-center gap-1"><Info className="w-3 h-3" /> Tap any day row to see its sales & expenses — Balance green = you kept money, red = you lost</p>
+            <p className="text-xs text-zinc-500 font-bold uppercase mb-3 flex items-center gap-1"><Info className="w-3 h-3" /> Tap any day row to see its sales & expenses — Balance green = you kept money, red = you lost</p>
+            <div className="relative mb-3">
+              <input type="text" value={saleSearch} onChange={(e) => setSaleSearch(e.target.value)}
+                placeholder="Search sales: customer, order #, item…"
+                className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 pl-4 pr-9 text-sm outline-none focus:border-gold-brand" />
+              {saleSearch && (
+                <button onClick={() => setSaleSearch('')} aria-label="Clear sales search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white p-1.5 cursor-pointer">✕</button>
+              )}
+            </div>
 
             <div className="space-y-2">
               {visibleDays.map(day => {
@@ -932,7 +968,13 @@ const colorsMap: { [key: string]: string } = {
                           <div>
                             <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Sales</p>
                             <div className="space-y-1.5">
-                              {day.sales.map(sale => (
+                              {day.sales.filter(sale => {
+                                const q = saleSearch.trim().toLowerCase();
+                                if (!q) return true;
+                                return (sale.customerName || '').toLowerCase().includes(q) ||
+                                  sale.orderNumber.toLowerCase().includes(q) ||
+                                  sale.items.some(i => i.productName.toLowerCase().includes(q));
+                              }).map(sale => (
                                 <div key={sale.id} className="flex items-center justify-between gap-2 bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <Receipt className="w-3.5 h-3.5 text-gold-light shrink-0" />
@@ -1046,6 +1088,46 @@ const colorsMap: { [key: string]: string } = {
               </div>
             </section>
           )}
+
+          {(() => {
+            // Regulars worth knowing: top named buyers + average basket.
+            const byCust = new Map<string, { name: string; total: number; count: number }>();
+            for (const s of filteredSales) {
+              const name = (s.customerName || '').trim();
+              if (!name) continue;
+              const cur = byCust.get(name.toLowerCase()) || { name, total: 0, count: 0 };
+              cur.total += s.total;
+              cur.count += 1;
+              byCust.set(name.toLowerCase(), cur);
+            }
+            const top = Array.from(byCust.values()).sort((a, b) => b.total - a.total).slice(0, 5);
+            const avgBasket = filteredSales.length > 0 ? revenue / filteredSales.length : 0;
+            if (top.length === 0 && avgBasket <= 0) return null;
+            return (
+              <section className="boss-card p-5">
+                <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1 flex items-center gap-2">
+                  <User className="w-4 h-4 text-gold-brand" /> Top Customers ({timeFilter})
+                </h3>
+                <p className="text-[10px] text-zinc-600 font-bold uppercase mb-3">
+                  Avg basket <span className="text-gold-brand font-black">{formatCurrency(avgBasket)}</span> • name buyers at the till to grow this list
+                </p>
+                <div className="space-y-1.5">
+                  {top.map((c, i) => (
+                    <div key={c.name.toLowerCase()} className="flex items-center justify-between gap-2 rounded-xl px-4 py-2.5 bg-[#0A0A0A] border border-white/5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${i === 0 ? 'bg-gold-brand text-black' : 'bg-zinc-800 text-zinc-300'}`}>
+                          {i + 1}
+                        </span>
+                        <span className="text-xs font-black text-white uppercase truncate">{c.name}</span>
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase shrink-0">{c.count} visit{c.count !== 1 ? 's' : ''}</span>
+                      </div>
+                      <span className="text-xs font-black text-gold-brand shrink-0 tabular-nums">{formatCurrency(c.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
 
           {/* Spending is logged in the Spend tab — no duplicate form here. */}
           <section className="grid grid-cols-1 gap-6">

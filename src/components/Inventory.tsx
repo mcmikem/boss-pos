@@ -14,6 +14,7 @@ import { staleProducts } from '../utils/stale';
 import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, supplierWhatsAppUrl } from '../utils/suppliers';
 import { parseProductsCsv, PRODUCTS_TEMPLATE, type ImportResult } from '../utils/csvImport';
 import { downloadBlob } from '../utils/download';
+import { getPriceHistory } from '../utils/priceHistory';
 
 interface InventoryProps {
   products: Product[];
@@ -58,6 +59,8 @@ export default function Inventory({
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'stock' | 'name' | 'price'>('stock');
+  // Expiring filter: show only dated items expiring within 30 days (or past).
+  const [expiringOnly, setExpiringOnly] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   
@@ -261,11 +264,16 @@ export default function Inventory({
   const processedProducts = useMemo(() => {
     let list = products.filter(p => {
       const q = searchQuery.toLowerCase();
-      return p.name.toLowerCase().includes(q) || 
+      return p.name.toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
         (p.barcode && p.barcode.toLowerCase().includes(q)) ||
         (p.imei && p.imei.toLowerCase().includes(q));
     });
+
+    if (expiringOnly) {
+      list = list.filter(p => !p.isService && p.expiryDate && expiryStatus(p.expiryDate) !== 'ok')
+        .sort((a, b) => (daysUntilExpiry(a.expiryDate) ?? 9999) - (daysUntilExpiry(b.expiryDate) ?? 9999));
+    }
 
     if (sortBy === 'stock') {
       list.sort((a, b) => a.stockQty - b.stockQty);
@@ -276,7 +284,7 @@ export default function Inventory({
     }
 
     return list;
-  }, [products, searchQuery, sortBy]);
+  }, [products, searchQuery, sortBy, expiringOnly]);
 
   const handleOpenEdit = (product: Product) => {
     setEditingProduct(product);
@@ -717,6 +725,10 @@ export default function Inventory({
             <option value="name">Name A-Z</option>
             <option value="price">Price High-Low</option>
           </select>
+          <button onClick={() => setExpiringOnly(v => !v)} aria-pressed={expiringOnly} title="Only items expiring within 30 days (or past)"
+            className={`h-12 px-4 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target ${expiringOnly ? 'bg-amber-950/40 border-amber-600/40 text-amber-300' : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+            {expiringOnly ? '✓ Expiring' : 'Expiring'}
+          </button>
         </div>
       </section>
 
@@ -1250,6 +1262,25 @@ export default function Inventory({
                   className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none font-bold" />
               </div>
             </div>
+            {editingProduct && (() => {
+              const hist = getPriceHistory(editingProduct.id).slice(0, 5);
+              if (hist.length === 0) return null;
+              return (
+                <details>
+                  <summary className="text-[10px] font-black text-zinc-500 uppercase tracking-widest cursor-pointer hover:text-zinc-300">
+                    Price history ({hist.length})
+                  </summary>
+                  <div className="mt-1.5 space-y-1">
+                    {hist.map((h, i) => (
+                      <p key={`${h.at}-${i}`} className="text-[11px] text-zinc-500 font-bold tabular-nums">
+                        {new Date(h.at).toLocaleDateString()} • {formatCurrency(h.oldPrice)} → <span className="text-zinc-200">{formatCurrency(h.newPrice)}</span>
+                        {h.by ? <span className="text-zinc-600"> • {h.by}</span> : null}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              );
+            })()}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1497,7 +1528,25 @@ export default function Inventory({
               </button>
             </div>
 
-            <div className="pt-3 border-t border-zinc-800">
+            <div className="pt-3 border-t border-zinc-800 space-y-2">
+              <button onClick={() => {
+                  if (!editingProduct) return;
+                  const copy: Product = {
+                    ...editingProduct,
+                    id: `prod-${Date.now()}`,
+                    name: `${editingProduct.name} (copy)`,
+                    stockQty: editingProduct.isService ? 0 : 0,
+                    barcode: undefined, imei: undefined,
+                    variants: editingProduct.variants?.map(v => ({ ...v, id: `${v.id}-copy-${Date.now().toString().slice(-4)}` })),
+                    recipe: editingProduct.recipe ? JSON.parse(JSON.stringify(editingProduct.recipe)) : undefined,
+                  };
+                  onAddProduct(copy);
+                  triggerToast(`Duplicated — edit "${copy.name}" and set stock`, 'success');
+                  setEditingProduct(null);
+                }}
+                className="w-full h-10 border border-zinc-800 hover:border-gold-brand/40 hover:text-gold-brand text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer">
+                <Plus className="w-4 h-4" /> Duplicate Product
+              </button>
               {!confirmDelete ? (
                 <button onClick={() => setConfirmDelete(true)} className="w-full h-10 border border-rose-900/40 hover:bg-rose-950/30 text-rose-400 font-bold uppercase tracking-wider text-xs rounded-xl flex items-center justify-center gap-2 transition-all">
                   <Trash2 className="w-4 h-4" /> Delete Product

@@ -14,6 +14,7 @@ import { verifyPinAgainstHash } from './utils/crypto';
 import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
 import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
+import { localDayKey, todayLocalKey } from './utils/dates';
 import { readSyncReview, clearSyncReview, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
@@ -1833,12 +1834,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     triggerToast(`Loaded items from previous ${lastSale.orderNumber}`, 'success');
   };
 
+  // Single-category shops (most shops!) only see their own world in Close
+  // day: segments come from products + book/production history, with Eatery
+  // as a fallback only when there is nothing at all — never a phantom tab.
   const registersSegments = useMemo(() => {
     const cats = new Set<string>();
     products.forEach(p => { if (p.category) cats.add(p.category); });
-    cats.add('Eatery');
+    creditEats.forEach(e => { if (e.category) cats.add(e.category); });
+    productionRegisters.forEach(r => { if (r.category) cats.add(r.category); });
+    if (cats.size === 0) cats.add('Eatery');
     return Array.from(cats).sort();
-  }, [products]);
+  }, [products, creditEats, productionRegisters]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -1850,6 +1856,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
               dailyGoal={settings.dailyGoalNum} />
           )}
+          {!isManager && staffConfigured && activeStaff && (() => {
+            // Cashiers can't open Reports — this strip is their self check-in.
+            const today = todayLocalKey();
+            const mine = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === activeStaff.name);
+            const total = mine.reduce((a, s) => a + s.total, 0);
+            if (mine.length === 0) return null;
+            return (
+              <section className="boss-card px-4 py-3 rounded-2xl mb-4 flex items-center gap-3">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
+                <p className="text-[11px] font-black text-zinc-300 uppercase tracking-wider flex-1 min-w-0 truncate">
+                  {activeStaff.name} today
+                </p>
+                <p className="text-xs font-black text-gold-brand tabular-nums shrink-0">
+                  {mine.length} sale{mine.length !== 1 ? 's' : ''} • {formatCurrency(total)}
+                </p>
+              </section>
+            );
+          })()}
           {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
               window.matchMedia('(display-mode: standalone)').matches ||
@@ -2514,6 +2538,26 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <option value="Bespoke Tailoring">Bespoke Tailoring</option>
                   <option value="General Store">General Store</option>
                 </select>
+                {settings.vibe !== 'General Store' && (
+                  <button onClick={() => {
+                    const presets: Record<string, { cats: string[]; tailoring?: boolean; design?: boolean }> = {
+                      'Eatery & Food': { cats: ['Eatery', 'Drinks'] },
+                      'Phone & Accessories': { cats: ['Phones', 'Accessories', 'Airtime'] },
+                      'Bespoke Tailoring': { cats: ['Tailoring'], tailoring: true },
+                    };
+                    const preset = presets[settings.vibe];
+                    if (!preset) return;
+                    if (!window.confirm(`Set this shop up for ${settings.vibe}?\n\nCategories become: ${preset.cats.join(', ')}.\nYour products stay — recategorize them in Stock afterwards.`)) return;
+                    try { localStorage.removeItem(NO_DRINKS_KEY); } catch {}
+                    setCategories(preset.cats);
+                    if (preset.tailoring) setSettings(prev => ({ ...prev, showTailoring: true }));
+                    if (preset.design) setSettings(prev => ({ ...prev, showDesign: true }));
+                    triggerToast(`Shop set for ${settings.vibe} — add your stock in Stock`, 'success');
+                  }}
+                    className="mt-2 w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border bg-gold-brand/10 border-gold-brand/40 text-gold-brand hover:bg-gold-brand/20 active:scale-[0.98]">
+                    Set up shop for {settings.vibe}
+                  </button>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Till language <SettingHelp label="Till language" text="Switches Sell, Expenses, Money, Reports and Close day between English and Luganda. Settings always stay in English." /></label>

@@ -175,6 +175,15 @@ export default function Sales({
   products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  // Hide sold-out rows on crowded tills (per device). Services always show.
+  const [inStockOnly, setInStockOnly] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_instock_only') === '1'; } catch { return false; }
+  });
+  // Single-category shops (the common case) skip the chips row entirely and
+  // sell straight from their one category — tools keyed off it keep working.
+  useEffect(() => {
+    if (categories.length === 1) setSelectedCategory(categories[0]);
+  }, [categories]);
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('boss_pos_pinned') || '[]'); } catch { return []; }
@@ -365,7 +374,10 @@ export default function Sales({
     setVisibleCount(30);
   }, [selectedCategory, searchQuery]);
 
-  const byCategory = useMemo(() => catalog.filter(p => selectedCategory === 'All' || p.category === selectedCategory), [catalog, selectedCategory]);
+  const byCategory = useMemo(() => catalog
+    .filter(p => selectedCategory === 'All' || p.category === selectedCategory)
+    .filter(p => !inStockOnly || p.isService || p.stockQty > 0),
+    [catalog, selectedCategory, inStockOnly]);
   // Forgiving search (#9): typo-tolerant (threshold 0.5, location-free) so
   // "chaptai", "ROLAX" or extra spaces still find chapati / rolex.
   const fuse = useMemo(() => new Fuse(byCategory, {
@@ -801,12 +813,14 @@ export default function Sales({
   };
 
   const convertQuote = (q: Quote) => {
-    setCart(q.items.map(i => ({ ...i })));
+    // Quotes go stale (price changed since) — reprice live like parked carts.
+    const { cart: fresh, changed } = reconcileCartPrices(q.items.map(i => ({ ...i })), catalog);
+    setCart(fresh);
     setCustomerName(q.customerName);
     setDiscountType('fixed');
     setDiscount(q.discount > 0 ? String(q.discount) : '');
     setShowQuotes(false);
-    triggerToast('Quote loaded — charge to complete the sale', 'success');
+    triggerToast(changed ? 'Quote loaded — prices updated to today’s' : 'Quote loaded — charge to complete the sale', changed ? 'info' : 'success');
   };
 
   // One-tap cash sale for street mode. Mirrors the core of handleCompleteSale
@@ -1151,7 +1165,17 @@ export default function Sales({
           </div>
         )}
 
-        {/* Categories */}
+        {/* In-stock filter for crowded catalogs (per device) */}
+        {catalog.some(p => !p.isService && p.stockQty <= 0) && (
+          <button onClick={() => setInStockOnly(v => { const n = !v; try { localStorage.setItem('boss_pos_instock_only', n ? '1' : '0'); } catch {} return n; })}
+            aria-pressed={inStockOnly} title="Hide sold-out items"
+            className={`self-start h-9 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 ${inStockOnly ? 'bg-emerald-950/40 border-emerald-600/40 text-emerald-300' : 'bg-[#141414]/60 border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+            {inStockOnly ? '✓ In stock only' : 'Show sold-out too'}
+          </button>
+        )}
+
+        {/* Categories — hidden for single-category shops (their world is the whole screen) */}
+        {categories.length > 1 && (
         <div className="relative -mx-4 min-w-0 max-w-[calc(100%+2rem)] overflow-hidden px-4 sm:mx-0 sm:max-w-none sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
@@ -1181,6 +1205,7 @@ export default function Sales({
               })}
           </section>
         </div>
+        )}
 
         {/* Trade tools: compact labeled chips in one scroll row — icon-only
             proved unreadable, full-width banners ate the screen. */}
