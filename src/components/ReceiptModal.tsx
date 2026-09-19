@@ -152,6 +152,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     '',
     `TOTAL: ${formatCurrency(sale.total)}`,
     `PAYMENT: ${sale.paymentMethod}${sale.customerName ? ` • ${sale.customerName}` : ''}`,
+    ...(sale.staffName ? [`SERVED BY: ${sale.staffName}`] : []),
     ...(fiscal.status === 'issued' && fiscal.fdn
       ? ['', `URA E-FISCAL RECEIPT`, `FDN: ${fiscal.fdn}`, ...(fiscal.invoiceNo ? [`INV: ${fiscal.invoiceNo}`] : []), ...(fiscal.verify ? [`VERIFY: ${fiscal.verify}`] : [])]
       : []),
@@ -237,6 +238,12 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
             <span>PAYMENT</span>
             <span>{sale.paymentMethod}{sale.customerName ? ` • ${sale.customerName}` : ''}</span>
           </div>
+          {sale.staffName && (
+            <div className="flex justify-between text-[11px] text-zinc-700 mt-1">
+              <span>SERVED BY</span>
+              <span>{sale.staffName}</span>
+            </div>
+          )}
           <div className="border-t border-dashed border-zinc-400 my-2" />
           <div className="text-center text-[10px] text-zinc-600">Thank you for your business!</div>
           {fiscal.status === 'issued' && fiscal.fdn && (

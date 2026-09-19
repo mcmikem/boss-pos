@@ -570,7 +570,7 @@ export default function Dashboard({
                       {sale.refunded && <span className="text-[10px] font-bold bg-rose-950/40 text-rose-400 px-2 py-0.5 border border-rose-800/30 rounded uppercase tracking-wider">Refunded</span>}
                     </div>
                     <p className="text-xs text-zinc-500 font-bold mt-0.5">
-                      {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.items.length} items{sale.customerName ? ` • ${sale.customerName}` : ''}
+                      {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.items.length} items{sale.customerName ? ` • ${sale.customerName}` : ''}{sale.staffName ? ` • ${sale.staffName}` : ''}
                     </p>
                   </div>
                 </div>

@@ -60,6 +60,10 @@ export function printReceipt(
       <td class="muted" style="padding-top:4px">PAYMENT</td>
       <td class="right muted" style="padding-top:4px">${escapeHtml(sale.paymentMethod)}${sale.customerName ? ' • ' + escapeHtml(sale.customerName) : ''}</td>
     </tr>
+    ${sale.staffName ? `<tr>
+      <td class="muted" style="padding-top:4px">SERVED BY</td>
+      <td class="right muted" style="padding-top:4px">${escapeHtml(sale.staffName)}</td>
+    </tr>` : ''}
   </table>
   <div class="divider"></div>
   <div class="center muted">Thank you for your business!</div>

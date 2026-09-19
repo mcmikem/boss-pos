@@ -11,11 +11,12 @@ interface ConfirmSaleModalProps {
   discountNum: number;
   paymentMethod: string;
   cashReceived?: string;
+  sellerName?: string;
   formatCurrency: (val: number) => string;
   lang?: unknown;
 }
 
-export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isCompleting = false, cart, total, discountNum, paymentMethod, cashReceived, formatCurrency, lang }: ConfirmSaleModalProps) {
+export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isCompleting = false, cart, total, discountNum, paymentMethod, cashReceived, sellerName, formatCurrency, lang }: ConfirmSaleModalProps) {
   if (!isOpen) return null;
   const tendered = parseFloat(cashReceived || '');
   const showTender = paymentMethod === 'Cash' && cashReceived !== undefined && cashReceived !== '' && !isNaN(tendered);
@@ -59,6 +60,12 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isComplet
             <span className="text-zinc-400">{t(lang, 'payment')}</span>
             <span className="font-bold text-white">{paymentMethod}</span>
           </div>
+          {sellerName && (
+            <div className="flex justify-between text-xs">
+              <span className="text-zinc-400">Seller</span>
+              <span className="font-bold text-white">{sellerName}</span>
+            </div>
+          )}
           {showTender && (
             <>
               <div className="flex justify-between text-xs">

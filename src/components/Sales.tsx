@@ -46,35 +46,49 @@ const subManagerFallback = (
 
 // Short vibration + beep when a charge completes so the cashier knows it went
 // through without re-reading the screen. Works on Chrome 49+. Disabled via
-// Settings → Display → Charge sound (boss_pos_charge_sound = '0').
-function chargeSoundOn(): boolean {
+// Settings → Display → Sale feedback (boss_pos_charge_sound = '0').
+// Three levels: tick (added to cart), fanfare (sale done), error (blocked).
+function feedbackOn(): boolean {
   try { return localStorage.getItem('boss_pos_charge_sound') !== '0'; } catch { return true; }
 }
-function playChargeFeedback() {
-  if (!chargeSoundOn()) return;
+function buzz(pattern: number | number[]) {
   try {
-    if (navigator.vibrate) navigator.vibrate(60);
+    if (navigator.vibrate) navigator.vibrate(pattern);
   } catch { /* ignore */ }
+}
+function tone(freq: number, delay: number, dur = 0.12, vol = 0.2) {
   try {
     const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AC) return;
     const ctx = new AC();
-    const beep = (freq: number, at: number) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = 'sine';
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(0.2, ctx.currentTime + at);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.12);
-      o.connect(g);
-      g.connect(ctx.destination);
-      o.start(ctx.currentTime + at);
-      o.stop(ctx.currentTime + at + 0.13);
-    };
-    beep(880, 0);
-    beep(1174, 0.14);
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, ctx.currentTime + delay);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + dur);
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(ctx.currentTime + delay);
+    o.stop(ctx.currentTime + delay + dur + 0.01);
     if (ctx.state === 'suspended') ctx.resume();
-  } catch { /* audio blocked; vibration already fired */ }
+  } catch { /* audio blocked */ }
+}
+function playTick() {
+  if (!feedbackOn()) return;
+  buzz(20);
+  tone(660, 0, 0.06, 0.12);
+}
+function playError() {
+  if (!feedbackOn()) return;
+  buzz([80, 60, 80]);
+  tone(180, 0, 0.16, 0.22);
+}
+function playChargeFeedback() {
+  if (!feedbackOn()) return;
+  buzz(60);
+  tone(880, 0);
+  tone(1174, 0.14);
 }
 
 interface SalesProps {
@@ -387,6 +401,7 @@ export default function Sales({
     if (product.stockQty <= 0 && !product.isService) {
       // No dead ends (#20): an out-of-stock tap offers the custom-item path
       // so the cashier can still serve the customer.
+      playError();
       triggerToast(`${product.name} is out of stock!`, 'error', {
         label: 'Sell custom',
         onClick: () => setIsCustomChargeOpen(true),
@@ -404,6 +419,7 @@ export default function Sales({
     try {
       const tier = expiryStatus(product.expiryDate);
       if (tier === 'expired') {
+        playError();
         triggerToast(`${product.name} is EXPIRED — remove it, do not sell`, 'error');
         try {
           pushNotice('expiry', `Blocked expired sale: ${product.name}`, 'Cashier tried to sell expired stock. Remove or write it off as a loss.', `exp-block:${product.id}:${dayKeyOf()}`);
@@ -429,6 +445,7 @@ export default function Sales({
     addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService, product.saleUnit);
     // Plain taps had zero feedback: on phones the cart lives behind the gold
     // FAB, so without this toast an add looked like nothing happened.
+    playTick();
     triggerToast(`Added: ${product.name}`, 'success');
   };
 
@@ -462,6 +479,7 @@ export default function Sales({
   const handleVariantAdd = (variant: { id: string; label: string; price: number; cost?: number }) => {
     if (!variantProduct) return;
     addCartLine(variantProduct.id, variant.id, variant.label, variantProduct.name, 1, variant.price, variant.cost ?? variantProduct.cost, variantProduct.stockQty, !!variantProduct.isService, variantProduct.saleUnit);
+    playTick();
     triggerToast(`${variantProduct.name} (${variant.label}) added`, 'success');
     setVariantProduct(null);
   };
@@ -470,6 +488,7 @@ export default function Sales({
     if (!serviceQtyProduct) return;
     const p = serviceQtyProduct;
     addCartLine(p.id, undefined, undefined, p.name, qty, p.price, p.cost, p.stockQty, true, p.saleUnit);
+    playTick();
     triggerToast(`${p.name} (${unitLabel(qty, p.saleUnit)}) added`, 'success');
     setServiceQtyProduct(null);
   };
@@ -493,6 +512,7 @@ export default function Sales({
       triggerToast(`Added: ${product.name}`, 'success');
       setIsScannerOpen(false);
     } else {
+      playError();
       triggerToast(`Product not found (${barcode})`, 'error', {
         label: 'Custom item',
         onClick: () => setIsCustomChargeOpen(true),
@@ -530,6 +550,7 @@ export default function Sales({
     if (raw === null) return;
     const val = Math.round(parseFloat(raw) || 0);
     if (val < 0 || val > gross) {
+      playError();
       triggerToast(`Enter 0 – ${gross.toLocaleString()} UGX`, 'error');
       return;
     }
@@ -552,7 +573,7 @@ export default function Sales({
     const val = parseQty(trimmed);
     if (val <= 0) {
       if (/^0+(\.0+)?$/.test(trimmed)) handleRemoveItem(productId, variantId);
-      else triggerToast('Enter a valid quantity (e.g. 2 or 2.5)', 'error');
+      else { playError(); triggerToast('Enter a valid quantity (e.g. 2 or 2.5)', 'error'); }
       setEditingItemId(null);
       return;
     }
@@ -629,7 +650,7 @@ export default function Sales({
     // Playable demo (#2): run the full checkout thrill, but save nothing —
     // the cart just clears with a success note instead of a real sale.
     if (demoMode) {
-      if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
+      if (cart.length === 0) { playError(); triggerToast('Cart is empty!', 'error'); return false; }
       setCart([]);
       setCustomCashReceived('');
       setDiscount('');
@@ -640,9 +661,10 @@ export default function Sales({
       return true;
     }
     if (isCompleting) return false;
-    if (cart.length === 0) { triggerToast('Cart is empty!', 'error'); return false; }
+    if (cart.length === 0) { playError(); triggerToast('Cart is empty!', 'error'); return false; }
     // F2 / QuickSale bypass the disabled buttons, so the name gate lives here too.
     if (paymentMethod === 'Credit / Book' && customerName.trim() === '') {
+      playError();
       triggerToast('Add the customer name first — credit needs someone to collect from', 'error');
       return false;
     }
@@ -669,6 +691,7 @@ export default function Sales({
     if (oversold.length > 0) {
       setCart(clampedItems);
       if (itemsToSell.length === 0) {
+        playError();
         triggerToast(`Out of stock: ${oversold.join(', ')}`, 'error');
         return false;
       }
@@ -713,6 +736,7 @@ export default function Sales({
     // QuickSale + F2 bypassed them. Block here so no path can sell at a loss.
     if (paymentMethod === 'Cash' && customCashReceived !== '' && !isNaN(cashPaidNum) && cashPaidNum < saleTotal) {
       setIsCompleting(false);
+      playError();
       triggerToast(`Short by ${formatCurrency(saleTotal - cashPaidNum)} — collect full cash first`, 'error');
       return false;
     }
@@ -1158,25 +1182,26 @@ export default function Sales({
           </section>
         </div>
 
-        {/* Trade tools: compact icon-only strip so they never push the catalog down. Labels live in title/aria. */}
+        {/* Trade tools: compact labeled chips in one scroll row — icon-only
+            proved unreadable, full-width banners ate the screen. */}
         {((selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction) ||
           ((settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders) ||
           ((settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders) ||
           (settings?.showBookings && !showBookings) ||
           (settings?.showRepairs && !showRepairs) ? (
-          <div className="flex items-center gap-1.5" aria-label="Trade tools">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" aria-label="Trade tools">
             {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
               <>
                 <button onClick={() => setShowEateryPricing(true)}
                   title="Pricing & Recipes" aria-label="Pricing and recipes"
-                  className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target">
-                  <ChefHat className="w-4 h-4" />
+                  className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                  <ChefHat className="w-4 h-4" /> Recipes
                 </button>
                 {onAddProduction && onDeleteProduction && (
                   <button onClick={() => setShowProduction(true)}
                     title="Morning Production" aria-label="Morning production"
-                    className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target">
-                    <Sunrise className="w-4 h-4" />
+                    className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                    <Sunrise className="w-4 h-4" /> Production
                   </button>
                 )}
               </>
@@ -1184,29 +1209,29 @@ export default function Sales({
             {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
               <button onClick={() => setShowTailoringOrders(true)}
                 title="Manage Tailor Orders" aria-label="Manage tailor orders"
-                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target">
-                <Scissors className="w-4 h-4" />
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Scissors className="w-4 h-4" /> Tailoring
               </button>
             )}
             {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
               <button onClick={() => setShowDesignOrders(true)}
                 title="Manage Design & Print Orders" aria-label="Manage design and print orders"
-                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target">
-                <Palette className="w-4 h-4" />
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Palette className="w-4 h-4" /> Design
               </button>
             )}
             {settings?.showBookings && !showBookings && (
               <button onClick={() => setShowBookings(true)}
                 title="Appointment Book" aria-label="Appointment book"
-                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target">
-                <CalendarCheck className="w-4 h-4" />
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <CalendarCheck className="w-4 h-4" /> Bookings
               </button>
             )}
             {settings?.showRepairs && !showRepairs && (
               <button onClick={() => setShowRepairs(true)}
                 title="Repair Job Intake" aria-label="Repair job intake"
-                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target">
-                <Wrench className="w-4 h-4" />
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Wrench className="w-4 h-4" /> Repairs
               </button>
             )}
           </div>
@@ -1220,7 +1245,8 @@ export default function Sales({
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <TailoringOrders triggerToast={triggerToast} />
+              <TailoringOrders triggerToast={triggerToast} onAddSale={onAddSale}
+                staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>
         ) : showDesignOrders ? (
@@ -1859,6 +1885,7 @@ export default function Sales({
         discountNum={discountNum}
         paymentMethod={paymentMethod}
         cashReceived={customCashReceived}
+        sellerName={staffName || undefined}
         formatCurrency={formatCurrency}
         lang={lang}
       />

@@ -52,6 +52,23 @@ const THEME_MAP = new Map(THEMES_LIST.map(t => [t.id, t]));
 const DEFAULT_CATEGORIES = ['Electronics', 'Eatery', 'Drinks', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics'];
 const DEFAULT_EXPENSE_CATEGORIES = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'];
 
+// Drinks must survive: tills created before the Drinks catalog have saved
+// lists (local + server) without it, and every background boot-pull would
+// otherwise wipe a locally-added Drinks chip again. Injects it right after
+// Eatery — unless the owner deliberately deleted it (opt-out flag), so a
+// manual delete is never fought.
+const NO_DRINKS_KEY = 'boss_pos_no_drinks';
+function ensureDrinks(list: string[]): string[] {
+  if (list.includes('Drinks')) return list;
+  try {
+    if (localStorage.getItem(NO_DRINKS_KEY) === '1') return list;
+  } catch {}
+  const next = [...list];
+  const at = next.indexOf('Eatery');
+  next.splice(at >= 0 ? at + 1 : next.length, 0, 'Drinks');
+  return next;
+}
+
 const LOCK_OPTIONS = [10, 30, 60];
 function lockMinutesOf(s: StoreSettings): number {
   const m = Math.round(Number(s.lockMinutes) || 0);
@@ -317,7 +334,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [categories, setCategories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('boss_pos_categories');
-      return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+      return ensureDrinks(saved ? JSON.parse(saved) : DEFAULT_CATEGORIES);
     } catch { return DEFAULT_CATEGORIES; }
   });
   const [expenseCategories, setExpenseCategories] = useState<string[]>(() => {
@@ -393,7 +410,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (!settingsDirty) {
       setSettings(d.settings);
       try { lastSentSettingsRef.current = serializeSettings(d.settings); } catch {}
-      if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(d.settings.categories);
+      if (d.settings.categories && Array.isArray(d.settings.categories) && d.settings.categories.length > 0) setCategories(ensureDrinks(d.settings.categories));
       if (d.settings.expenseCategories && Array.isArray(d.settings.expenseCategories) && d.settings.expenseCategories.length > 0) setExpenseCategories(d.settings.expenseCategories);
     }
     const enriched = enrichProductsWithIcons(d.products);
@@ -461,7 +478,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     await Promise.all([
       settingsApi.get().then((s) => {
         setSettings(s);
-        if (s.categories && Array.isArray(s.categories) && s.categories.length > 0) setCategories(s.categories);
+        if (s.categories && Array.isArray(s.categories) && s.categories.length > 0) setCategories(ensureDrinks(s.categories));
         if (s.expenseCategories && Array.isArray(s.expenseCategories) && s.expenseCategories.length > 0) setExpenseCategories(s.expenseCategories);
       }).catch(fail('settings')),
       productApi.list().then(p => {
@@ -932,18 +949,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (readyRef.current) setSettings(prev => ({ ...prev, categories }));
   }, [categories]);
 
-  // One-time migration: tills created before the Drinks catalog keep their
-  // saved categories in localStorage/server without 'Drinks'. Inject it once
-  // (right after Eatery) so the Sell droplist + Stock pick it up; the effect
-  // above then persists it to the server.
+  // Backstop for lists already in state before ensureDrinks existed: the
+  // categories effect above then persists the healed list to the server.
   useEffect(() => {
-    setCategories(prev => {
-      if (prev.includes('Drinks')) return prev;
-      const next = [...prev];
-      const at = next.indexOf('Eatery');
-      next.splice(at >= 0 ? at + 1 : next.length, 0, 'Drinks');
-      return next;
-    });
+    setCategories(prev => ensureDrinks(prev));
   }, []);
 
   useEffect(() => {
@@ -1633,6 +1642,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleAddCategory = (name: string) => {
+    if (name === 'Drinks') {
+      try { localStorage.removeItem(NO_DRINKS_KEY); } catch {}
+    }
     setCategories(prev => prev.includes(name) ? prev : [...prev, name]);
   };
 
@@ -1642,6 +1654,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleDeleteCategory = (name: string) => {
+    if (name === 'Drinks') {
+      try { localStorage.setItem(NO_DRINKS_KEY, '1'); } catch {}
+    }
     setProducts(prev => prev.map(p => p.category === name ? { ...p, category: 'Uncategorized' } : p));
     setCategories(prev => {
       const filtered = prev.filter(c => c !== name);
@@ -2944,9 +2959,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </button>
                 </div>
                 <button onClick={toggleChargeSound}
-                  title="Beep + vibration when a sale completes"
+                  title="Beep + vibration: adding to cart, completing sales, errors"
                   className={`w-full h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${chargeSound ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
-                  {chargeSound ? 'Charge sound: On' : 'Charge sound: Off'}
+                  {chargeSound ? 'Sale feedback: On' : 'Sale feedback: Off'}
                 </button>
                 <button onClick={() => setNav(isSimpleNav ? 'full' : 'simple')}
                   title="Simple shows Sell, Money and More. Full shows all five tabs."

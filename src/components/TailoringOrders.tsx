@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
-import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
+import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw, Coins, Smartphone, BookOpen } from 'lucide-react';
 import Sheet from './Sheet';
-import type { TailoringOrder } from '../types';
-import { tailoringOrderApi } from '../api';
+import type { TailoringOrder, Sale } from '../types';
+import { tailoringOrderApi, nextOrderNumber } from '../api';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 
 const WORK_PRESETS: Record<string, string[]> = {
@@ -28,9 +28,16 @@ const STATUS_ORDER = ['pending', 'in_progress', 'completed', 'delivered'];
 
 interface TailoringOrdersProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  // Money trail: deposits ring as cash sales at creation, the handover
+  // balance rings (cash/MoMo) or books (credit) at delivery. Without these,
+  // tailoring cash never reaches Reports or the drawer.
+  onAddSale?: (sale: Sale) => void;
+  staffName?: string;
+  tillBranch?: string;
+  formatCurrency?: (val: number) => string;
 }
 
-export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) {
+export default function TailoringOrders({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency }: TailoringOrdersProps) {
   const [orders, setOrders] = useState<TailoringOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -38,6 +45,8 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
   const [showPanel, setShowPanel] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // Handover settle: order awaiting the customer's pick of Cash/MoMo/Book.
+  const [settleId, setSettleId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const [f, setF] = useState({
@@ -114,6 +123,7 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
 
     const now = new Date().toISOString();
     const existing = editId ? orders.find(o => o.id === editId) : null;
+    const deposit = parseFloat(f.depositPaid) || 0;
     const order: TailoringOrder = {
       id: editId || `torder-${Date.now()}`,
       customerName: f.customerName.trim(),
@@ -123,7 +133,7 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
       workType: f.workType as TailoringOrder['workType'],
       workDescription: f.workDescription.trim() || f.workType,
       totalAmount: total,
-      depositPaid: parseFloat(f.depositPaid) || 0,
+      depositPaid: deposit,
       materialCost: parseFloat(f.materialCost) || 0,
       status: existing?.status || 'pending',
       notes: f.notes.trim(),
@@ -140,16 +150,57 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
       } else {
         const created = await tailoringOrderApi.create(order);
         setOrders(prev => [created, ...prev]);
-        triggerToast('Order created', 'success');
+        // Deposit is cash in hand TODAY — ring it now or it never reaches
+        // Reports. The handover balance rings separately at delivery.
+        if (deposit > 0 && onAddSale) {
+          await ringTailoringSale(created, Math.min(deposit, total), 'Cash');
+          triggerToast(`Deposit ${fmt(deposit)} rung as a cash sale`, 'success');
+        } else {
+          triggerToast('Order created', 'success');
+        }
       }
       setShowPanel(false);
     } catch { triggerToast('Failed to save order', 'error'); }
+  }
+
+  const fmt = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
+
+  // One tailoring money movement = one real sale row (deposit at creation,
+  // balance at handover). Unpaid handover = Credit/Book so collection survives.
+  async function ringTailoringSale(order: TailoringOrder, amount: number, method: Sale['paymentMethod']) {
+    if (!onAddSale || amount <= 0) return;
+    let orderNumber = await nextOrderNumber();
+    if (!orderNumber) orderNumber = `Tailor #${Date.now().toString().slice(-6)}`;
+    onAddSale({
+      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      orderNumber,
+      timestamp: new Date().toISOString(),
+      items: [{
+        productId: 'tailor-service',
+        productName: `Tailoring: ${order.workDescription || order.workType}`,
+        qty: 1, unitPrice: Math.round(amount),
+        unitCost: Math.min(order.materialCost || 0, Math.round(amount)),
+        lineTotal: Math.round(amount),
+      }],
+      subtotal: Math.round(amount), tax: 0, total: Math.round(amount),
+      paymentMethod: method,
+      customerName: order.customerName,
+      staffName: staffName?.trim() || undefined,
+      branch: tillBranch || undefined,
+    });
   }
 
   async function advanceStatus(order: TailoringOrder) {
     const idx = STATUS_ORDER.indexOf(order.status);
     if (idx === -1 || idx === STATUS_ORDER.length - 1) return;
     const next = STATUS_ORDER[idx + 1];
+    // Handover with money still out: ask HOW it was settled before moving —
+    // cash/MoMo rings a sale, Book puts it on credit for collection.
+    const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
+    if (next === 'delivered' && balance > 0 && onAddSale) {
+      setSettleId(order.id);
+      return;
+    }
     const updated: TailoringOrder = {
       ...order,
       status: next as TailoringOrder['status'],
@@ -158,8 +209,27 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
     try {
       const result = await tailoringOrderApi.update(updated);
       setOrders(prev => prev.map(o => o.id === order.id ? result : o));
-      triggerToast(`${order.customerName} → ${STATUS_CFG[next]?.label}`, 'success');
+      triggerToast(next === 'delivered' ? `${order.customerName} delivered — fully paid` : `${order.customerName} → ${STATUS_CFG[next]?.label}`, 'success');
     } catch { triggerToast('Failed to update status', 'error'); }
+  }
+
+  // Settle the handover balance, then mark delivered.
+  async function settleAndDeliver(order: TailoringOrder, method: Sale['paymentMethod']) {
+    const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
+    setSettleId(null);
+    if (balance > 0) {
+      await ringTailoringSale(order, balance, method);
+      triggerToast(
+        method === 'Credit / Book'
+          ? `${fmt(balance)} booked as credit — collect from ${order.customerName}`
+          : `Handover ${fmt(balance)} rung (${method === 'Cash' ? 'cash' : method === 'MTN MoMo' ? 'MTN' : 'Airtel'})`,
+        method === 'Credit / Book' ? 'info' : 'success',
+      );
+    }
+    try {
+      const result = await tailoringOrderApi.update({ ...order, status: 'delivered' });
+      setOrders(prev => prev.map(o => o.id === order.id ? result : o));
+    } catch { triggerToast('Sale recorded, but status failed to save — retry Deliver', 'error'); }
   }
 
   async function revertStatus(order: TailoringOrder) {
@@ -537,6 +607,46 @@ export default function TailoringOrders({ triggerToast }: TailoringOrdersProps) 
           </section>
         </Sheet>
       )}
+
+      {/* ===== HANDOVER SETTLE: how was the balance paid? ===== */}
+      {settleId && (() => {
+        const order = orders.find(o => o.id === settleId);
+        if (!order) return null;
+        const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
+        const methods: { key: Sale['paymentMethod']; label: string; icon: ReactNode; cls: string }[] = [
+          { key: 'Cash', label: 'Cash', icon: <Coins className="w-4 h-4" />, cls: 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300 hover:bg-emerald-950/60' },
+          { key: 'MTN MoMo', label: 'MTN', icon: <Smartphone className="w-4 h-4" />, cls: 'bg-amber-950/40 border-amber-800/40 text-amber-300 hover:bg-amber-950/60' },
+          { key: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" />, cls: 'bg-rose-950/40 border-rose-800/40 text-rose-300 hover:bg-rose-950/60' },
+          { key: 'Credit / Book', label: 'Book it', icon: <BookOpen className="w-4 h-4" />, cls: 'bg-blue-950/40 border-blue-800/40 text-blue-300 hover:bg-blue-950/60' },
+        ];
+        return (
+          <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onClick={() => setSettleId(null)}>
+            <div className="bg-[#141414] w-full max-w-md rounded-t-3xl border border-white/10 p-5 animate-slide-up"
+              onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider text-center">{order.customerName} is picking up</h3>
+              <p className="text-xs text-zinc-400 font-bold text-center mt-1 mb-4">
+                Balance <span className="text-gold-brand font-black text-base">{fmt(balance)}</span>
+                {order.depositPaid > 0 && <span className="text-zinc-500"> ({fmt(order.depositPaid)} already paid)</span>}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {methods.map(m => (
+                  <button key={m.key} onClick={() => settleAndDeliver(order, m.key)}
+                    className={`h-12 rounded-2xl border text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer ${m.cls}`}>
+                    {m.icon} {m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 font-bold uppercase text-center mt-3">
+                Cash/MoMo rings a sale now • Book it tracks the debt for collection
+              </p>
+              <button onClick={() => setSettleId(null)}
+                className="mt-3 w-full h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl cursor-pointer">
+                Not yet
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* FAB */}
       <button onClick={openCreate}
