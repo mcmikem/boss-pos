@@ -3,7 +3,7 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star, Footprints
+  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog } from '../types';
 import { nextOrderNumber, quoteApi } from '../api';
@@ -23,7 +23,7 @@ import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
 import { findMissingProduction } from '../utils/cashflow';
-import { localDayKey, todayLocalKey } from '../utils/dates';
+import { todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { pastVisits, isRewardVisit, visitsToReward, clampPct, clampEveryN } from '../utils/loyalty';
@@ -45,8 +45,13 @@ const subManagerFallback = (
 );
 
 // Short vibration + beep when a charge completes so the cashier knows it went
-// through without re-reading the screen. Works on Chrome 49+.
+// through without re-reading the screen. Works on Chrome 49+. Disabled via
+// Settings → Display → Charge sound (boss_pos_charge_sound = '0').
+function chargeSoundOn(): boolean {
+  try { return localStorage.getItem('boss_pos_charge_sound') !== '0'; } catch { return true; }
+}
 function playChargeFeedback() {
+  if (!chargeSoundOn()) return;
   try {
     if (navigator.vibrate) navigator.vibrate(60);
   } catch { /* ignore */ }
@@ -87,7 +92,7 @@ interface SalesProps {
   setIsQuickSale: Dispatch<SetStateAction<boolean>>;
   categories: string[];
   staffName?: string;
-  setStaffName: (name: string) => void;
+  setStaffName?: (name: string) => void;
   onSaveCustomProduct?: (p: Product) => void;
   onUndoSale?: (saleId: string) => void;
   staffConfigured?: boolean;
@@ -153,7 +158,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, setStaffName, onSaveCustomProduct, onUndoSale, staffConfigured, onOpenStaffSwitcher, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
@@ -270,20 +275,29 @@ export default function Sales({
   }, []);
   // Till language for the sell screen (Luganda mid-sale, English elsewhere).
   const lang = settings?.language;
+  // Last-used payment method wins per device (a MoMo-heavy till stays on
+  // MoMo); falls back to the shop default on first run.
+  const PAY_METHOD_KEY = 'boss_pos_pay_method';
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
+    try {
+      const last = localStorage.getItem(PAY_METHOD_KEY);
+      if (last === 'Cash' || last === 'MTN MoMo' || last === 'Airtel Money' || last === 'Credit / Book') return last;
+    } catch {}
     if (settings?.defaultPaymentMethod === 'MTN MoMo') return 'MTN MoMo';
     if (settings?.defaultPaymentMethod === 'Airtel Money') return 'Airtel Money';
     if (settings?.defaultPaymentMethod === 'Credit / Book') return 'Credit / Book';
     return 'Cash';
   });
+  useEffect(() => {
+    try { localStorage.setItem(PAY_METHOD_KEY, paymentMethod); } catch {}
+  }, [paymentMethod]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingQtyValue, setEditingQtyValue] = useState<string>('');
   const [isMobileCartOpen, setIsMobileCartOpen] = useState<boolean>(false);
   const [isCustomChargeOpen, setIsCustomChargeOpen] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
-  const [showSellerEditor, setShowSellerEditor] = useState(false);
-  const [sellerDraft, setSellerDraft] = useState('');
+  const [showMoreActions, setShowMoreActions] = useState(false);
   const [discount, setDiscount] = useState<string>('');
   const [customCashReceived, setCustomCashReceived] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
@@ -294,7 +308,6 @@ export default function Sales({
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showFoodCost, setShowFoodCost] = useState(false);
   const [showTransfers, setShowTransfers] = useState(false);
-  const [fabOpen, setFabOpen] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
   // Undo window for the just-completed sale: 10s to tap Undo, then it lapses
@@ -559,18 +572,7 @@ export default function Sales({
     triggerToast(`Regular reward: ${loyaltyP}% off for ${loyaltyName} (visit ${loyaltyPast + 1})`, 'success');
   };
 
-  // Money strip (#16): today's takings at a glance — cash, phone money,
-  // credit out. Computed from real history only, never demo stock.
-  const todayKey = todayLocalKey();
-  const todayLive = useMemo(
-    () => (salesHistory || []).filter(s => {
-      try { return localDayKey(s.timestamp) === todayKey; } catch { return false; }
-    }),
-    [salesHistory, todayKey],
-  );
-  const stripCash = todayLive.filter(s => !s.refunded && s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0);
-  const stripMomo = todayLive.filter(s => !s.refunded && (s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')).reduce((a, s) => a + s.total, 0);
-  const stripCredit = todayLive.filter(s => !s.refunded && s.paymentMethod === 'Credit / Book').reduce((a, s) => a + s.total, 0);
+  // Money strip removed: the briefing card already shows today's takings.
   const showGuide = !guideDismissed && !demoMode && (salesHistory || []).length === 0;
 
   const handleCompleteSale = async () => {
@@ -922,58 +924,65 @@ export default function Sales({
             />
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
-          <button onClick={() => {
-            // Staff logins replace free-text seller names with PIN-checked switching.
-            if (staffConfigured && onOpenStaffSwitcher) { onOpenStaffSwitcher(); return; }
-            setSellerDraft(staffName || ''); setShowSellerEditor(true);
-          }}
-              className="shrink-0 h-12 w-12 px-0 sm:w-auto sm:px-3 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target"
-              title="Who is selling — each sale is stamped with this name"
-              aria-label="Set seller"
-              id="seller-chip">
-            {staffName ? (
-              <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-gold-brand" /><span className="hidden sm:inline">{staffName}</span></span>
-            ) : (
-              <span className="flex items-center justify-center gap-1.5"><User className="w-4 h-4 text-zinc-500" /><span className="hidden sm:inline text-zinc-500">Seller</span></span>
-            )}
-          </button>
-          {/* Laptop: icon-only squares, names on hover. Phones keep labels. */}
+          {/* Seller lives in the top bar now — no duplicate chip here. */}
+          {/* Compact icon-only toolbar: Custom + Quick stay visible, everything
+              else hides under ⋯ so the catalog keeps the screen. */}
           <button onClick={() => setIsCustomChargeOpen(true)}
             title="Custom charge — sell something not on the list" aria-label="Custom charge"
-            className="shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
+            className="shrink-0 h-10 w-10 px-0 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
             id="open-custom-charge-btn">
-            <Plus className="w-5 h-5" /><span className="lg:hidden">+ Custom</span>
-          </button>
-          {/* Spent everywhere (#18): log spending without leaving Sell. */}
-          <button onClick={() => setShowQuickExpense(true)}
-            className="shrink-0 h-12 px-3 sm:px-4 bg-[#141414] border border-white/5 hover:border-rose-500/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
-            id="open-quick-expense-btn" title="Log money spent (stock, transport…)">
-            <Wallet className="w-4 h-4" /> Spent
+            <Plus className="w-5 h-5" />
           </button>
           <button onClick={() => { setIsQuickSale(true); setQuickSearchQuery(''); }}
             title="Quick sale — search, tap, done" aria-label="Quick sale"
-            className="shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
+            className="shrink-0 h-10 w-10 px-0 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
             id="open-quick-sale-btn">
-            <Zap className="w-4 h-4" /> <span className="lg:hidden">Quick Sale</span>
+            <Zap className="w-4 h-4" />
           </button>
-          <button onClick={() => setStreetMode(v => { const n = !v; try { localStorage.setItem('boss_pos_street_mode', n ? '1' : '0'); } catch {} return n; })}
-            title="Street mode: each tap sells one item for cash instantly — for stalls and rush counters"
-            aria-label={streetMode ? 'Street mode on — tap to switch off' : 'Street mode off — tap to switch on'}
-            className={`shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5 border ${streetMode ? 'bg-emerald-400 text-black border-emerald-400' : 'bg-[#141414] border-white/5 text-zinc-300 hover:border-emerald-400/40'}`}
-            id="street-mode-btn">
-            <Footprints className="w-4 h-4" /> <span className="lg:hidden">Street</span>
-          </button>
-          <button onClick={() => setShowQuotes(true)}
-            title={quotes.length > 0 ? `Quotes (${quotes.length} saved)` : 'Quotes — price lists that are not sales yet'} aria-label={quotes.length > 0 ? `Quotes, ${quotes.length} saved` : 'Quotes'}
-            className="relative shrink-0 h-12 px-3 sm:px-4 lg:w-12 lg:px-0 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center gap-1.5"
-            id="open-quotes-btn">
-            <FileText className="w-4 h-4" /> <span className="lg:hidden">Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}</span>
-            {quotes.length > 0 && (
-              <span className="hidden lg:flex absolute -top-1.5 -right-1.5 bg-gold-brand text-black text-[9px] font-black w-5 h-5 rounded-full items-center justify-center border-2 border-[#0A0A0A]">
-                {quotes.length}
-              </span>
+          <div className="relative shrink-0">
+            <button onClick={() => setShowMoreActions(v => !v)}
+              title="More actions" aria-label="More actions" aria-expanded={showMoreActions}
+              className="relative h-10 w-10 px-0 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 rounded-xl transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
+              id="sell-more-actions-btn">
+              <Ellipsis className="w-5 h-5" />
+              {(quotes.length > 0 || streetMode) && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-gold-brand border-2 border-[#0A0A0A]" aria-hidden="true" />
+              )}
+            </button>
+            {showMoreActions && (
+              <>
+                <div className="fixed inset-0 z-[60]" onClick={() => setShowMoreActions(false)} aria-hidden="true" />
+                <div className="absolute right-0 top-full mt-2 z-[61] w-56 bg-[#141414] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1">
+                  <button onClick={() => { setShowMoreActions(false); setIsScannerOpen(true); }}
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <Barcode className="w-4 h-4 text-gold-brand" /> Scan barcode
+                  </button>
+                  <button onClick={() => { setShowMoreActions(false); setShowQuotes(true); }}
+                    id="open-quotes-btn"
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <FileText className="w-4 h-4 text-zinc-400" /> Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}
+                  </button>
+                  <button onClick={() => { const n = !streetMode; setStreetMode(n); try { localStorage.setItem('boss_pos_street_mode', n ? '1' : '0'); } catch {} setShowMoreActions(false); }}
+                    id="street-mode-btn"
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <Footprints className={`w-4 h-4 ${streetMode ? 'text-emerald-400' : 'text-zinc-400'}`} /> Street mode{streetMode ? ' • on' : ''}
+                  </button>
+                  <button onClick={() => { setShowMoreActions(false); setShowQuickExpense(true); }}
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer" id="open-quick-expense-btn">
+                    <Wallet className="w-4 h-4 text-rose-400" /> Log spending
+                  </button>
+                  <button onClick={() => { setShowMoreActions(false); setShowFoodCost(true); }}
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <ChefHat className="w-4 h-4 text-amber-400" /> Profit check
+                  </button>
+                  <button onClick={() => { setShowMoreActions(false); setShowTransfers(true); }}
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <ArrowRightLeft className="w-4 h-4 text-sky-400" /> Move money
+                  </button>
+                </div>
+              </>
             )}
-          </button>
+          </div>
         </div>
 
         {streetMode && (
@@ -1037,20 +1046,7 @@ export default function Sales({
           </div>
         )}
 
-        {/* Money strip (#16): today's takings, always one glance away. */}
-        {todayLive.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label="Today's takings">
-            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-emerald-950/40 border border-emerald-800/30 text-[11px] font-black uppercase tracking-wider text-emerald-300 tabular-nums">
-              Cash {formatCurrency(stripCash)}
-            </span>
-            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-yellow-950/40 border border-yellow-800/30 text-[11px] font-black uppercase tracking-wider text-yellow-300 tabular-nums">
-              Phone {formatCurrency(stripMomo)}
-            </span>
-            <span className="shrink-0 inline-flex items-center h-9 px-3 rounded-xl bg-blue-950/40 border border-blue-800/30 text-[11px] font-black uppercase tracking-wider text-blue-300 tabular-nums">
-              Credit {formatCurrency(stripCredit)}
-            </span>
-          </div>
-        )}
+        {/* Money strip removed: the briefing card already shows today's takings. */}
 
         {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
           <button onClick={repeatLastSale}
@@ -1103,54 +1099,59 @@ export default function Sales({
           </section>
         </div>
 
-        {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
-          <div className="mt-3 grid grid-cols-2 gap-2">
-          <button onClick={() => setShowEateryPricing(true)}
-            className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <ChefHat className="w-4 h-4" />
-            Pricing & Recipes
-          </button>
-          {onAddProduction && onDeleteProduction && (
-          <button onClick={() => setShowProduction(true)}
-            className="flex items-center justify-center gap-2 py-3 px-2 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <ChefHat className="w-4 h-4" />
-            Morning Production
-          </button>
-          )}
+        {/* Trade tools: compact icon-only strip so they never push the catalog down. Labels live in title/aria. */}
+        {((selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction) ||
+          ((settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders) ||
+          ((settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders) ||
+          (settings?.showBookings && !showBookings) ||
+          (settings?.showRepairs && !showRepairs) ? (
+          <div className="flex items-center gap-1.5" aria-label="Trade tools">
+            {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
+              <>
+                <button onClick={() => setShowEateryPricing(true)}
+                  title="Pricing & Recipes" aria-label="Pricing and recipes"
+                  className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target">
+                  <ChefHat className="w-4 h-4" />
+                </button>
+                {onAddProduction && onDeleteProduction && (
+                  <button onClick={() => setShowProduction(true)}
+                    title="Morning Production" aria-label="Morning production"
+                    className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target">
+                    <Sunrise className="w-4 h-4" />
+                  </button>
+                )}
+              </>
+            )}
+            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
+              <button onClick={() => setShowTailoringOrders(true)}
+                title="Manage Tailor Orders" aria-label="Manage tailor orders"
+                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target">
+                <Scissors className="w-4 h-4" />
+              </button>
+            )}
+            {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
+              <button onClick={() => setShowDesignOrders(true)}
+                title="Manage Design & Print Orders" aria-label="Manage design and print orders"
+                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target">
+                <Palette className="w-4 h-4" />
+              </button>
+            )}
+            {settings?.showBookings && !showBookings && (
+              <button onClick={() => setShowBookings(true)}
+                title="Appointment Book" aria-label="Appointment book"
+                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target">
+                <CalendarCheck className="w-4 h-4" />
+              </button>
+            )}
+            {settings?.showRepairs && !showRepairs && (
+              <button onClick={() => setShowRepairs(true)}
+                title="Repair Job Intake" aria-label="Repair job intake"
+                className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target">
+                <Wrench className="w-4 h-4" />
+              </button>
+            )}
           </div>
-        )}
-
-        {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
-          <button onClick={() => setShowTailoringOrders(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <Scissors className="w-4 h-4" />
-            Manage Tailor Orders
-          </button>
-        )}
-
-        {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
-          <button onClick={() => setShowDesignOrders(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <Palette className="w-4 h-4" />
-            Manage Design & Print Orders
-          </button>
-        )}
-
-        {settings?.showBookings && !showBookings && (
-          <button onClick={() => setShowBookings(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <CalendarCheck className="w-4 h-4" />
-            Appointment Book
-          </button>
-        )}
-
-        {settings?.showRepairs && !showRepairs && (
-          <button onClick={() => setShowRepairs(true)}
-            className="mt-3 w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer touch-target">
-            <Wrench className="w-4 h-4" />
-            Repair Job Intake
-          </button>
-        )}
+        ) : null}
 
         {/* Tailor orders view */}
         {showTailoringOrders ? (
@@ -1632,31 +1633,7 @@ export default function Sales({
         </div>
       </div>
 
-      {/* Modals */}
-      {showSellerEditor && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#141414] border border-white/10 rounded-2xl p-5 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-white">Set seller</h3>
-              <button onClick={() => setShowSellerEditor(false)} aria-label="Close seller editor" className="touch-target text-zinc-400 hover:text-white text-xl">×</button>
-            </div>
-            <label htmlFor="seller-name-input" className="block text-xs text-zinc-400 font-semibold mb-2">Name stamped on sales</label>
-            <input
-              id="seller-name-input"
-              autoFocus
-              value={sellerDraft}
-              onChange={(e) => setSellerDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { setStaffName(sellerDraft.trim()); setShowSellerEditor(false); } }}
-              className="w-full h-12 bg-[#0A0A0A] border border-white/10 rounded-xl px-3 text-base text-white outline-none focus:border-gold-brand"
-              placeholder="e.g. Amina"
-            />
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setShowSellerEditor(false)} className="flex-1 h-11 rounded-xl border border-white/10 text-zinc-300 text-sm font-semibold">Cancel</button>
-              <button onClick={() => { setStaffName(sellerDraft.trim()); setShowSellerEditor(false); }} className="flex-1 h-11 rounded-xl bg-gold-brand text-black text-sm font-bold">Save seller</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modals (seller editor removed — switching lives in the top bar) */}
       <CustomChargeModal
         isOpen={isCustomChargeOpen}
         onClose={() => setIsCustomChargeOpen(false)}
@@ -1822,6 +1799,7 @@ export default function Sales({
         total={total}
         discountNum={discountNum}
         paymentMethod={paymentMethod}
+        cashReceived={customCashReceived}
         formatCurrency={formatCurrency}
         lang={lang}
       />
@@ -1890,39 +1868,7 @@ export default function Sales({
         </div>
       )}
 
-      {/* More tools FAB */}
-      {fabOpen && <div className="fixed inset-0 z-30" onClick={() => setFabOpen(false)} />}
-      <div className="fixed bottom-24 left-4 z-40">
-        <div className="relative">
-          <button onClick={() => setFabOpen(prev => !prev)}
-            className={`h-12 w-12 rounded-xl border transition-all cursor-pointer flex items-center justify-center active:scale-90 ${
-              fabOpen ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/10 hover:border-gold-brand'
-            }`}
-            title="More tools">
-            <span className={`text-lg font-black transition-transform ${fabOpen ? 'rotate-45' : ''}`}>+</span>
-          </button>
-
-          {fabOpen && (
-            <div className="absolute bottom-full left-0 mb-2 flex flex-col gap-1.5 min-w-[130px]">
-              {[
-                { icon: Barcode, label: 'Scan', color: 'hover:border-gold-brand hover:text-gold-brand', onClick: () => { setIsScannerOpen(true); setFabOpen(false); } },
-                { icon: Wallet, label: 'Expense', color: 'hover:border-emerald-500 hover:text-emerald-400', onClick: () => { setShowQuickExpense(true); setFabOpen(false); } },
-                { icon: ChefHat, label: 'Profit', color: 'hover:border-amber-500 hover:text-amber-400', onClick: () => { setShowFoodCost(true); setFabOpen(false); } },
-                { icon: ArrowRightLeft, label: 'Transfer', color: 'hover:border-sky-500 hover:text-sky-400', onClick: () => { setShowTransfers(true); setFabOpen(false); } },
-              ].map(btn => {
-                const BtnIcon = btn.icon;
-                return (
-                  <button key={btn.label} onClick={btn.onClick}
-                    className={`touch-target px-3 py-2 bg-[#141414] border border-white/10 rounded-xl flex items-center gap-2 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg cursor-pointer ${btn.color}`}>
-                    <BtnIcon className="w-4 h-4 shrink-0" />
-                    <span>{btn.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      {/* More tools live under ⋯ (top toolbar) — no floating FAB so the catalog keeps the screen. */}
 
       {/* Clear Cart Confirmation */}
       {showClearConfirm && (

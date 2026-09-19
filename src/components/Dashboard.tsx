@@ -13,7 +13,7 @@ import {
   Plus,
   Printer
 } from 'lucide-react';
-import type { Sale, Expense, Product, StoreSettings } from '../types';
+import type { Sale, Expense, Product, StoreSettings, MomoTransfer } from '../types';
 import { t } from '../utils/i18n';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { eateryDayClose } from '../utils/eateryClose';
@@ -32,6 +32,7 @@ interface DashboardProps {
   onAddExpense: (expense: Expense) => void;
   expenseCategories: string[];
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  momoTransfers?: MomoTransfer[];
 }
 
 export default function Dashboard({ 
@@ -45,7 +46,8 @@ export default function Dashboard({
   settings,
   onAddExpense,
   expenseCategories,
-  triggerToast
+  triggerToast,
+  momoTransfers = [],
 }: DashboardProps) {
   const [selectedSaleForModal, setSelectedSaleForModal] = useState<Sale | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
@@ -68,6 +70,15 @@ export default function Dashboard({
   const momoCollected = todaySales
     .filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')
     .reduce((acc, s) => acc + s.total, 0);
+
+  // Sente z'Esimu = MoMo sales + money moved onto the phone today (Float +
+  // Cash destinations from Close day). Owner payouts leave the phone, so they
+  // are excluded. Previously this tile only counted MoMo sales, so cash moved
+  // to float never showed up here.
+  const phoneTopUpToday = momoTransfers
+    .filter(t => localDayKey(t.createdAt) === todayStr && (t.to || 'float') !== 'owner')
+    .reduce((acc, t) => acc + (t.amount || 0), 0);
+  const momoTotal = momoCollected + phoneTopUpToday;
 
   const creditIssued = todaySales
     .filter(s => s.paymentMethod === 'Credit / Book')
@@ -225,7 +236,7 @@ export default function Dashboard({
         <button
           type="button"
           onClick={() => onNavigate('sales')}
-          aria-label={`Mobile money received ${formatCurrency(momoCollected)}. MTN and Airtel. Go to sell screen.`}
+          aria-label={`Mobile money on phone ${formatCurrency(momoTotal)}. MTN and Airtel sales plus money moved to phone. Go to sell screen.`}
           className="boss-card border-t-4 border-t-yellow-500 p-4 flex flex-col justify-between min-h-36 min-w-0 w-full text-left cursor-pointer active:scale-98 transition-all hover:border-yellow-500/30 group focus-visible:outline-2 focus-visible:outline-gold-brand"
           id="kpi-momo-collected"
         >
@@ -235,8 +246,8 @@ export default function Dashboard({
           </div>
           <div className="mt-2 min-w-0">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sente z'Esimu</p>
-            <p className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(momoCollected)}>{formatCurrency(momoCollected)}</p>
-            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">MTN & Airtel</p>
+            <p className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(momoTotal)}>{formatCurrency(momoTotal)}</p>
+            <p className="text-xs text-zinc-400 mt-1 uppercase tracking-wide group-hover:text-zinc-300 truncate">MTN & Airtel + phone top-up</p>
           </div>
         </button>
 

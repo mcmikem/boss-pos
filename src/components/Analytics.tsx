@@ -1,11 +1,11 @@
-import { useState, useMemo, useEffect, type FormEvent } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { 
   TrendingUp, Plus, Coins, User, Phone, Mail, MessageCircle,
   AlertOctagon, Truck, Edit, Trash2, X, Save,
-  Settings2, Hash, Check, Edit2, ChevronDown,
-  CalendarDays, Receipt, LayoutGrid, Info
+  ChevronDown,
+  CalendarDays, Receipt, Info
 } from 'lucide-react';
-import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem } from '../types';
+import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem, MomoTransfer, CreditEat } from '../types';
 import { t } from '../utils/i18n';
 import { supplierDrift } from '../utils/cashflow';
 import CreditsLedger from './CreditsLedger';
@@ -33,6 +33,9 @@ interface AnalyticsProps {
   onUpdateSupplier: (supplier: Supplier) => void;
   onDeleteSupplier: (supplierId: string) => void;
   onPayCredit: (saleId: string, amount: number) => void;
+  creditEats?: CreditEat[];
+  onPayCreditEat?: (id: string, amount: number) => void;
+  momoTransfers?: MomoTransfer[];
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
@@ -54,13 +57,13 @@ export default function Analytics({
   expenseCategories,
   onAddExpense,
   onDeleteExpense,
-  onAddExpenseCategory,
-  onUpdateExpenseCategory,
-  onDeleteExpenseCategory,
   onAddSupplier,
   onUpdateSupplier,
   onDeleteSupplier,
   onPayCredit,
+  creditEats = [],
+  onPayCreditEat,
+  momoTransfers = [],
   formatCurrency,
   triggerToast,
   showSuppliers,
@@ -87,15 +90,7 @@ export default function Analytics({
     return () => { active = false; };
   }, []);
   
-  const [expenseDesc, setExpenseDesc] = useState('');
-  const [expenseAmt, setExpenseAmt] = useState('');
-  const [expenseCat, setExpenseCat] = useState(expenseCategories[0] || 'Stock Purchase');
 
-  const [showExpenseCatManager, setShowExpenseCatManager] = useState(false);
-  const [expenseCatNew, setExpenseCatNew] = useState('');
-  const [editingExpCat, setEditingExpCat] = useState<string | null>(null);
-  const [editingExpCatVal, setEditingExpCatVal] = useState('');
-  const [deleteExpCatConfirm, setDeleteExpCatConfirm] = useState<string | null>(null);
 
   const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -183,6 +178,11 @@ export default function Analytics({
     return filteredExpenses.reduce((acc, e) => acc + e.amount, 0);
   }, [filteredExpenses]);
 
+  // Discount leakage: money knocked off at the till in this window.
+  const totalDiscounts = useMemo(() => {
+    return filteredSales.reduce((acc, s) => acc + (s.discount || 0), 0);
+  }, [filteredSales]);
+
   // Delivered design & print orders count as realized revenue + profit.
   const designOrdersInWindow = useMemo(() => {
     return designOrders.filter(o => o.status === 'delivered' && timeRange.filter(o.createdAt));
@@ -248,7 +248,11 @@ export default function Analytics({
         sales: data.sales,
         expenses: data.expenses,
         revenue: data.sales.reduce((a, s) => a + s.total, 0),
-        expenseTotal: data.expenses.reduce((a, e) => a + e.amount, 0)
+        expenseTotal: data.expenses.reduce((a, e) => a + e.amount, 0),
+        discountTotal: data.sales.reduce((a, s) => a + (s.discount || 0), 0),
+        cashTotal: data.sales.filter(s => s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0),
+        momoTotal: data.sales.filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money').reduce((a, s) => a + s.total, 0),
+        creditTotal: data.sales.filter(s => s.paymentMethod === 'Credit / Book').reduce((a, s) => a + s.total, 0),
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [filteredSales, filteredExpenses]);
@@ -335,64 +339,6 @@ export default function Analytics({
   const lossProducts = useMemo(() => {
     return productProfitability.filter(item => item.isLossProduct);
   }, [productProfitability]);
-
-  const handleAddExpense = (e: FormEvent) => {
-    e.preventDefault();
-    if (!expenseDesc.trim()) {
-      triggerToast('Enter a description', 'error');
-      return;
-    }
-    const amtNum = parseFloat(expenseAmt) || 0;
-    if (amtNum <= 0) {
-      triggerToast('Amount must be positive', 'error');
-      return;
-    }
-
-    const newExpense: Expense = {
-      id: `exp-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      description: expenseDesc,
-      amount: amtNum,
-      category: expenseCat
-    };
-
-    onAddExpense(newExpense);
-    setExpenseDesc('');
-    setExpenseAmt('');
-    triggerToast(`Logged expense: ${newExpense.description}`, 'success');
-  };
-
-  const handleAddExpCat = () => {
-    const name = expenseCatNew.trim();
-    if (!name) { triggerToast('Category name is required', 'error'); return; }
-    if (expenseCategories.includes(name)) { triggerToast('Category already exists', 'error'); return; }
-    onAddExpenseCategory(name);
-    setExpenseCatNew('');
-    triggerToast(`Added "${name}" category`, 'success');
-  };
-
-  const handleStartEditExpCat = (name: string) => {
-    setEditingExpCat(name);
-    setEditingExpCatVal(name);
-  };
-
-  const handleSaveEditExpCat = () => {
-    if (!editingExpCat) return;
-    const name = editingExpCatVal.trim();
-    if (!name) { triggerToast('Category name is required', 'error'); return; }
-    if (name !== editingExpCat && expenseCategories.includes(name)) { triggerToast('Category already exists', 'error'); return; }
-    onUpdateExpenseCategory(editingExpCat, name);
-    if (expenseCat === editingExpCat) setExpenseCat(name);
-    setEditingExpCat(null);
-    triggerToast(`Renamed to "${name}"`, 'success');
-  };
-
-  const handleDeleteExpCat = (name: string) => {
-    onDeleteExpenseCategory(name);
-    setDeleteExpCatConfirm(null);
-    if (expenseCat === name) setExpenseCat(expenseCategories.filter(c => c !== name)[0] || 'Miscellaneous');
-    triggerToast(`Deleted "${name}" category`, 'info');
-  };
 
   const openAddSupplier = () => {
     setEditingSupplier(null);
@@ -588,12 +534,6 @@ const colorsMap: { [key: string]: string } = {
               Export CSV
             </button>
           )}
-          {!showSuppliers && (
-            <button onClick={() => onNavigate('registers')}
-              className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-amber-500 text-amber-400 rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5">
-              <LayoutGrid className="w-3.5 h-3.5" /> Daily Close-out
-            </button>
-          )}
           <button onClick={() => setShowSuppliers(!showSuppliers)}
             className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
             {showSuppliers ? '← Back to Reports' : 'View Suppliers →'}
@@ -705,6 +645,7 @@ const colorsMap: { [key: string]: string } = {
             onAddExpense={onAddExpense}
             expenseCategories={expenseCategories}
             triggerToast={triggerToast}
+            momoTransfers={momoTransfers}
           />
           {showHelp && !showSuppliers && (
             <div className="boss-card bg-gold-brand/5 border border-gold-brand/20 p-4 flex items-start gap-3">
@@ -753,11 +694,13 @@ const colorsMap: { [key: string]: string } = {
             </section>
           )}
 
-          {/* Credits Ledger */}
+          {/* Credits Ledger — includes till credit sales AND Ababanjibwa Sente book */}
           <div className="lg:col-span-1">
             <CreditsLedger 
               sales={sales}
               creditPayments={creditPayments}
+              creditEats={creditEats}
+              onPayCreditEat={onPayCreditEat}
               formatCurrency={formatCurrency}
               onPayCredit={onPayCredit}
               triggerToast={triggerToast}
@@ -794,6 +737,9 @@ const colorsMap: { [key: string]: string } = {
                     <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Sales in</span><span className="text-zinc-100">+{formatCurrency(revenue)}</span></div>
                     <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Stock cost</span><span className="text-amber-300">−{formatCurrency(cogs)}</span></div>
                     <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Spending</span><span className="text-rose-300">−{formatCurrency(totalExpenses)}</span></div>
+                    {totalDiscounts > 0 && (
+                      <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Discounts given</span><span className="text-purple-300">−{formatCurrency(totalDiscounts)}</span></div>
+                    )}
                     {expenseCategoryBreakdown.slice(0, 3).map(c => (
                       <div key={c.category} className="flex justify-between gap-2">
                         <span className="text-zinc-500 uppercase truncate min-w-0">{c.category}</span>
@@ -885,7 +831,13 @@ const colorsMap: { [key: string]: string } = {
                           <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5">
                             {day.sales.length} sale{day.sales.length !== 1 ? 's' : ''}
                             {day.expenses.length > 0 && ` • ${day.expenses.length} expense${day.expenses.length !== 1 ? 's' : ''}`}
+                            {day.discountTotal > 0 && ` • −${formatCurrency(day.discountTotal)} off`}
                           </p>
+                          {(day.cashTotal > 0 || day.momoTotal > 0 || day.creditTotal > 0) && (
+                            <p className="text-[10px] font-bold text-zinc-600 uppercase mt-0.5 truncate tabular-nums">
+                              Cash {formatCurrency(day.cashTotal)} • MoMo {formatCurrency(day.momoTotal)} • Credit {formatCurrency(day.creditTotal)}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-4 shrink-0">
@@ -1027,7 +979,8 @@ const colorsMap: { [key: string]: string } = {
             </section>
           )}
 
-          <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Spending is logged in the Spend tab — no duplicate form here. */}
+          <section className="grid grid-cols-1 gap-6">
             <div className="boss-card p-5 rounded-2xl flex flex-col justify-between">
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-3">Sales by Category</h3>
               <div className="flex flex-col sm:flex-row items-center gap-6">
@@ -1065,42 +1018,6 @@ const colorsMap: { [key: string]: string } = {
                   })}
                 </div>
               </div>
-            </div>
-
-            <div className="boss-card p-5 rounded-2xl flex flex-col justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1">Log an Expense</h3>
-                <p className="text-xs text-zinc-500 font-bold uppercase mb-4">Rent, stock, electricity, etc.</p>
-              </div>
-              <form onSubmit={handleAddExpense} className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-zinc-500 font-bold uppercase mb-1">What for?</label>
-                    <input type="text" placeholder="e.g. Phone cases restock" value={expenseDesc} onChange={(e) => setExpenseDesc(e.target.value)}
-                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-zinc-500 font-bold uppercase mb-1">Amount</label>
-                    <input type="number" placeholder="Amount" value={expenseAmt} onChange={(e) => setExpenseAmt(e.target.value)}
-                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none font-bold" />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex items-center gap-1 mb-1">
-                    <span className="text-xs text-zinc-500 font-bold uppercase">Category</span>
-                    <button type="button" onClick={() => setShowExpenseCatManager(true)}
-                      aria-label="Manage expense categories" title="Manage categories"
-                      className="w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer rounded-lg hover:bg-white/5">
-                      <Settings2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <select value={expenseCat} onChange={(e) => setExpenseCat(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl h-10 px-2 text-xs focus:border-gold-brand focus:outline-none font-bold">
-                    {expenseCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                  </select>
-                </div>
-                <button type="submit" className="w-full h-10 bg-gold-brand/10 hover:bg-gold-brand text-gold-brand hover:text-black border border-gold-brand/20 font-black uppercase tracking-widest text-xs rounded-xl transition-all">Log Expense</button>
-              </form>
             </div>
           </section>
 
@@ -1195,72 +1112,6 @@ const colorsMap: { [key: string]: string } = {
             lang={settings.language}
           />
         </>
-      )}
-
-      {showExpenseCatManager && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="boss-card w-full max-w-md p-6 bg-zinc-950 border border-white/5 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-3 border-b border-white/5">
-              <h3 className="text-sm font-black text-white uppercase tracking-wider font-display flex items-center gap-2">
-                <Hash className="w-5 h-5 text-gold-brand" /> Expense Categories
-              </h3>
-              <button onClick={() => setShowExpenseCatManager(false)} className="text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="flex gap-2">
-              <input type="text" value={expenseCatNew} onChange={(e) => setExpenseCatNew(e.target.value)}
-                placeholder="New category..." onKeyDown={(e) => e.key === 'Enter' && handleAddExpCat()}
-                className="flex-1 bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
-              <button onClick={handleAddExpCat}
-                className="h-10 px-4 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl flex items-center gap-1.5 shadow-lg">
-                <Plus className="w-4 h-4" /> Add
-              </button>
-            </div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {expenseCategories.map(cat => (
-                <div key={cat}
-                  className="flex items-center justify-between bg-zinc-900/50 border border-zinc-800/60 rounded-xl px-3 py-2.5 group hover:border-zinc-700 transition-colors">
-                  {editingExpCat === cat ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <input type="text" value={editingExpCatVal} onChange={(e) => setEditingExpCatVal(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSaveEditExpCat()}
-                        className="flex-1 bg-zinc-950 border border-gold-brand/40 text-gold-light rounded-lg h-8 px-2 text-xs focus:outline-none" autoFocus />
-                      <button onClick={handleSaveEditExpCat} className="p-1 text-emerald-400 hover:text-emerald-300"><Check className="w-4 h-4" /></button>
-                      <button onClick={() => setEditingExpCat(null)} className="p-1 text-zinc-500 hover:text-zinc-300"><X className="w-4 h-4" /></button>
-                    </div>
-                  ) : deleteExpCatConfirm === cat ? (
-                    <div className="flex items-center justify-between flex-1">
-                      <span className="text-xs font-bold text-rose-400 uppercase">Delete "{cat}"?</span>
-                      <div className="flex gap-1.5">
-                        <button onClick={() => setDeleteExpCatConfirm(null)}
-                          className="px-2.5 h-7 text-[10px] font-bold border border-zinc-800 text-zinc-400 rounded-lg hover:bg-zinc-900">Cancel</button>
-                        <button onClick={() => handleDeleteExpCat(cat)}
-                          className="px-2.5 h-7 text-[10px] font-black bg-rose-600 text-white rounded-lg hover:bg-rose-500 uppercase">Delete</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <span className="text-xs font-bold text-zinc-300 uppercase tracking-wide">{cat}</span>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => handleStartEditExpCat(cat)}
-                          className="p-1.5 text-zinc-500 hover:text-gold-brand rounded-lg hover:bg-zinc-800/50 transition-all">
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => setDeleteExpCatConfirm(cat)}
-                          className="p-1.5 text-zinc-500 hover:text-rose-400 rounded-lg hover:bg-zinc-800/50 transition-all">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="pt-2">
-              <button onClick={() => setShowExpenseCatManager(false)}
-                className="w-full h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl">Done</button>
-            </div>
-          </div>
-        </div>
       )}
 
       {showSupplierModal && (

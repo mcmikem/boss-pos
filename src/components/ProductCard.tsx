@@ -93,13 +93,19 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
           ) : !product.isService ? (
             <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-zinc-200 text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-white/15 shadow-md tracking-[0.08em] leading-none">{product.stockQty}</div>
           ) : null}
+          {/* Price lives on the photo (bottom-left) so the + / Choose button can
+              never squeeze it out on narrow phones. Solid chip, always legible. */}
+          {!isOutOfStock && (
+            <div className="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md text-gold-brand text-xs font-black px-2.5 py-1 rounded-lg border border-white/15 shadow-md tabular-nums leading-none">
+              {formatCurrency(minPrice)}{hasVariants ? '+' : ''}
+            </div>
+          )}
         </div>
         <div className="p-3 flex flex-col gap-1 flex-1 min-h-0 w-full">
           <span className="text-[15px] font-bold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
             {product.name}
           </span>
-          <span className="flex items-center justify-between mt-auto gap-2">
-            <span className="text-xs font-semibold text-zinc-400 truncate tabular-nums">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}</span>
+          <span className="flex items-center justify-end mt-auto gap-2">
             <span className="shrink-0 h-10 px-4 bg-gold-brand text-black rounded-xl flex items-center justify-center font-black text-xs uppercase tracking-wider" aria-hidden="true">
               {hasVariants ? 'Choose' : <Plus className="w-5 h-5" />}
             </span>
@@ -168,6 +174,13 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-zinc-200 text-[10px] font-semibold px-2.5 py-1 rounded-lg border border-white/15 shadow-md tracking-[0.08em] leading-none">{product.stockQty}</div>
           )
         )}
+        {/* Price lives on the photo (bottom-left) so the + / stepper can never
+            squeeze it out on narrow phones. Solid chip, always legible. */}
+        {!isOutOfStock && (
+          <div className="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md text-gold-brand text-xs sm:text-[13px] font-black font-display px-2.5 py-1 rounded-lg border border-white/15 shadow-md tabular-nums leading-none">
+            {formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] font-semibold"> / {product.saleUnit}</span> : null}
+          </div>
+        )}
       </div>
 
       <div className="p-3 flex flex-col gap-1 flex-1 min-h-0">
@@ -178,20 +191,21 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         <h3 className="text-sm sm:text-[15px] font-semibold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
           {product.name}
         </h3>
-        {/* Mistake 9 fix: trust signal (stock) lives next to the title/price,
-            not only as a far-away badge — "what is it, can I trust it, how much". */}
+        {/* Price is on the photo now — this row keeps only the trust signal
+            (stock / margin / cost) + the tap target, so nothing truncates. */}
         <div className="flex items-center justify-between mt-auto gap-1">
-          <div className="min-w-0">
-            <p className="text-xs sm:text-[13px] font-bold text-gold-brand font-display leading-tight truncate tabular-nums">{formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] text-zinc-400 font-semibold"> / {product.saleUnit}</span> : null}</p>
+          <div className="min-w-0 flex-1">
             {isLowStock && !isOutOfStock && !product.isService ? (
-              <p className="text-[11px] font-semibold text-amber-400/90 mt-0.5">Only {product.stockQty} left</p>
+              <p className="text-[11px] font-semibold text-amber-400/90 mt-0.5 truncate">Only {product.stockQty} left</p>
             ) : marginPct !== null ? (
-              <p className={`text-[11px] font-bold mt-0.5 ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
+              <p className={`text-[11px] font-bold mt-0.5 truncate ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
                 {marginPct <= 0 ? 'Loss' : `+${marginPct.toFixed(0)}%`}
               </p>
             ) : (
-              product.cost > 0 && (
-                <p className="text-[11px] text-zinc-500 font-medium mt-0.5">{formatCurrency(product.cost)}</p>
+              product.cost > 0 ? (
+                <p className="text-[11px] text-zinc-500 font-medium mt-0.5 truncate tabular-nums">{formatCurrency(product.cost)}</p>
+              ) : (
+                !product.isService && <p className="text-[11px] text-zinc-500 font-medium mt-0.5 truncate">{product.stockQty} in stock</p>
               )
             )}
           </div>

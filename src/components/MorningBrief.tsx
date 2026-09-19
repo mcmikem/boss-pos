@@ -16,6 +16,7 @@ interface MorningBriefProps {
   formatCurrency: (val: number) => string;
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers') => void;
   onSync: () => void;
+  dailyGoal?: number;
 }
 
 function greeting(): string {
@@ -25,7 +26,7 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync }: MorningBriefProps) {
+export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal }: MorningBriefProps) {
   const brief = useMemo(() => {
     const today = localDayKey(new Date().toISOString());
     const yesterday = localDayKey(new Date(Date.now() - 86400000).toISOString());
@@ -87,6 +88,20 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
           {greeting()} — today at a glance
         </h3>
       </div>
+      {dailyGoal !== undefined && dailyGoal > 0 && (
+        <div className="mb-3" title={`Daily goal: ${dailyGoal} sales`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Daily goal</span>
+            <span className="text-[10px] font-black text-gold-brand tabular-nums">
+              {brief.today.count}/{dailyGoal}{brief.today.count >= dailyGoal ? ' ✓' : ''}
+            </span>
+          </div>
+          <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${brief.today.count >= dailyGoal ? 'bg-emerald-400' : 'bg-gold-brand'}`}
+              style={{ width: `${Math.min(100, Math.round((brief.today.count / dailyGoal) * 100))}%` }} />
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {tiles.map(t => (
           <button key={t.label} onClick={t.act}

@@ -212,6 +212,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       document.documentElement.classList.toggle('light-theme', theme === 'light');
     } catch {}
   }, [theme]);
+  // Charge beep + vibration after each sale (per device). Read live by
+  // playChargeFeedback in Sales; this state only re-renders the toggle label.
+  const [chargeSound, setChargeSound] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_charge_sound') !== '0'; } catch { return true; }
+  });
+  const toggleChargeSound = () => {
+    setChargeSound(prev => {
+      const next = !prev;
+      try { localStorage.setItem('boss_pos_charge_sound', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
   const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [showMore, setShowMore] = useState(false);
@@ -1820,7 +1832,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <ErrorBoundary key="sales">
           {isManager && isOn(settings.features, 'briefing') && (
             <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
-              formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync} />
+              formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
+              dailyGoal={settings.dailyGoalNum} />
           )}
           {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
@@ -2017,6 +2030,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             sales={sales} expenses={expenses} products={products}
             suppliers={suppliers} supplierPrices={supplierPrices}
             creditPayments={creditPayments}
+            creditEats={creditEats}
+            onPayCreditEat={handlePayCreditEat}
+            momoTransfers={momoTransfers}
             expenseCategories={expenseCategories}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
@@ -2134,6 +2150,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               Synced {formatSyncedAgo(lastSyncedAt)}
             </span>
           ) : null}
+          {cart.length > 0 && (
+            <button onClick={() => setActiveTab('sales')} title="Go to cart"
+              aria-label={`Cart total ${formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}. Go to sell screen.`}
+              className="text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-gold-brand/30 hover:bg-gold-brand/20 transition-all cursor-pointer tabular-nums">
+              Cart • {formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {installPrompt && (
@@ -2920,6 +2943,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     {settings.largeText ? 'Big text: On' : 'Big text: Off'}
                   </button>
                 </div>
+                <button onClick={toggleChargeSound}
+                  title="Beep + vibration when a sale completes"
+                  className={`w-full h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${chargeSound ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                  {chargeSound ? 'Charge sound: On' : 'Charge sound: Off'}
+                </button>
                 <button onClick={() => setNav(isSimpleNav ? 'full' : 'simple')}
                   title="Simple shows Sell, Money and More. Full shows all five tabs."
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">

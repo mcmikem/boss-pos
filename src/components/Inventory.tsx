@@ -229,6 +229,15 @@ export default function Inventory({
     return m;
   }, [staleList]);
 
+  // Capital locked on shelves (cost × on-hand, services excluded) + how much
+  // of it is dead (stale items). Answers "how much money is sitting here?"
+  const stockValue = useMemo(() => {
+    return products.reduce((a, p) => a + (p.isService || p.stockQty <= 0 ? 0 : (p.cost || 0) * p.stockQty), 0);
+  }, [products]);
+  const deadCapital = useMemo(() => {
+    return staleList.reduce((a, s) => a + (s.product.stockQty > 0 && !s.product.isService ? (s.product.cost || 0) * s.product.stockQty : 0), 0);
+  }, [staleList]);
+
   const processedProducts = useMemo(() => {
     let list = products.filter(p => {
       const q = searchQuery.toLowerCase();
@@ -680,11 +689,17 @@ export default function Inventory({
         </div>
       </section>
 
-      <section className="grid grid-cols-3 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="boss-card p-3 border-l-4 border-l-zinc-500 flex flex-col justify-between">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Products</p>
           <div className="flex items-baseline gap-2 mt-2">
             <span className="text-2xl font-black text-white font-display">{products.length}</span>
+          </div>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-cyan-500 flex flex-col justify-between" title="Capital locked on shelves: cost × quantity on hand">
+          <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">On shelves</p>
+          <div className="flex items-baseline gap-2 mt-2 min-w-0">
+            <span className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(stockValue)}>{formatCurrency(stockValue)}</span>
           </div>
         </div>
         <div className="boss-card p-3 border-l-4 border-l-rose-500 flex flex-col justify-between">
@@ -703,8 +718,36 @@ export default function Inventory({
               {staleList.length}
             </span>
           </div>
+          {deadCapital > 0 && (
+            <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1 truncate tabular-nums">{formatCurrency(deadCapital)} tied up</p>
+          )}
         </div>
       </section>
+
+      {staleList.length > 0 && (
+        <details className="boss-card p-4">
+          <summary className="text-xs font-black text-amber-400 uppercase tracking-widest cursor-pointer hover:text-amber-300 touch-target">
+            Clearance list ({staleList.length}) • {formatCurrency(deadCapital)} sleeping
+          </summary>
+          <div className="mt-2 space-y-1.5">
+            {staleList.slice(0, 20).map(({ product, daysSince }) => (
+              <div key={product.id} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white uppercase truncate">{product.name}</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                    {daysSince === null ? 'Never sold' : `${daysSince}d no sale`} • {product.stockQty} left
+                  </p>
+                </div>
+                <p className="text-xs font-black text-amber-300 shrink-0 tabular-nums">{formatCurrency((product.cost || 0) * Math.max(0, product.stockQty))}</p>
+              </div>
+            ))}
+            {staleList.length > 20 && (
+              <p className="text-[10px] text-zinc-600 font-bold uppercase text-center">+{staleList.length - 20} more — search above to find them</p>
+            )}
+            <p className="text-[10px] text-zinc-600 font-bold uppercase">Tip: cut the price in Stock → edit, or bundle slow items with fast sellers.</p>
+          </div>
+        </details>
+      )}
 
       <section className="space-y-3">
         <div className="flex justify-between items-center pb-2">

@@ -492,6 +492,43 @@ export default function CategoryRegister({
         <p className={`text-[11px] font-bold uppercase mt-2.5 ${smartCash.status === 'balanced' ? 'text-emerald-300' : smartCash.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}>
           {smartCash.status === 'balanced' ? '✓ Every shilling accounted for.' : smartCash.message}
         </p>
+        {/* Physical count: type what is actually in the drawer. Expected =
+            kept capital + unexplained remainder. Variance ≠ 0 means miscount,
+            pocketed cash, or a missed Money-Out. Saved per day + department. */}
+        {(() => {
+          const countKey = `boss_pos_counted_${todayKey}_${selected}`;
+          let counted = '';
+          try { counted = localStorage.getItem(countKey) || ''; } catch {}
+          const expected = smartCash.closingCapital + smartCash.unaccounted;
+          const countedNum = parseFloat(counted);
+          const hasCount = counted.trim() !== '' && !isNaN(countedNum);
+          const variance = hasCount ? Math.round(countedNum - expected) : 0;
+          return (
+            <div className="mt-3 bg-black/30 rounded-xl p-3 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-[9px] font-bold text-zinc-500 uppercase">Counted in drawer</p>
+                <input type="number" min="0" defaultValue={counted} key={countKey}
+                  placeholder="Type counted cash"
+                  onChange={(e) => { try { localStorage.setItem(countKey, e.target.value); } catch {} }}
+                  onBlur={(e) => {
+                    // Re-render so the variance line updates after typing.
+                    try { localStorage.setItem(countKey, e.target.value); } catch {}
+                    setCloseTicks(prev => ({ ...prev }));
+                  }}
+                  className="mt-1 w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-lg h-10 px-3 text-sm font-black tabular-nums focus:border-gold-brand outline-none" />
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-[9px] font-bold text-zinc-500 uppercase">Should be</p>
+                <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(expected)}</p>
+                {hasCount && (
+                  <p className={`text-xs font-black tabular-nums mt-0.5 ${variance === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {variance === 0 ? '✓ exact' : `${variance > 0 ? '+' : '−'}${formatCurrency(Math.abs(variance))} ${variance > 0 ? 'extra' : 'short'}`}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
