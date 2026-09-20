@@ -4,7 +4,8 @@ import Sheet from './Sheet';
 import SettleSheet from './SettleSheet';
 import type { TailoringOrder, Sale } from '../types';
 import { tailoringOrderApi } from '../api';
-import { ringServiceSale } from '../utils/serviceSale';
+import { ringServiceSale, customerWhatsAppUrl } from '../utils/serviceSale';
+import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 
 const WORK_PRESETS: Record<string, string[]> = {
@@ -86,6 +87,23 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
              o.id.toLowerCase().includes(q);
     });
   }, [orders, filter, search]);
+
+  // Money waiting on the shelf: done but uncollected past the expected
+  // date — one bell nudge per day so pickups (and balances) don't rot.
+  useEffect(() => {
+    if (orders.length === 0) return;
+    try {
+      const waiting = orders.filter(o =>
+        (o.status === 'completed' || o.status === 'in_progress') &&
+        o.expectedDate < today && Math.round(o.totalAmount - (o.depositPaid || 0)) > 0);
+      if (waiting.length === 0) return;
+      const owed = waiting.reduce((s, o) => s + Math.round(o.totalAmount - (o.depositPaid || 0)), 0);
+      pushNotice('info', `${waiting.length} tailoring order${waiting.length !== 1 ? 's' : ''} overdue for pickup`,
+        `${fmt(owed)} still out with customers past the expected date — tap Tailoring, notify them.`,
+        `tailor-wait:${dayKeyOf()}`);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders.length]);
 
   const pendingCount = orders.filter(o => o.status === 'pending').length;
   const inProgressCount = orders.filter(o => o.status === 'in_progress').length;
@@ -421,6 +439,21 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                   )}
+                  {order.status === 'completed' && order.customerPhone && balance > 0 && (() => {
+                    const url = customerWhatsAppUrl(order.customerPhone,
+                      `Hello ${order.customerName}, your ${order.workDescription || order.workType} is READY for pickup! Balance: ${fmt(balance)}. Thank you!`);
+                    if (!url) return null;
+                    return (
+                      <button onClick={() => {
+                          const w = window.open(url, '_blank', 'noopener');
+                          if (w) triggerToast('WhatsApp opened — send the pickup note', 'success');
+                          else triggerToast('Could not open WhatsApp', 'error');
+                        }}
+                        className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-emerald-950/50 active:scale-95 transition-all cursor-pointer">
+                        Notify
+                      </button>
+                    );
+                  })()}
                   <button onClick={() => openEdit(order)}
                     className="h-9 px-3 bg-zinc-800/30 text-zinc-400 hover:text-white border border-zinc-800/50 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer">
                     Edit

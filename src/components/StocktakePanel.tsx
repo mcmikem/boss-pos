@@ -2,6 +2,7 @@
 // the differences priced at cost, apply. Only changed lines are written —
 // untouched products are never echoed back to the server.
 import { useMemo, useState } from 'react';
+import { logAdjustment } from '../utils/adjustLog';
 import { ClipboardCheck, Search, Check, ArrowRightLeft } from 'lucide-react';
 import type { Product } from '../types';
 import { diffStocktake, shrinkageValue, surplusValue } from '../utils/stocktake';
@@ -51,7 +52,13 @@ export default function StocktakePanel({ products, onUpdateProduct, formatCurren
     if (diffs.length === 0 || applying) return;
     setApplying(true);
     try {
-      for (const d of diffs) onUpdateProduct({ ...d.product, stockQty: d.counted });
+      for (const d of diffs) {
+        onUpdateProduct({ ...d.product, stockQty: d.counted });
+        logAdjustment({
+          ts: new Date().toISOString(), productId: d.product.id, name: d.product.name,
+          type: 'set', qty: d.counted, reason: 'Stock-take count',
+        });
+      }
       triggerToast(
         `Stocktake applied: ${diffs.length} line${diffs.length !== 1 ? 's' : ''}${shrink > 0 ? ` • shrinkage ${formatCurrency(shrink)}` : ''}${surplus > 0 ? ` • surplus ${formatCurrency(surplus)}` : ''}`,
         shrink > 0 ? 'error' : 'success'

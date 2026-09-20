@@ -10,7 +10,8 @@ export function printReceipt(
   const items = sale.items
     .map(i => {
       const label = i.variantLabel ? ` (${i.variantLabel})` : '';
-      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} x${i.qty}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
+      const disc = (i.lineDiscount || 0) > 0 ? `<div class="muted" style="font-size:10px">−${formatCurrency(i.lineDiscount || 0)} off</div>` : '';
+      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} x${i.qty}${disc}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
     })
     .join('');
   const discountRow =

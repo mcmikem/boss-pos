@@ -13,6 +13,7 @@ import ExpenseDetailModal from './ExpenseDetailModal';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
 import { restockQtyFor, buildRestockMessage, supplierTelUrl, supplierWhatsAppUrl } from '../utils/suppliers';
+import { serviceCategoryOf } from '../utils/serviceCategories';
 import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
@@ -341,12 +342,17 @@ export default function Analytics({
     return shown.join(', ') + (rest > 0 ? ` +${rest} more` : '');
   };
 
-  // Department(s) the sale came from, via the live product list.
+  // Department(s) the sale came from: live catalog first, service-sale map
+  // (tailoring/design/repair/booking handovers) second, Other last.
   const saleCategories = (sale: Sale): string => {
     const set = new Set<string>();
     sale.items.forEach(i => {
       const p = products.find(x => x.id === i.productId);
       if (p?.category) set.add(p.category);
+      else {
+        const svc = serviceCategoryOf(i.productId);
+        if (svc) set.add(svc);
+      }
     });
     return Array.from(set).join(', ');
   };
@@ -357,7 +363,7 @@ export default function Analytics({
     filteredSales.forEach(sale => {
       sale.items.forEach(item => {
         const prod = products.find(p => p.id === item.productId);
-        const cat = prod ? prod.category : 'Other';
+        const cat = prod ? prod.category : (serviceCategoryOf(item.productId) || 'Other');
         categoriesSum[cat] = (categoriesSum[cat] || 0) + item.lineTotal;
       });
     });
@@ -635,6 +641,20 @@ const colorsMap: { [key: string]: string } = {
                       {products.filter(p => p.supplierId === sup.id).length} product(s)
                     </p>
                   )}
+                  {(() => {
+                    // Stock money sent this way: restock expenses linked to
+                    // this supplier's products (this period's filter applies).
+                    const ids = new Set(products.filter(p => p.supplierId === sup.id).map(p => p.id));
+                    const spent = filteredExpenses
+                      .filter(e => e.linkedProductId && ids.has(e.linkedProductId))
+                      .reduce((a, e) => a + (e.amount || 0), 0);
+                    if (spent <= 0) return null;
+                    return (
+                      <p className="text-[10px] font-black uppercase mt-1 text-rose-300/90 tabular-nums">
+                        Bought {formatCurrency(spent)} • {timeFilter}
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div className="space-y-2 pt-2 border-t border-zinc-900">
                   <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -832,6 +852,29 @@ const colorsMap: { [key: string]: string } = {
               )}
             </div>
           </div>
+
+          {(() => {
+            // Refunds are excluded from every total above — surface them so a
+            // refund spree can't hide inside a good-looking revenue number.
+            const refunded = sales.filter(s =>
+              s.refunded && timeRange.filter(s.timestamp) &&
+              (branchFilter === 'All' || (s.branch || '') === branchFilter));
+            if (refunded.length === 0) return null;
+            const refundTotal = refunded.reduce((a, s) => a + s.total, 0);
+            return (
+              <section className="boss-card p-4 border border-rose-900/30 bg-rose-950/10">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-black text-rose-300 uppercase tracking-widest">
+                    Refunded ({refunded.length})
+                  </p>
+                  <p className="text-sm font-black text-rose-400 tabular-nums">−{formatCurrency(refundTotal)}</p>
+                </div>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1 truncate">
+                  {refunded.slice(0, 4).map(s => s.orderNumber).join(' • ')}{refunded.length > 4 ? ` +${refunded.length - 4} more` : ''} • excluded from totals above
+                </p>
+              </section>
+            );
+          })()}
 
           <section className="boss-card p-5">
             <div className="flex justify-between items-center mb-4">

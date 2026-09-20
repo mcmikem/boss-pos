@@ -14,6 +14,7 @@ import { isOn, type FeatureKey } from '../utils/features';
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
+  prevDayKey,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
 
@@ -201,9 +202,10 @@ export default function CategoryRegister({
   const allBankOut = allMoneyOutToday.filter(t => t.to === 'bank').reduce((s, t) => s + t.amount, 0);
 
   // Daily close-out: for each dish, produced - sold - expired - carried.
-  // A positive remainder is stock that "vanished" (shrinkage); negative means
-  // sales were covered from earlier production (normal when leftover existed).
-  // Carried (remaining) is explained — tomorrow's opening, never shrinkage.
+  // Eats are NEVER stocked — no on-hand column (live stockQty is polluted by
+  // placeholder figures and misleads). A positive remainder is food still on
+  // the tray: the seller carries it to tomorrow (tomorrow's opening) or logs
+  // it lost. Negative means sales were covered from earlier production.
   const balanceRows = useMemo(() => {
     const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === balanceDate);
     return catProducts.map(p => {
@@ -216,11 +218,37 @@ export default function CategoryRegister({
       const sold = daySales.flatMap(s => s.items)
         .filter(i => i.productId === p.id)
         .reduce((s, i) => s + (i.qty || 0), 0);
-      return { product: p, made, sold, lost, carried, onHand: p.stockQty || 0, recon: made - sold - lost - carried };
-    }).filter(r => r.made + r.sold + r.lost + r.carried > 0 || r.onHand > 0);
+      return { product: p, made, sold, lost, carried, recon: made - sold - lost - carried };
+    }).filter(r => r.made + r.sold + r.lost + r.carried > 0);
   }, [catProducts, catProduction, catWastage, sales, balanceDate]);
 
   const totalShrinkage = useMemo(() => balanceRows.reduce((s, r) => s + Math.max(0, r.recon), 0), [balanceRows]);
+
+  // Carry the tray remainder to tomorrow: logs a 'remaining' wastage row on
+  // this date, which becomes tomorrow's opening (see leftoverFor). The
+  // banner below forces the confirm before close-out.
+  const carryRow = (row: { product: Product; recon: number }) => {
+    const qty = Math.round(row.recon);
+    if (qty <= 0) return;
+    onAddWastage({
+      id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      date: balanceDate,
+      item: row.product.name,
+      category: selected,
+      productId: row.product.id,
+      qty,
+      costEach: row.product.cost || 0,
+      lossAmount: Math.round(qty * (row.product.cost || 0)),
+      reason: 'remaining',
+    });
+    triggerToast(`${qty} × ${row.product.name} → tomorrow's opening`, 'success');
+  };
+  const carryAll = () => {
+    const rows = balanceRows.filter(r => r.recon > 0);
+    if (rows.length === 0) return;
+    if (!window.confirm(`Carry ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s) to tomorrow's opening?`)) return;
+    rows.forEach(carryRow);
+  };
 
   const [payId, setPayId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -515,10 +543,20 @@ export default function CategoryRegister({
           {smartCash.drawerExpenses > 0 && <> − Expenses {formatCurrency(smartCash.drawerExpenses)}</>} − Moved {formatCurrency(smartCash.movedOut)} − Capital {formatCurrency(smartCash.closingCapital)}
         </p>
         <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="bg-black/30 rounded-xl p-2.5">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Opening</p>
-            <p className="text-sm font-black text-zinc-200">{formatCurrency(smartCash.openingCapital)}</p>
-          </div>
+          <button onClick={() => {
+              const raw = window.prompt(`Recount opening cash for ${selected} (yesterday's capital)?`, String(smartCash.openingCapital));
+              if (raw === null) return;
+              const v = Math.max(0, Math.round(parseFloat(raw) || 0));
+              try { setClosingCapital(prevDayKey(todayKey), selected, v); } catch {}
+              try { localStorage.setItem(`boss_pos_counted_${todayKey}_${selected}`, ''); } catch {}
+              setCloseTicks(prev => ({ ...prev }));
+              triggerToast(`Opening recounted: ${formatCurrency(v)}`, 'success');
+            }}
+            title="Tap to recount yesterday's closing (today's opening)"
+            className="bg-black/30 rounded-xl p-2.5 cursor-pointer hover:border hover:border-gold-brand/40 border border-transparent transition-all text-center">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Opening ✎</p>
+            <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(smartCash.openingCapital)}</p>
+          </button>
           <div className="bg-black/30 rounded-xl p-2.5">
             <p className="text-[9px] font-bold text-zinc-500 uppercase">Sold today</p>
             <p className="text-sm font-black text-cyan-300">{formatCurrency(smartCash.collected)}</p>
@@ -757,10 +795,25 @@ export default function CategoryRegister({
         {balanceRows.length === 0 ? (
           <div className="text-center py-6">
             <CalendarDays className="w-9 h-9 text-gold-brand/40 mx-auto mb-2" />
-            <p className="text-xs text-zinc-500 font-bold uppercase">No {selected} items made, sold or in stock on this day</p>
+            <p className="text-xs text-zinc-500 font-bold uppercase">No {selected} items made, sold, lost or carried on this day</p>
           </div>
         ) : (
           <>
+            {totalShrinkage > 0 && (
+              <div className="mb-3 bg-amber-950/30 border border-amber-600/30 rounded-xl px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <p className="text-[11px] font-bold text-amber-300 uppercase flex-1">
+                    Confirm before you close: {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} still on the tray
+                  </p>
+                </div>
+                <button onClick={carryAll}
+                  className="mt-2 w-full h-10 bg-amber-500/20 border border-amber-500/40 text-amber-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-amber-500/30 active:scale-[0.99] transition-all cursor-pointer">
+                  Carry all to tomorrow's opening
+                </button>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">…or log them as lost below — carried food opens tomorrow's day</p>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -770,13 +823,12 @@ export default function CategoryRegister({
                     <th className="text-right py-1.5 px-2 font-bold text-emerald-400">Sold</th>
                     <th className="text-right py-1.5 px-2 font-bold text-rose-400">Lost</th>
                     <th className="text-right py-1.5 px-2 font-bold text-amber-400">Carried</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-cyan-400">On-hand</th>
                     <th className="text-right py-1.5 pl-2 font-bold">Check</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {balanceRows.map(({ product, made, sold, lost, carried, onHand, recon }) => {
-                    const status = recon > 0 ? 'miss' : recon < 0 ? 'fromStock' : 'ok';
+                  {balanceRows.map(({ product, made, sold, lost, carried, recon }) => {
+                    const status = recon > 0 ? 'tray' : recon < 0 ? 'fromStock' : 'ok';
                     return (
                       <tr key={product.id} className="border-t border-white/5">
                         <td className="py-2 pr-2 font-bold text-white truncate max-w-[120px]">{product.name}</td>
@@ -784,12 +836,13 @@ export default function CategoryRegister({
                         <td className="py-2 px-2 text-right font-mono text-emerald-400">{sold || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-rose-400">{lost || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-amber-300">{carried || '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-cyan-400">{onHand}</td>
                         <td className="py-2 pl-2 text-right">
                           {status === 'ok' ? (
                             <span className="text-emerald-400 font-black">✓</span>
-                          ) : status === 'miss' ? (
-                            <span className="text-amber-400 font-black" title={`${recon} made but not sold, lost, or carried`}>+{recon}</span>
+                          ) : status === 'tray' ? (
+                            <button onClick={() => carryRow({ product, recon })}
+                              title={`Carry ${recon} to tomorrow's opening`}
+                              className="text-amber-400 font-black bg-amber-950/40 border border-amber-600/40 rounded-lg px-2 py-1 hover:bg-amber-950/60 active:scale-95 transition-all cursor-pointer tabular-nums">+{recon}</button>
                           ) : (
                             <span className="text-zinc-500 font-bold" title="Sold more than made — covered from earlier stock">−{Math.abs(recon)}</span>
                           )}
@@ -800,14 +853,6 @@ export default function CategoryRegister({
                 </tbody>
               </table>
             </div>
-            {totalShrinkage > 0 && (
-              <div className="mt-3 bg-amber-950/30 border border-amber-600/30 rounded-xl px-3 py-2.5 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                <p className="text-[11px] font-bold text-amber-300 uppercase">
-                  {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} produced but not sold, lost, or carried — check for shrinkage
-                </p>
-              </div>
-            )}
           </>
         )}
       </section>

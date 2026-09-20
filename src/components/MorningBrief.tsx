@@ -1,9 +1,12 @@
 // Boss morning briefing: one glance before the day starts — sold today vs
 // yesterday, who still owes (credit), what is running out, what hasn't
 // synced. Manager-only, every tile jumps to the screen that fixes it.
-import { useMemo, useState } from 'react';
-import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown } from 'lucide-react';
-import type { Sale, CreditEat, Product } from '../types';
+import { useMemo, useState, useEffect } from 'react';
+import { bookingApi } from '../api';
+import type { Booking } from '../types';
+import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown, Wallet } from 'lucide-react';
+import type { Sale, CreditEat, Product, Expense, MomoTransfer } from '../types';
+import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
 import { stockoutLosses } from '../utils/stockout';
@@ -17,6 +20,9 @@ interface MorningBriefProps {
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers') => void;
   onSync: () => void;
   dailyGoal?: number;
+  expenses?: Expense[];
+  momoTransfers?: MomoTransfer[];
+  eodCapital?: Record<string, number>;
 }
 
 function greeting(): string {
@@ -26,8 +32,21 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal }: MorningBriefProps) {
+export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, expenses = [], momoTransfers = [], eodCapital }: MorningBriefProps) {
   // Minimisable: cashiers short on space collapse it; choice sticks per device.
+  // Today's chairs: salon bookings due today that aren't done/cancelled.
+  const [todayBookings, setTodayBookings] = useState<Booking[]>([]);
+  useEffect(() => {
+    let live = true;
+    bookingApi.list()
+      .then(list => {
+        if (!live) return;
+        const k = todayLocalKey();
+        setTodayBookings(list.filter(b => b.date === k && b.status === 'booked'));
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_brief_collapsed') === '1'; } catch { return false; }
   });
@@ -55,6 +74,41 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       bySeller.set(name, cur);
     }
     const topSeller = Array.from(bySeller.values()).sort((a, b) => b.total - a.total)[0] || null;
+    // Live drawer: what should physically sit in drawers + phone right now
+    // (all departments): opening + sold − drawer spend − moved out.
+    const cats = new Set<string>();
+    products.forEach(p => { if (p.category) cats.add(p.category); });
+    const drawerExp = drawerExpensesByCategory(expenses, today);
+    const moved = moneyOutByCategory(momoTransfers, today);
+    let inDrawers = 0;
+    for (const cat of cats) {
+      let collected = 0;
+      for (const s of sales) {
+        if (s.refunded || localDayKey(s.timestamp) !== today) continue;
+        if (s.paymentMethod === 'Credit / Book') continue;
+        for (const i of s.items) {
+          const prod = products.find(x => x.id === i.productId);
+          if ((prod?.category || '') === cat) collected += i.lineTotal || 0;
+        }
+      }
+      const m = moved[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+      inDrawers += getOpeningCapital(today, cat, eodCapital) + collected
+        - (drawerExp[cat] || 0) - m.float - m.cash - m.owner - (m.bank || 0);
+    }
+    // Rush hour: busiest sales hour today (5am–11pm sane range for display).
+    const hourly = new Array<number>(24).fill(0);
+    for (const s of sales) {
+      if (s.refunded || localDayKey(s.timestamp) !== today) continue;
+      const h = new Date(s.timestamp).getHours();
+      if (Number.isFinite(h)) hourly[h] += 1;
+    }
+    let rushHour = -1;
+    let rushCount = 0;
+    hourly.forEach((c, h) => { if (c > rushCount) { rushCount = c; rushHour = h; } });
+    const fmtHour = (h: number) => {
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      return `${h12}${h < 12 ? 'am' : 'pm'}`;
+    };
     return {
       today: t,
       delta: dayDelta(t.revenue, y.revenue),
@@ -63,6 +117,8 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       expiring: expiringCount(products, todayLocalKey()),
       stockout,
       topSeller,
+      rushHour, rushCount, fmtHour,
+      inDrawers,
     };
   }, [sales, products, creditEats]);
 
@@ -101,6 +157,14 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       icon: <RefreshCw className="w-3.5 h-3.5 text-amber-400" />,
       act: onSync,
     },
+    {
+      label: 'In drawer',
+      value: formatCurrency(Math.max(0, Math.round(brief.inDrawers))),
+      sub: 'cash + phone, live',
+      tone: 'text-cyan-300',
+      icon: <Wallet className="w-3.5 h-3.5 text-cyan-400" />,
+      act: () => onNavigate('registers'),
+    },
   ];
 
   return (
@@ -128,6 +192,15 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 truncate">
           ★ Seller of the day: <span className="text-gold-brand">{brief.topSeller.name}</span>
           <span className="text-zinc-500"> • {formatCurrency(brief.topSeller.total)} ({brief.topSeller.count} sale{brief.topSeller.count !== 1 ? 's' : ''})</span>
+          {brief.rushHour >= 0 && brief.rushCount >= 2 && (
+            <span className="text-zinc-500"> • rush ~{brief.fmtHour(brief.rushHour)} ({brief.rushCount})</span>
+          )}
+        </p>
+      )}
+      {todayBookings.length > 0 && (
+        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 truncate">
+          🪑 {todayBookings.length} chair{todayBookings.length !== 1 ? 's' : ''} today
+          <span className="text-zinc-600"> — {todayBookings.slice(0, 2).map(b => `${b.customerName}${b.time ? ` ${b.time}` : ''}`).join(' • ')}{todayBookings.length > 2 ? '…' : ''}</span>
         </p>
       )}
       {dailyGoal !== undefined && dailyGoal > 0 && (
@@ -144,7 +217,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
           </div>
         </div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {tiles.map(t => (
           <button key={t.label} onClick={t.act}
             className="bg-zinc-950/60 border border-white/5 hover:border-gold-brand/40 rounded-xl p-3 text-left transition-all active:scale-95 cursor-pointer min-h-[76px]">

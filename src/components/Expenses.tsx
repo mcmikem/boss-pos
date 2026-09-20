@@ -5,6 +5,7 @@ import { t } from '../utils/i18n';
 import QuickExpenseModal from './QuickExpenseModal';
 import ExpenseDetailModal from './ExpenseDetailModal';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
+import { pushNotice } from '../utils/notifications';
 
 interface ExpensesProps {
   expenses: Expense[];
@@ -62,6 +63,21 @@ export default function Expenses({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); }, []);
+
+  // Rent is the forgotten expense: one gentle bell nudge per month until a
+  // Rent-category expense lands in the current month.
+  useEffect(() => {
+    try {
+      const month = localMonthKey(new Date().toISOString());
+      const paid = expenses.some(e => localMonthKey(e.timestamp) === month && (e.category || '').toLowerCase() === 'rent');
+      if (!paid) {
+        pushNotice('info', 'Rent not logged yet this month',
+          'Shops bleed quietly on rent. Log it below so profit stays honest.',
+          `rent:${month}`);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const armDelete = (id: string) => {
     if (deleteTimer.current) clearTimeout(deleteTimer.current);
     setDeleteConfirmId(id);

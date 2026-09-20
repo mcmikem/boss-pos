@@ -77,7 +77,8 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     .map(i => {
       const label = i.variantLabel ? ` (${i.variantLabel})` : '';
       const qtyLabel = i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`;
-      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} ${escapeHtml(qtyLabel)}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
+      const disc = (i.lineDiscount || 0) > 0 ? `<div style="font-size:10px;color:#a1a1aa">−${formatCurrency(i.lineDiscount || 0)} off</div>` : '';
+      return `<tr><td style="padding:2px 0">${escapeHtml(i.productName + label)} ${escapeHtml(qtyLabel)}${disc}</td><td style="text-align:right;white-space:nowrap">${formatCurrency(i.lineTotal)}</td></tr>`;
     })
     .join('');
   const discountRow =
@@ -147,7 +148,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     sale.orderNumber,
     new Date(sale.timestamp).toLocaleString(),
     '',
-    ...sale.items.map(i => `${i.productName}${i.variantLabel ? ` (${i.variantLabel})` : ''} ${i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`} = ${formatCurrency(i.lineTotal)}`),
+    ...sale.items.map(i => `${i.productName}${i.variantLabel ? ` (${i.variantLabel})` : ''} ${i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`} = ${formatCurrency(i.lineTotal)}${(i.lineDiscount || 0) > 0 ? ` (−${formatCurrency(i.lineDiscount || 0)})` : ''}`),
     ...(sale.discount && sale.discount > 0 ? [`Discount: -${formatCurrency(sale.discount)}`] : []),
     '',
     `TOTAL: ${formatCurrency(sale.total)}`,
@@ -219,7 +220,9 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           <div className="border-t border-dashed border-zinc-400 my-2" />
           {sale.items.map((i, idx) => (
             <div key={idx} className="flex justify-between text-[11px] py-0.5">
-              <span>{i.productName}{i.variantLabel ? ` (${i.variantLabel})` : ''} {i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`}</span>
+              <span>{i.productName}{i.variantLabel ? ` (${i.variantLabel})` : ''} {i.saleUnit ? unitLabel(i.qty, i.saleUnit) : `x${i.qty}`}
+                {(i.lineDiscount || 0) > 0 && <span className="text-zinc-500"> (−{formatCurrency(i.lineDiscount || 0)})</span>}
+              </span>
               <span className="whitespace-nowrap">{formatCurrency(i.lineTotal)}</span>
             </div>
           ))}

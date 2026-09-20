@@ -1,6 +1,16 @@
 import type { Sale } from '../types';
 import { nextOrderNumber } from '../api';
 
+// Uganda phone → wa.me digits: 0701… → 256701…, +256… → 256….
+export function customerWhatsAppUrl(phone: string, message: string): string | null {
+  const digits = (phone || '').replace(/\D/g, '');
+  let intl = '';
+  if (/^0\d{9}$/.test(digits)) intl = `256${digits.slice(1)}`;
+  else if (/^256\d{9}$/.test(digits)) intl = digits;
+  else return null;
+  return `https://wa.me/${intl}?text=${encodeURIComponent(message)}`;
+}
+
 export interface ServiceSaleInput {
   onAddSale: (sale: Sale) => void;
   staffName?: string;

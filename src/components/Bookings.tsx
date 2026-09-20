@@ -250,6 +250,8 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
       {filtered.map(b => {
         const cfg = STATUS_CFG[b.status] || STATUS_CFG.booked;
         const balance = Math.max(0, b.price - b.deposit);
+        // No-show: date passed, still booked, never arrived.
+        const noShow = b.status === 'booked' && b.date < today;
         return (
           <div key={b.id} className="boss-card p-4">
             <div className="flex items-center justify-between gap-2">
@@ -260,6 +262,12 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
               <span className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${cfg.bg} ${cfg.color}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />{cfg.label}
               </span>
+              {noShow && (
+                <button onClick={() => setStatus(b, 'cancelled')} title="Mark as no-show (cancels the booking)"
+                  className="shrink-0 px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-rose-950/40 border border-rose-800/40 text-rose-300 hover:bg-rose-950/60 active:scale-95 transition-all cursor-pointer">
+                  No-show?
+                </button>
+              )}
             </div>
             <p className="text-xs text-zinc-400 font-bold mt-2 tabular-nums">
               {b.date}{b.time ? ` · ${b.time}` : ''}{b.durationMin ? ` (${b.durationMin} min)` : ''}{b.customerPhone ? ` · ${b.customerPhone}` : ''}

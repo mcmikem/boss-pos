@@ -15,6 +15,7 @@ import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, sup
 import { parseProductsCsv, PRODUCTS_TEMPLATE, type ImportResult } from '../utils/csvImport';
 import { downloadBlob } from '../utils/download';
 import { getPriceHistory } from '../utils/priceHistory';
+import { readAdjustLog, logAdjustment } from '../utils/adjustLog';
 
 interface InventoryProps {
   products: Product[];
@@ -73,18 +74,6 @@ export default function Inventory({
     add: ['Restock purchase', 'Found stock', 'Transfer in'],
     remove: ['Damaged', 'Expired', 'Stolen', 'Given free', 'Miscount'],
     set: ['Stock-take count', 'Miscount correction'],
-  };
-  interface AdjustEntry { ts: string; productId: string; name: string; type: string; qty: number; reason: string }
-  const readAdjustLog = (): AdjustEntry[] => {
-    try {
-      const raw = JSON.parse(localStorage.getItem('boss_pos_adjust_log') || '[]');
-      return Array.isArray(raw) ? raw : [];
-    } catch { return []; }
-  };
-  const logAdjustment = (e: AdjustEntry) => {
-    try {
-      localStorage.setItem('boss_pos_adjust_log', JSON.stringify([e, ...readAdjustLog()].slice(0, 100)));
-    } catch {}
   };
   // Cash paid for arriving stock — saved as a Stock Purchase expense in the
   // same tap, so stock and money can never drift apart. Empty = no expense.
@@ -262,10 +251,15 @@ export default function Inventory({
   }, [staleList]);
 
   const processedProducts = useMemo(() => {
+    const supName = (id?: string) => {
+      if (!id) return '';
+      return suppliers.find(s => s.id === id)?.name || '';
+    };
     let list = products.filter(p => {
       const q = searchQuery.toLowerCase();
       return p.name.toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
+        supName(p.supplierId).toLowerCase().includes(q) ||
         (p.barcode && p.barcode.toLowerCase().includes(q)) ||
         (p.imei && p.imei.toLowerCase().includes(q));
     });
@@ -284,7 +278,7 @@ export default function Inventory({
     }
 
     return list;
-  }, [products, searchQuery, sortBy, expiringOnly]);
+  }, [products, searchQuery, sortBy, expiringOnly, suppliers]);
 
   const handleOpenEdit = (product: Product) => {
     setEditingProduct(product);

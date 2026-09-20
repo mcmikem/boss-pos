@@ -3,7 +3,8 @@ import { Wrench, Plus, X, Search, ChevronRight, RotateCcw } from 'lucide-react';
 import SettleSheet from './SettleSheet';
 import type { RepairJob, Sale } from '../types';
 import { repairJobApi } from '../api';
-import { ringServiceSale } from '../utils/serviceSale';
+import { ringServiceSale, customerWhatsAppUrl } from '../utils/serviceSale';
+import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { todayLocalKey } from '../utils/dates';
 
 const STATUS_CFG: Record<string, { label: string; color: string; bg: string; dot: string }> = {
@@ -63,6 +64,20 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
              j.issue.toLowerCase().includes(q);
     });
   }, [jobs, filter, search]);
+
+  useEffect(() => {
+    if (jobs.length === 0) return;
+    try {
+      const waiting = jobs.filter(j =>
+        j.status === 'ready' && (j.expectedDate || '') < today && Math.round(j.price - (j.deposit || 0)) > 0);
+      if (waiting.length === 0) return;
+      const owed = waiting.reduce((s, j) => s + Math.round(j.price - (j.deposit || 0)), 0);
+      pushNotice('info', `${waiting.length} repair${waiting.length !== 1 ? 's' : ''} overdue for pickup`,
+        `${fmt(owed)} still out past the due date — tap Repairs, notify them.`,
+        `repair-wait:${dayKeyOf()}`);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs.length]);
 
   const openCount = jobs.filter(j => j.status !== 'collected').length;
   const readyCount = jobs.filter(j => j.status === 'ready').length;
@@ -286,6 +301,23 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
                   <RotateCcw className="w-3.5 h-3.5" /> Reopen
                 </button>
               )}
+              {j.status === 'ready' && j.customerPhone && (() => {
+                const bal = Math.round(j.price - (j.deposit || 0));
+                if (bal <= 0) return null;
+                const url = customerWhatsAppUrl(j.customerPhone,
+                  `Hello ${j.customerName}, your ${j.itemLabel} is FIXED and ready! Balance: ${fmt(bal)}. Come collect. Thank you!`);
+                if (!url) return null;
+                return (
+                  <button onClick={() => {
+                      const w = window.open(url, '_blank', 'noopener');
+                      if (w) triggerToast('WhatsApp opened — send the pickup note', 'success');
+                      else triggerToast('Could not open WhatsApp', 'error');
+                    }}
+                    className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-xl text-[10px] font-black uppercase cursor-pointer">
+                    Notify
+                  </button>
+                );
+              })()}
               <button onClick={() => openEdit(j)}
                 className="h-9 px-4 bg-[#0A0A0A] border border-white/5 text-zinc-300 rounded-xl text-[11px] font-black uppercase cursor-pointer">
                 Edit

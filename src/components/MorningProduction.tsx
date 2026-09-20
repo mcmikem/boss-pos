@@ -42,8 +42,25 @@ export default function MorningProduction({
   );
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
 
+
   // Yesterday's leftovers carry as today's opening — kitchen makes less.
   const yesterdayKey = prevDayKey(today);
+
+  // Same again: yesterday's batches one tap away (same menu most mornings).
+  const yesterdayRegs = useMemo(
+    () => productionRegisters.filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === yesterdayKey),
+    [productionRegisters, yesterdayKey]
+  );
+  const repeatYesterday = () => {
+    if (yesterdayRegs.length === 0) return;
+    if (!window.confirm(`Log yesterday's ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} again for today?`)) return;
+    yesterdayRegs.forEach(r => onAddProduction({
+      ...r,
+      id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      date: today,
+    }));
+    triggerToast(`Repeated ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} for today`, 'success');
+  };
   const leftovers = useMemo(
     () => (sales.length ? leftoverFor(products, productionRegisters, sales, wastageLogs, yesterdayKey) : []),
     [products, productionRegisters, sales, wastageLogs, yesterdayKey]
@@ -101,8 +118,18 @@ export default function MorningProduction({
       </p>
 
       <div className="boss-card p-3 border-l-4 border-l-amber-500">
-        <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>
-        <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayCost)}</p>
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>
+            <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayCost)}</p>
+          </div>
+          {yesterdayRegs.length > 0 && todayMade.length === 0 && (
+            <button onClick={repeatYesterday}
+              className="shrink-0 h-10 px-4 bg-amber-950/40 border border-amber-600/40 text-amber-300 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-amber-950/60 active:scale-95 transition-all cursor-pointer">
+              ↺ Same as yesterday
+            </button>
+          )}
+        </div>
       </div>
 
       {carryable.length > 0 && (

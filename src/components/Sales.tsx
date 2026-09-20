@@ -3,7 +3,7 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise
+  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog } from '../types';
 import { nextOrderNumber, quoteApi } from '../api';
@@ -16,6 +16,7 @@ import ServiceQtyModal from './ServiceQtyModal';
 import ConfirmSaleModal from './ConfirmSaleModal';
 import type { TriggerToast } from './Toast';
 import CashTransferModal from './CashTransferModal';
+import ReceiptModal from './ReceiptModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
 import Fuse from 'fuse.js';
@@ -119,6 +120,7 @@ interface SalesProps {
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
   simple?: boolean;
+  onRequirePin?: (message: string) => Promise<boolean>;
 }
 
 const localOrderNumber = () => {
@@ -172,7 +174,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false, onRequirePin,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Hide sold-out rows on crowded tills (per device). Services always show.
@@ -215,6 +217,17 @@ export default function Sales({
     setCart([]);
     triggerToast('Sale parked — recall it from the cart', 'success');
   };
+  // Parked-cart age so stale holds (yesterday's prices, forgotten names)
+  // get recalled or dropped instead of lingering forever.
+  const parkedAge = (iso: string): string => {
+    const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+    if (!Number.isFinite(mins)) return '';
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
+  };
   const recallParked = (id: string) => {
     const entry = parked.find(p => p.id === id);
     if (!entry) return;
@@ -237,7 +250,7 @@ export default function Sales({
         <div key={p.id} className="flex items-center gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
           <button onClick={() => recallParked(p.id)} className="flex-1 min-w-0 text-left cursor-pointer">
             <span className="block text-xs font-black text-white truncate">{p.name}</span>
-            <span className="block text-[10px] text-zinc-500 font-bold">{parkedCount(p)} items • {formatCurrency(parkedTotal(p))}</span>
+            <span className="block text-[10px] text-zinc-500 font-bold">{parkedCount(p)} items • {formatCurrency(parkedTotal(p))} • {parkedAge(p.createdAt)}</span>
           </button>
           <button onClick={() => setParked(unparkCart(p.id))} aria-label={`Drop parked sale ${p.name}`}
             className="shrink-0 text-zinc-600 hover:text-rose-400 font-bold text-lg leading-none px-1 cursor-pointer">×</button>
@@ -313,6 +326,17 @@ export default function Sales({
   }, [quotes.length]);
   // Till language for the sell screen (Luganda mid-sale, English elsewhere).
   const lang = settings?.language;
+  // Known customers for autocomplete: exact-spelling names keep credit caps
+  // and the book matching the same person every time.
+  const knownCustomers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of salesHistory || []) {
+      const n = (s.customerName || '').trim();
+      if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); out.push(n); }
+    }
+    return out.slice(0, 50);
+  }, [salesHistory]);
   // Last-used payment method wins per device (a MoMo-heavy till stays on
   // MoMo); falls back to the shop default on first run.
   const PAY_METHOD_KEY = 'boss_pos_pay_method';
@@ -354,6 +378,7 @@ export default function Sales({
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
   const [lastSaleItems, setLastSaleItems] = useState<SaleItem[] | null>(null);
+  const [reprintSale, setReprintSale] = useState<Sale | null>(null);
 
   useEffect(() => {
     try {
@@ -558,9 +583,23 @@ export default function Sales({
     const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
     if (!item) return;
     const gross = Math.round(item.qty * item.unitPrice);
-    const raw = window.prompt(`Discount off ${item.productName} (UGX, max ${gross.toLocaleString()})? Empty clears.`, item.lineDiscount ? String(item.lineDiscount) : '');
+    const raw = window.prompt(`Discount off ${item.productName}? UGX or % (max ${gross.toLocaleString()}). Empty clears.`, item.lineDiscount ? String(item.lineDiscount) : '');
     if (raw === null) return;
-    const val = Math.round(parseFloat(raw) || 0);
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      setCart(prev => prev.map(i =>
+        `${i.productId}::${i.variantId || ''}` === key
+          ? { ...i, lineDiscount: 0, lineTotal: gross }
+          : i
+      ));
+      triggerToast('Line discount cleared', 'info');
+      return;
+    }
+    // "10%" = percent of the line gross, plain number = UGX off.
+    const isPct = trimmed.endsWith('%');
+    const val = isPct
+      ? Math.round(gross * Math.min(100, Math.max(0, parseFloat(trimmed) || 0)) / 100)
+      : Math.round(parseFloat(trimmed) || 0);
     if (val < 0 || val > gross) {
       playError();
       triggerToast(`Enter 0 – ${gross.toLocaleString()} UGX`, 'error');
@@ -700,6 +739,14 @@ export default function Sales({
       ? Math.min(parseFloat(discount) || 0, 100) / 100 * saleSubtotal
       : Math.min(Math.max(0, parseFloat(discount) || 0), saleSubtotal);
     const saleTotal = Math.max(0, saleSubtotal - saleDiscount);
+    // Big-discount gate: above the manager-set line it needs a manager PIN.
+    // Counts per-line haggles + the cart discount together.
+    const givenTotal = saleDiscount + itemsToSell.reduce((a, i) => a + (i.lineDiscount || 0), 0);
+    const pinAbove = Math.max(0, settings?.discountPinAbove || 0);
+    if (pinAbove > 0 && givenTotal > pinAbove && onRequirePin) {
+      const ok = await onRequirePin(`Discount ${formatCurrency(givenTotal)} is above ${formatCurrency(pinAbove)} — manager PIN to allow it:`);
+      if (!ok) return false;
+    }
     if (oversold.length > 0) {
       setCart(clampedItems);
       if (itemsToSell.length === 0) {
@@ -1145,11 +1192,30 @@ export default function Sales({
 
         {/* Money strip removed: the briefing card already shows today's takings. */}
 
-        {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
-          <button onClick={repeatLastSale}
-            className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
-            <RotateCcw className="w-3.5 h-3.5" /> Repeat last sale
-          </button>
+        {cart.length === 0 && (lastSaleItems || salesHistory.length > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {lastSaleItems && lastSaleItems.length > 0 && (
+              <button onClick={repeatLastSale}
+                className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
+                <RotateCcw className="w-3.5 h-3.5" /> Repeat last sale
+              </button>
+            )}
+            {salesHistory.length > 0 && (
+              <button onClick={() => setReprintSale(salesHistory[0])}
+                className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
+                <Printer className="w-3.5 h-3.5" /> Reprint receipt
+              </button>
+            )}
+          </div>
+        )}
+        {reprintSale && (
+          <ReceiptModal
+            sale={reprintSale}
+            settings={settings || {} as StoreSettings}
+            formatCurrency={formatCurrency}
+            onClose={() => setReprintSale(null)}
+            triggerToast={triggerToast}
+          />
         )}
 
         {/* Fast sellers strip — rush-hour one-tap selling */}
@@ -1491,7 +1557,7 @@ export default function Sales({
                 <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
                   <User className="w-3.5 h-3.5" /> {paymentMethod === 'Credit / Book' ? `${t(lang, 'customerName')} *` : 'Customer name (optional)'}
                 </label>
-                <input type="text" placeholder={paymentMethod === 'Credit / Book' ? t(lang, 'customerNameEx') : 'Regular? Enter name for reward'}
+                <input type="text" list="boss-cust-desktop" placeholder={paymentMethod === 'Credit / Book' ? t(lang, 'customerNameEx') : 'Regular? Enter name for reward'}
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11" />
@@ -1585,6 +1651,11 @@ export default function Sales({
             </div>
           )}
 
+          {knownCustomers.length > 0 && (
+            <datalist id="boss-cust-desktop">
+              {knownCustomers.map(n => <option key={n} value={n} />)}
+            </datalist>
+          )}
           {/* Sticky total (#11): total + Complete never scroll out of reach. */}
           <div className="mt-4 pt-4 border-t border-white/5 space-y-3 shrink-0 sticky bottom-0 bg-[#141414] pb-1">
             {discountNum > 0 && (
@@ -1663,11 +1734,18 @@ export default function Sales({
               ))}
             </div>
             {paymentMethod === 'Credit / Book' ? (
-              <input type="text" placeholder={`${t(lang, 'customerName')} *`} value={customerName}
+              <>
+              {knownCustomers.length > 0 && (
+                <datalist id="boss-cust-mobile">
+                  {knownCustomers.map(n => <option key={n} value={n} />)}
+                </datalist>
+              )}
+              <input type="text" list="boss-cust-mobile" placeholder={`${t(lang, 'customerName')} *`} value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
+              </>
             ) : (
-              <input type="text" placeholder="Name? (regulars reward)" value={customerName}
+              <input type="text" list="boss-cust-mobile" placeholder="Name? (regulars reward)" value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
             )}
@@ -1788,6 +1866,8 @@ export default function Sales({
                   const r = fuse.search(normQuery(quickSearchQuery));
                   matched = r.length ? r.map(x => x.item) : catalog.filter(p => wordMatch(p, qn));
                 }
+                // Same sold-out hiding as the main grid when the filter is on.
+                if (inStockOnly) matched = matched.filter(p => p.isService || p.stockQty > 0);
                 return matched.slice(0, 20).map(product => (
                   <ProductCard
                     key={product.id}
@@ -1834,10 +1914,17 @@ export default function Sales({
                 ))}
               </div>
               {paymentMethod === 'Credit / Book' && (
-                <input type="text" placeholder={t(lang, 'customerNameEx')} value={customerName}
+                <>
+                {knownCustomers.length > 0 && (
+                  <datalist id="boss-cust-quick">
+                    {knownCustomers.map(n => <option key={n} value={n} />)}
+                  </datalist>
+                )}
+                <input type="text" list="boss-cust-quick" placeholder={t(lang, 'customerNameEx')} value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   aria-label={t(lang, 'customerName')}
                   className="w-full bg-[#141414] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
+                </>
               )}
               {paymentMethod === 'Cash' && (
                 <div className="bg-[#141414] border border-white/5 p-3 rounded-2xl space-y-2">

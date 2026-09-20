@@ -336,6 +336,7 @@ export interface StoreSettings {
   momoFeePct?: number; // MTN/Airtel cut auto-booked as expense per MoMo sale
   loyaltyEveryN?: number; // regulars reward: every Nth visit earns loyaltyPct off
   loyaltyPct?: number; // percent off the reward visit (1-50)
+  discountPinAbove?: number; // discounts above this UGX need a manager PIN at charge time (0/empty = never)
   ownerPhone?: string; // WhatsApp number for the daily close summary
   sheetsUrl?: string;
   efris?: EfrisConfig;

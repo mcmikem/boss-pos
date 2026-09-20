@@ -19,6 +19,7 @@ import { localDayKey, todayLocalKey } from '../utils/dates';
 import { eateryDayClose } from '../utils/eateryClose';
 import ReceiptModal from './ReceiptModal';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
+import { serviceCategoryOf } from '../utils/serviceCategories';
 
 interface DashboardProps {
   sales: Sale[];
@@ -130,13 +131,21 @@ export default function Dashboard({
     setCloseNudgeDismissed(true);
   };
 
-  // Top 5 products by qty sold today
+  // Top 5 products by qty sold today. Service handover lines (no catalog
+  // row) keep their sale-line name + trade category instead of "Unknown".
   const productSales = useMemo(() => {
-    const map: Record<string, { qty: number; total: number }> = {};
+    const map: Record<string, { qty: number; total: number; name: string; category: string }> = {};
     todaySales.forEach(sale => {
       sale.items.forEach(item => {
         const key = item.productId;
-        if (!map[key]) map[key] = { qty: 0, total: 0 };
+        if (!map[key]) {
+          const prod = products.find(x => x.id === item.productId);
+          map[key] = {
+            qty: 0, total: 0,
+            name: prod?.name || item.productName,
+            category: prod?.category || serviceCategoryOf(item.productId) || 'Graphics',
+          };
+        }
         map[key].qty += item.qty;
         map[key].total += item.lineTotal;
       });
@@ -144,7 +153,7 @@ export default function Dashboard({
     return Object.entries(map)
       .sort((a, b) => b[1].qty - a[1].qty)
       .slice(0, 5);
-  }, [todaySales]);
+  }, [todaySales, products]);
 
   const handleQuickExpense = (e: FormEvent) => {
     e.preventDefault();
@@ -511,9 +520,8 @@ export default function Dashboard({
         </div>
 
         <div className="space-y-2">
-{productSales.length > 0 ? productSales.map(([productId, { qty, total }]) => {
-            const product = products.find(p => p.id === productId) || { name: 'Unknown', category: 'Graphics' };
-            const catVis = CATEGORY_VISUALS[product.category] || DEFAULT_CATEGORY_VISUAL;
+{productSales.length > 0 ? productSales.map(([productId, { qty, total, name, category }]) => {
+            const catVis = CATEGORY_VISUALS[category] || DEFAULT_CATEGORY_VISUAL;
             const Icon = catVis.icon;
             return (
               <div key={productId} className="flex items-center justify-between bg-black/30 rounded-lg px-3 py-2">
@@ -522,7 +530,7 @@ export default function Dashboard({
                     <Icon className="w-5 h-5 text-gold-light" />
                   </div>
                   <div>
-                    <p className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-gold-light transition-colors">{product.name}</p>
+                    <p className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-gold-light transition-colors">{name}</p>
                     <p className="text-[10px] text-zinc-500 font-bold uppercase">{qty} × sold</p>
                   </div>
                   <span className="text-gold-light font-black">{formatCurrency(total)}</span>
@@ -616,6 +624,7 @@ export default function Dashboard({
                       <span className="truncate flex-1">
                         <span className="uppercase text-zinc-200">{item.productName}</span>
                         {item.variantLabel && <span className="block text-[10px] text-zinc-500 uppercase">{item.variantLabel}</span>}
+                        {(item.lineDiscount || 0) > 0 && <span className="block text-[10px] text-purple-300 uppercase">−{formatCurrency(item.lineDiscount || 0)} off</span>}
                       </span>
                       <span className="text-zinc-500 shrink-0">x{item.qty}</span>
                       <span className="text-gold-light shrink-0">{formatCurrency(item.lineTotal)}</span>

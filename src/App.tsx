@@ -144,7 +144,7 @@ function removeDeletedExpense(id: string): void {
 // Settings keys that sync to the server. Serialized for the dirty-check that
 // stops background boot-pulls from overwriting unsaved local taps.
 const SETTINGS_SYNC_KEYS = new Set([
-  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','loyaltyEveryN','loyaltyPct','shopType','language','usdRate','momoFeePct','ownerPhone',
+  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','loyaltyEveryN','loyaltyPct','discountPinAbove','shopType','language','usdRate','momoFeePct','ownerPhone',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
 ]);
 function serializeSettings(s: StoreSettings): string {
@@ -1854,7 +1854,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           {isManager && isOn(settings.features, 'briefing') && (
             <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
-              dailyGoal={settings.dailyGoalNum} />
+              dailyGoal={settings.dailyGoalNum} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital} />
           )}
           {!isManager && staffConfigured && activeStaff && (() => {
             // Cashiers can't open Reports — this strip is their self check-in.
@@ -1982,6 +1982,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
+            onRequirePin={(msg) => requirePin(msg, true)}
           />
           </ErrorBoundary>
         );
@@ -2112,6 +2113,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
+            onRequirePin={(msg) => requirePin(msg, true)}
           />
           </ErrorBoundary>
         );
@@ -2673,6 +2675,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   onChange={(e) => setSettings(prev => ({ ...prev, momoFeePct: Math.min(20, Math.max(0, parseFloat(e.target.value) || 0)) || undefined }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
                 <p className="text-[10px] text-zinc-600">Each MoMo sale auto-books its fee as a MoMo Fees expense, so profit stays honest.</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Big discounts need PIN <SettingHelp label="Big discounts need PIN" text="Discounts above this amount need a manager PIN at checkout — stops quiet friend-discounts. 0 = never ask." /></label>
+                <input type="number" min="0" step="500" value={settings.discountPinAbove || ''}
+                  placeholder="0 = never ask"
+                  onChange={(e) => setSettings(prev => ({ ...prev, discountPinAbove: Math.max(0, parseFloat(e.target.value) || 0) || undefined }))}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between items-baseline">
