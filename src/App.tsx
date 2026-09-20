@@ -3,7 +3,7 @@ import {
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
 } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { t } from './utils/i18n';
@@ -14,6 +14,8 @@ import { verifyPinAgainstHash } from './utils/crypto';
 import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
 import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
+import type { CustomerProfile } from './utils/customers';
+import { loadCustomers } from './utils/customers';
 import { localDayKey, todayLocalKey } from './utils/dates';
 import { readSyncReview, clearSyncReview, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
@@ -144,7 +146,7 @@ function removeDeletedExpense(id: string): void {
 // Settings keys that sync to the server. Serialized for the dirty-check that
 // stops background boot-pulls from overwriting unsaved local taps.
 const SETTINGS_SYNC_KEYS = new Set([
-  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','loyaltyEveryN','loyaltyPct','discountPinAbove','shopType','language','usdRate','momoFeePct','ownerPhone',
+  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
 ]);
 function serializeSettings(s: StoreSettings): string {
@@ -329,6 +331,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const isManager = isManagerRole(activeRole, staffConfigured);
   const [creditPayments, setCreditPayments] = useState<CreditPayment[]>([]);
   const [creditEats, setCreditEats] = useState<CreditEat[]>([]);
+  const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [productionRegisters, setProductionRegisters] = useState<ProductionRegister[]>([]);
   const [wastageLogs, setWastageLogs] = useState<WastageLog[]>([]);
   const [momoTransfers, setMomoTransfers] = useState<MomoTransfer[]>([]);
@@ -434,6 +437,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
     setCreditPayments(d.creditPayments);
     setCreditEats(d.creditEats);
+    setCustomers(d.customers || []);
     setProductionRegisters(d.productionRegisters);
     setWastageLogs(d.wastageLogs);
     setMomoTransfers(d.momoTransfers);
@@ -446,6 +450,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     primeCache('/api/expenses', d.expenses);
     primeCache('/api/credit-payments', d.creditPayments);
     primeCache('/api/credit-eats', d.creditEats);
+    primeCache('/api/customers', d.customers || []);
     primeCache('/api/production-register', d.productionRegisters);
     primeCache('/api/wastage-log', d.wastageLogs);
     primeCache('/api/momo-transfers', d.momoTransfers);
@@ -499,6 +504,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       }).catch(fail('expenses')),
       creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
       creditEatApi.list().then(setCreditEats).catch(fail('credit eats')),
+      customerApi.list().then(setCustomers).catch(fail('customers')),
       productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
       wastageLogApi.list().then(setWastageLogs).catch(fail('wastage')),
       momoTransferApi.list().then(setMomoTransfers).catch(fail('momo transfers')),
@@ -1597,11 +1603,29 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffVerifyError(null);
     try {
       const s = await staffApi.verify(id, pin);
+      const prevName = activeStaff?.name || staffName || '';
       setActiveStaffId(s.id);
       try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
       setStaffName(s.name);
       setShowStaffSwitcher(false);
-      triggerToast(`${s.name} is selling (${s.role})`, 'success');
+      // Shift handover: count the drawer as it changes hands (optional, skippable).
+      if (prevName && prevName !== s.name) {
+        const raw = window.prompt(`Handover ${prevName} → ${s.name}.
+Count the drawer now (UGX)? Empty = skip.`, '');
+        if (raw !== null && raw.trim() !== '') {
+          const amt = Math.max(0, Math.round(parseFloat(raw) || 0));
+          try {
+            const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
+            const next = [{ at: new Date().toISOString(), from: prevName, to: s.name, amount: amt }, ...(Array.isArray(log) ? log : [])].slice(0, 30);
+            localStorage.setItem('boss_pos_handovers', JSON.stringify(next));
+          } catch {}
+          triggerToast(`Handover counted: ${formatCurrency(amt)} (${prevName} → ${s.name})`, 'success');
+        } else {
+          triggerToast(`${s.name} is selling (${s.role})`, 'success');
+        }
+      } else {
+        triggerToast(`${s.name} is selling (${s.role})`, 'success');
+      }
     } catch (err) {
       setStaffVerifyError(err instanceof Error ? err.message : 'Wrong PIN');
     } finally {
@@ -1698,6 +1722,54 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       triggerToast('Failed to sync payment to server', 'error');
     }
   };
+
+  const handleSaveCustomer = async (c: CustomerProfile) => {
+    const exists = customers.some(x => x.id === c.id);
+    const stamped = { ...c, updatedAt: new Date().toISOString() };
+    setCustomers(prev => exists ? prev.map(x => x.id === c.id ? stamped : x) : [stamped, ...prev]);
+    try {
+      if (exists) await customerApi.update(stamped);
+      else await customerApi.create({ ...stamped, clientWriteId: `c-${c.id}-${Date.now()}` });
+    } catch {
+      const prev = customers.find(x => x.id === c.id);
+      setCustomers(prevList => exists
+        ? prevList.map(x => x.id === c.id ? (prev || x) : x)
+        : prevList.filter(x => x.id !== c.id));
+      triggerToast('Failed to sync profile — reverted', 'error');
+    }
+  };
+
+  const handleDeleteCustomer = async (id: string) => {
+    const prev = customers.find(c => c.id === id);
+    setCustomers(list => list.filter(c => c.id !== id));
+    try { await customerApi.remove(id); } catch {
+      if (prev) setCustomers(list => [prev, ...list]);
+      triggerToast('Failed to delete profile', 'error');
+    }
+  };
+
+  // One-time migration: device-local profiles move to the server the first
+  // time boot returns an empty directory.
+  const migratedRef = useRef(false);
+  useEffect(() => {
+    if (migratedRef.current || authState !== 'ready') return;
+    if (customers.length > 0) { migratedRef.current = true; return; }
+    let local: CustomerProfile[] = [];
+    try { local = loadCustomers(); } catch {}
+    if (local.length === 0) { migratedRef.current = true; return; }
+    migratedRef.current = true;
+    (async () => {
+      let moved = 0;
+      for (const c of local) {
+        try {
+          await customerApi.create({ ...c, clientWriteId: `mig-${c.id}` });
+          moved += 1;
+        } catch {}
+      }
+      try { setCustomers(await customerApi.list()); } catch {}
+      if (moved > 0) triggerToast(`Moved ${moved} regular${moved !== 1 ? 's' : ''} to the server — all tills see them now`, 'success');
+    })();
+  }, [authState, customers.length]);
 
   const handleAddProduction = async (p: ProductionRegister) => {
     setProductionRegisters(prev => [p, ...prev]);
@@ -1854,23 +1926,35 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           {isManager && isOn(settings.features, 'briefing') && (
             <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
-              dailyGoal={settings.dailyGoalNum} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital} />
+              dailyGoal={settings.dailyGoalNum} dailyGoalRevenue={settings.dailyGoalRevenue} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital} />
           )}
           {!isManager && staffConfigured && activeStaff && (() => {
             // Cashiers can't open Reports — this strip is their self check-in.
             const today = todayLocalKey();
             const mine = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === activeStaff.name);
             const total = mine.reduce((a, s) => a + s.total, 0);
-            if (mine.length === 0) return null;
+            let handover: { at: string; from: string; to: string; amount: number } | null = null;
+            try {
+              const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
+              if (Array.isArray(log) && log[0]) handover = log[0];
+            } catch {}
+            if (mine.length === 0 && !handover) return null;
             return (
-              <section className="boss-card px-4 py-3 rounded-2xl mb-4 flex items-center gap-3">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
-                <p className="text-[11px] font-black text-zinc-300 uppercase tracking-wider flex-1 min-w-0 truncate">
-                  {activeStaff.name} today
-                </p>
-                <p className="text-xs font-black text-gold-brand tabular-nums shrink-0">
-                  {mine.length} sale{mine.length !== 1 ? 's' : ''} • {formatCurrency(total)}
-                </p>
+              <section className="boss-card px-4 py-3 rounded-2xl mb-4 space-y-1">
+                <div className="flex items-center gap-3">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
+                  <p className="text-[11px] font-black text-zinc-300 uppercase tracking-wider flex-1 min-w-0 truncate">
+                    {activeStaff.name} today
+                  </p>
+                  <p className="text-xs font-black text-gold-brand tabular-nums shrink-0">
+                    {mine.length} sale{mine.length !== 1 ? 's' : ''} • {formatCurrency(total)}
+                  </p>
+                </div>
+                {handover && (
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase truncate pl-5">
+                    Handover {handover.from} → {handover.to}: {formatCurrency(handover.amount)}
+                  </p>
+                )}
               </section>
             );
           })()}
@@ -1983,6 +2067,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
             onRequirePin={(msg) => requirePin(msg, true)}
+            customers={customers}
+            onSaveCustomer={handleSaveCustomer}
+            onDeleteCustomer={handleDeleteCustomer}
           />
           </ErrorBoundary>
         );
@@ -2073,6 +2160,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             creditEats={creditEats}
             onPayCreditEat={handlePayCreditEat}
             momoTransfers={momoTransfers}
+            customers={customers}
+            onSaveCustomer={handleSaveCustomer}
+            onDeleteCustomer={handleDeleteCustomer}
             expenseCategories={expenseCategories}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
@@ -2114,6 +2204,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
             onRequirePin={(msg) => requirePin(msg, true)}
+            customers={customers}
+            onSaveCustomer={handleSaveCustomer}
+            onDeleteCustomer={handleDeleteCustomer}
           />
           </ErrorBoundary>
         );
@@ -2530,6 +2623,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Name <SettingHelp label="Shop Name" text="Your shop's name. It shows at the top of every till, on receipts and on the daily close message." /></label>
                 <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'My Shop' }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" placeholder="e.g. IMAC Phone Shop" />
+                <input type="text" value={settings.receiptFooter || ''} onChange={(e) => setSettings(prev => ({ ...prev, receiptFooter: e.target.value.slice(0, 120) || undefined }))}
+                  title="Printed under every receipt (slogan, returns policy)"
+                  className="mt-2 w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" placeholder="Receipt footer, e.g. No returns after 3 days" />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Type <SettingHelp label="Shop Type" text="Tells the till what you sell. Eatery unlocks recipes and morning production; tailoring, design, bookings and repairs add their order screens." /></label>
@@ -2677,6 +2773,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Each MoMo sale auto-books its fee as a MoMo Fees expense, so profit stays honest.</p>
               </div>
               <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Seller commission % <SettingHelp label="Seller commission" text="Percent of their own sales each seller earns. Shown per seller in Reports — pay out at close." /></label>
+                <input type="number" min="0" max="50" step="any" value={settings.commissionPct || ''}
+                  placeholder="0 = off"
+                  onChange={(e) => setSettings(prev => ({ ...prev, commissionPct: Math.min(50, Math.max(0, parseFloat(e.target.value) || 0)) || undefined }))}
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Big discounts need PIN <SettingHelp label="Big discounts need PIN" text="Discounts above this amount need a manager PIN at checkout — stops quiet friend-discounts. 0 = never ask." /></label>
                 <input type="number" min="0" step="500" value={settings.discountPinAbove || ''}
                   placeholder="0 = never ask"
@@ -2691,6 +2794,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <input type="range" min="5" max="30" value={settings.dailyGoalNum}
                   onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalNum: parseInt(e.target.value) }))}
                   className="w-full accent-gold-brand cursor-pointer h-1.5 bg-[#0A0A0A] rounded-lg appearance-none mt-2" />
+                <div className="flex items-center gap-2 mt-2">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider shrink-0">UGX goal</label>
+                  <input type="number" min="0" step="1000" value={settings.dailyGoalRevenue || ''}
+                    placeholder="e.g. 300000 (optional)"
+                    onChange={(e) => setSettings(prev => ({ ...prev, dailyGoalRevenue: Math.max(0, parseFloat(e.target.value) || 0) || undefined }))}
+                    className="flex-1 min-w-0 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none tabular-nums" />
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Regulars reward <SettingHelp label="Regulars reward" text="Every Nth visit from the same customer earns a one-tap percent discount at checkout. The till counts past sales by name and offers it — never applies it on its own." /></label>

@@ -1,4 +1,5 @@
 import { Sale, StoreSettings } from '../types';
+import { paymentLabel } from './serviceSale';
 
 // Opens a printable receipt in a new window (works on desktop + Chrome Android,
 // which offers print-to-PDF / thermal printer output).
@@ -59,7 +60,7 @@ export function printReceipt(
     </tr>
     <tr>
       <td class="muted" style="padding-top:4px">PAYMENT</td>
-      <td class="right muted" style="padding-top:4px">${escapeHtml(sale.paymentMethod)}${sale.customerName ? ' • ' + escapeHtml(sale.customerName) : ''}</td>
+      <td class="right muted" style="padding-top:4px">${escapeHtml(paymentLabel(sale))}</td>
     </tr>
     ${sale.staffName ? `<tr>
       <td class="muted" style="padding-top:4px">SERVED BY</td>
@@ -68,6 +69,7 @@ export function printReceipt(
   </table>
   <div class="divider"></div>
   <div class="center muted">Thank you for your business!</div>
+  ${settings.receiptFooter ? `<div class="center" style="font-size:11px;font-weight:bold;margin-top:2px">${escapeHtml(settings.receiptFooter)}</div>` : ''}
   <script>
     window.onload = function () { setTimeout(function () { window.print(); }, 150); };
   <\/script>

@@ -13,6 +13,8 @@ export interface CustomerProfile {
   subscribed?: boolean; // wants new-arrival alerts
   notes?: string;
   createdAt: string;
+  updatedAt?: string;
+  clientWriteId?: string;
 }
 
 export interface CustomerStats {

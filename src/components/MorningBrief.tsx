@@ -20,6 +20,7 @@ interface MorningBriefProps {
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers') => void;
   onSync: () => void;
   dailyGoal?: number;
+  dailyGoalRevenue?: number;
   expenses?: Expense[];
   momoTransfers?: MomoTransfer[];
   eodCapital?: Record<string, number>;
@@ -32,7 +33,7 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, expenses = [], momoTransfers = [], eodCapital }: MorningBriefProps) {
+export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, dailyGoalRevenue, expenses = [], momoTransfers = [], eodCapital }: MorningBriefProps) {
   // Minimisable: cashiers short on space collapse it; choice sticks per device.
   // Today's chairs: salon bookings due today that aren't done/cancelled.
   const [todayBookings, setTodayBookings] = useState<Booking[]>([]);
@@ -167,8 +168,43 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     },
   ];
 
+  // Trial nudge: shop age from oldest sale (or first-seen on a fresh till).
+  // Established shops (>14 days) never see this — they're paying or
+  // grandfathered. Trial is 3 days per the landing page.
+  const trialAgeDays = useMemo(() => {
+    let first = '';
+    try {
+      first = localStorage.getItem('boss_pos_first_seen') || '';
+      if (!first) {
+        first = new Date().toISOString();
+        localStorage.setItem('boss_pos_first_seen', first);
+      }
+    } catch { first = new Date().toISOString(); }
+    for (const s of sales) {
+      if (!first || s.timestamp < first) first = s.timestamp;
+    }
+    const ms = Date.now() - Date.parse(first || new Date().toISOString());
+    return Math.max(0, Math.floor(ms / 86400000));
+  }, [sales]);
+
   return (
     <section className="boss-card p-4 rounded-2xl mb-4">
+      {trialAgeDays <= 14 && (
+        <div className={`rounded-xl border px-3 py-2.5 mb-3 flex items-center gap-2 ${trialAgeDays <= 3 ? 'bg-gold-brand/5 border-gold-brand/30' : 'bg-amber-950/25 border-amber-600/30'}`}>
+          <span className="text-[10px] font-black uppercase tracking-wider flex-1">
+            {trialAgeDays <= 3 ? (
+              <span className="text-gold-brand">Trial: {3 - trialAgeDays} day{3 - trialAgeDays !== 1 ? 's' : ''} left</span>
+            ) : (
+              <span className="text-amber-300">Trial ended — stay open</span>
+            )}
+          </span>
+          <a href="https://wa.me/256727790003?text=Hi%2C%20I%20want%20to%20activate%20BOSS%20for%20my%20shop."
+            target="_blank" rel="noopener noreferrer"
+            className="h-8 px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider flex items-center shrink-0">
+            Activate
+          </a>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <Sunrise className="w-4 h-4 text-gold-brand shrink-0" />
         <h3 className="text-xs font-black text-white uppercase tracking-widest font-display flex-1 min-w-0 truncate">
@@ -204,7 +240,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         </p>
       )}
       {dailyGoal !== undefined && dailyGoal > 0 && (
-        <div className="mb-3" title={`Daily goal: ${dailyGoal} sales`}>
+        <div className="mb-3" title={`Daily goal: ${dailyGoal} sales${dailyGoalRevenue ? ` • ${formatCurrency(dailyGoalRevenue)}` : ''}`}>
           <div className="flex items-center justify-between mb-1">
             <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Daily goal</span>
             <span className="text-[10px] font-black text-gold-brand tabular-nums">
@@ -215,6 +251,20 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
             <div className={`h-full rounded-full transition-all ${brief.today.count >= dailyGoal ? 'bg-emerald-400' : 'bg-gold-brand'}`}
               style={{ width: `${Math.min(100, Math.round((brief.today.count / dailyGoal) * 100))}%` }} />
           </div>
+          {(dailyGoalRevenue || 0) > 0 && (
+            <div className="flex items-center justify-between mt-1.5 mb-1">
+              <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Revenue goal</span>
+              <span className="text-[10px] font-black text-gold-brand tabular-nums">
+                {formatCurrency(brief.today.revenue)}/{formatCurrency(dailyGoalRevenue || 0)}{brief.today.revenue >= (dailyGoalRevenue || 0) ? ' ✓' : ''}
+              </span>
+            </div>
+          )}
+          {(dailyGoalRevenue || 0) > 0 && (
+            <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${brief.today.revenue >= (dailyGoalRevenue || 0) ? 'bg-emerald-400' : 'bg-gold-brand'}`}
+                style={{ width: `${Math.min(100, Math.round((brief.today.revenue / (dailyGoalRevenue || 1)) * 100))}%` }} />
+            </div>
+          )}
         </div>
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

@@ -1,4 +1,5 @@
 import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote } from './types';
+import type { CustomerProfile } from './utils/customers';
 import { stashSyncReview } from './utils/syncReview';
 
 // Expense rows may carry `items` as a JSON string (server TEXT column) or as
@@ -763,6 +764,13 @@ export const quoteApi = {
   remove: (id: string) => api<{ success: boolean }>(`/api/quotes/${id}`, { method: 'DELETE' }),
 };
 
+export const customerApi = {
+  list: () => api<CustomerProfile[]>('/api/customers'),
+  create: (c: CustomerProfile) => api<CustomerProfile>('/api/customers', { method: 'POST', body: JSON.stringify(c) }),
+  update: (c: CustomerProfile) => api<CustomerProfile>(`/api/customers/${c.id}`, { method: 'PUT', body: JSON.stringify(c) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/customers/${id}`, { method: 'DELETE' }),
+};
+
 export const creditEatApi = {
   list: () => api<CreditEat[]>('/api/credit-eats'),
   create: (e: CreditEat) => api<CreditEat>('/api/credit-eats', { method: 'POST', body: JSON.stringify(e) }),
@@ -855,6 +863,7 @@ export interface BootData {
   expenses: Expense[];
   creditPayments: CreditPayment[];
   creditEats: CreditEat[];
+  customers: import('./utils/customers').CustomerProfile[];
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
   momoTransfers: MomoTransfer[];

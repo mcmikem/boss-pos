@@ -1,11 +1,14 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { Users, Plus, X, Star, Bell, BellOff, MessageCircle, Trash2, Check } from 'lucide-react';
 import type { Sale, Product } from '../types';
-import { loadCustomers, saveCustomers, statsFor, customerWhatsAppUrl, type CustomerProfile } from '../utils/customers';
+import { statsFor, customerWhatsAppUrl, type CustomerProfile } from '../utils/customers';
 
 interface CustomersProps {
   sales: Sale[];
   products: Product[];
+  customers: CustomerProfile[];
+  onSaveCustomer: (c: CustomerProfile) => void;
+  onDeleteCustomer: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onClose: () => void;
@@ -14,21 +17,14 @@ interface CustomersProps {
 // Regulars directory: frequent buyers with contact, standing (VIP/wholesale),
 // a standing till discount, and a new-arrival subscription. Stats (visits,
 // spent) always come live from sales — the profile stores the rest.
-export default function Customers({ sales, products, formatCurrency, triggerToast, onClose }: CustomersProps) {
-  const [list, setList] = useState<CustomerProfile[]>(() => loadCustomers());
+export default function Customers({ sales, products, customers, onSaveCustomer, onDeleteCustomer, formatCurrency, triggerToast, onClose }: CustomersProps) {
+  const list = customers;
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<CustomerProfile | null>(null);
   const [isNew, setIsNew] = useState(false);
 
-  useEffect(() => {
-    const h = () => setList(loadCustomers());
-    window.addEventListener('boss-pos-customers-updated', h);
-    return () => window.removeEventListener('boss-pos-customers-updated', h);
-  }, []);
-
-  const persist = (next: CustomerProfile[]) => {
-    setList(next);
-    saveCustomers(next);
+  const persist = (next: CustomerProfile) => {
+    onSaveCustomer(next);
   };
 
   const filtered = useMemo(() => {
@@ -60,7 +56,7 @@ export default function Customers({ sales, products, formatCurrency, triggerToas
   };
 
   const removeProfile = (id: string) => {
-    persist(list.filter(c => c.id !== id));
+    onDeleteCustomer(id);
     setEditing(null);
     triggerToast('Profile removed — past sales keep the name', 'info');
   };
@@ -201,7 +197,7 @@ export default function Customers({ sales, products, formatCurrency, triggerToas
                     if (!name) { triggerToast('Enter a name', 'error'); return; }
                     const dup = list.find(c => c.id !== editing.id && c.name.trim().toLowerCase() === name.toLowerCase());
                     if (dup) { triggerToast('That regular already exists', 'error'); return; }
-                    persist(isNew ? [...list, { ...editing, name }] : list.map(c => c.id === editing.id ? { ...editing, name } : c));
+                    persist({ ...editing, name });
                     triggerToast(isNew ? `${name} joined the regulars` : 'Profile saved', 'success');
                     setEditing(null);
                   }}

@@ -10,11 +10,13 @@ import { t } from '../utils/i18n';
 import { supplierDrift } from '../utils/cashflow';
 import CreditsLedger from './CreditsLedger';
 import Customers from './Customers';
+import type { CustomerProfile } from '../utils/customers';
 import ExpenseDetailModal from './ExpenseDetailModal';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
 import { restockQtyFor, buildRestockMessage, supplierTelUrl, supplierWhatsAppUrl } from '../utils/suppliers';
 import { serviceCategoryOf } from '../utils/serviceCategories';
+import { splitLegs } from '../utils/serviceSale';
 import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 
@@ -38,6 +40,9 @@ interface AnalyticsProps {
   creditEats?: CreditEat[];
   onPayCreditEat?: (id: string, amount: number) => void;
   momoTransfers?: MomoTransfer[];
+  customers?: CustomerProfile[];
+  onSaveCustomer?: (c: CustomerProfile) => void;
+  onDeleteCustomer?: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
@@ -66,6 +71,9 @@ export default function Analytics({
   creditEats = [],
   onPayCreditEat,
   momoTransfers = [],
+  customers = [],
+  onSaveCustomer,
+  onDeleteCustomer,
   formatCurrency,
   triggerToast,
   showSuppliers,
@@ -303,8 +311,8 @@ export default function Analytics({
         revenue: data.sales.reduce((a, s) => a + s.total, 0),
         expenseTotal: data.expenses.reduce((a, e) => a + e.amount, 0),
         discountTotal: data.sales.reduce((a, s) => a + (s.discount || 0), 0),
-        cashTotal: data.sales.filter(s => s.paymentMethod === 'Cash').reduce((a, s) => a + s.total, 0),
-        momoTotal: data.sales.filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money').reduce((a, s) => a + s.total, 0),
+        cashTotal: data.sales.reduce((a, s) => a + (s.paymentMethod === 'Cash' ? s.total : splitLegs(s).filter(l => l.method === 'Cash').reduce((x, l) => x + l.amount, 0)), 0),
+        momoTotal: data.sales.reduce((a, s) => a + ((s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money') ? s.total : splitLegs(s).filter(l => l.method !== 'Cash').reduce((x, l) => x + l.amount, 0)), 0),
         creditTotal: data.sales.filter(s => s.paymentMethod === 'Credit / Book').reduce((a, s) => a + s.total, 0),
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
@@ -1126,7 +1134,12 @@ const colorsMap: { [key: string]: string } = {
                     </div>
                     <div className="flex items-center gap-4 shrink-0">
                       <span className="text-[10px] font-bold text-zinc-500 uppercase">{s.count} sale{s.count !== 1 ? 's' : ''}</span>
-                      <span className="text-xs font-black text-gold-brand">{formatCurrency(s.total)}</span>
+                      <span className="text-xs font-black text-gold-brand tabular-nums">{formatCurrency(s.total)}</span>
+                      {(settings.commissionPct || 0) > 0 && (
+                        <span className="text-[10px] font-black text-emerald-400 uppercase tabular-nums" title={`Commission ${settings.commissionPct}%`}>
+                          +{formatCurrency(s.total * (settings.commissionPct || 0) / 100)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1305,10 +1318,13 @@ const colorsMap: { [key: string]: string } = {
               )}
             </div>
           </section>
-          {showCustomers && (
+          {showCustomers && onSaveCustomer && onDeleteCustomer && (
             <Customers
               sales={sales}
               products={products}
+              customers={customers}
+              onSaveCustomer={onSaveCustomer}
+              onDeleteCustomer={onDeleteCustomer}
               formatCurrency={formatCurrency}
               triggerToast={triggerToast}
               onClose={() => setShowCustomers(false)}

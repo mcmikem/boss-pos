@@ -67,6 +67,11 @@ export interface CreditLedger {
   paidAmount: number;
 }
 
+export interface SplitTender {
+  method: 'Cash' | 'MTN MoMo' | 'Airtel Money';
+  amount: number;
+}
+
 export interface SaleItem {
   productId: string;
   productName: string;
@@ -88,7 +93,8 @@ export interface Sale {
   subtotal: number;
   tax: number;
   total: number;
-  paymentMethod: 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book';
+  paymentMethod: 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book' | 'Split';
+  splitTenders?: SplitTender[]; // cash-like legs when paymentMethod is Split
   customerName?: string;
   discount?: number;
   notes?: string;
@@ -321,7 +327,7 @@ export interface StoreSettings {
   shopName: string;
   themeId: string;
   vibe: string;
-  defaultPaymentMethod: 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book';
+  defaultPaymentMethod: 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book' | 'Split';
   dailyGoalNum: number;
   shopType?: 'general' | 'eatery' | 'phone' | 'tailor';
   language?: 'english' | 'luganda' | 'swahili';
@@ -337,6 +343,9 @@ export interface StoreSettings {
   loyaltyEveryN?: number; // regulars reward: every Nth visit earns loyaltyPct off
   loyaltyPct?: number; // percent off the reward visit (1-50)
   discountPinAbove?: number; // discounts above this UGX need a manager PIN at charge time (0/empty = never)
+  commissionPct?: number; // seller commission % of own sales, shown in Reports ranking
+  dailyGoalRevenue?: number; // revenue target for the goal bar (0/empty = count goal only)
+  receiptFooter?: string; // slogan/returns line printed under every receipt
   ownerPhone?: string; // WhatsApp number for the daily close summary
   sheetsUrl?: string;
   efris?: EfrisConfig;

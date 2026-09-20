@@ -108,6 +108,8 @@ async function initDB() {
   // Branch attribution: which shop location made the sale. Stock stays pooled
   // across branches in v1 (per-branch stock is a separate project).
   try { await sql`ALTER TABLE sales ADD COLUMN branch TEXT DEFAULT ''`; } catch {}
+  // Split-tender legs (JSON array of {method, amount}); null = single payment.
+  try { await sql`ALTER TABLE sales ADD COLUMN split TEXT DEFAULT NULL`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, description TEXT NOT NULL,
     amount DOUBLE PRECISION DEFAULT 0, category TEXT DEFAULT ''
@@ -181,6 +183,13 @@ async function initDB() {
     delta INTEGER NOT NULL, type TEXT NOT NULL, qty_after INTEGER NOT NULL,
     sale_id TEXT, note TEXT DEFAULT '', createdat TEXT NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS customers (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT DEFAULT '',
+    birthday TEXT DEFAULT '', tags TEXT DEFAULT '[]', discountpct DOUBLE PRECISION DEFAULT 0,
+    subscribed BOOLEAN DEFAULT false, notes TEXT DEFAULT '',
+    createdat TEXT NOT NULL, updatedat TEXT NOT NULL, client_write_id TEXT
+  )`;
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_cwid ON customers(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS credit_eats (
     id TEXT PRIMARY KEY, customername TEXT NOT NULL, date TEXT NOT NULL,
     item TEXT NOT NULL, category TEXT DEFAULT 'Eatery',
@@ -1342,6 +1351,15 @@ app.post('/api/sales', asHandler(async (req, res) => {
   const customerName = text(s.customerName, 120) || null;
   const notes = text(s.notes, 500) || null;
   const branch = text(s.branch, 50) || '';
+  let splitJson = null;
+  try {
+    if (Array.isArray(s.splitTenders) && s.splitTenders.length > 0) {
+      const legs = s.splitTenders
+        .filter(l => l && (l.method === 'Cash' || l.method === 'MTN MoMo' || l.method === 'Airtel Money') && Number(l.amount) > 0)
+        .map(l => ({ method: l.method, amount: Math.round(Number(l.amount)) }));
+      if (legs.length > 0) splitJson = JSON.stringify(legs);
+    }
+  } catch { splitJson = null; }
   // Server timestamp is canonical (device clocks skew → reports out of order).
   // We keep device timestamp as notes suffix for audit if supplied, but DB timestamp is server now.
   const serverNow = new Date().toISOString();
@@ -1382,8 +1400,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
           JOIN products p ON p.id = sub."productId" AND p.isService = false
         ),
         ins AS (
-          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,branch,client_write_id)
-          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${serverTax},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${branch},${cwid}
+          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,branch,client_write_id,split)
+          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${serverTax},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${branch},${cwid},${splitJson}
           WHERE NOT EXISTS (SELECT 1 FROM checkstock WHERE oversold)
           ON CONFLICT (id) DO NOTHING
           RETURNING id, items
@@ -2050,6 +2068,54 @@ app.post('/api/credit-eats', asHandler(async (req, res) => {
   res.json(e);
 }));
 
+// === CUSTOMERS (Regulars directory) API ===
+app.get('/api/customers', asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM customers ORDER BY name ASC`;
+  res.json(rows.map(mapCustomer));
+}));
+
+app.post('/api/customers', asHandler(async (req, res) => {
+  const c = req.body;
+  const name = text(c.name, 120);
+  if (!name) return res.status(400).json({ error: 'Customer name is required' });
+  const now = new Date().toISOString();
+  const row = {
+    id: c.id || ('c-' + randomUUID()), name,
+    phone: text(c.phone, 30) || '', birthday: text(c.birthday, 5) || '',
+    tags: JSON.stringify(Array.isArray(c.tags) ? c.tags.slice(0, 4) : []),
+    discountpct: Math.min(50, Math.max(0, parseFloat(c.discountPct) || 0)),
+    subscribed: !!c.subscribed, notes: text(c.notes, 500) || '',
+    createdat: c.createdAt || now, updatedat: now,
+    client_write_id: c.clientWriteId || null,
+  };
+  const inserted = await sql`INSERT INTO customers (id,name,phone,birthday,tags,discountpct,subscribed,notes,createdat,updatedat,client_write_id)
+    VALUES (${row.id},${row.name},${row.phone},${row.birthday},${row.tags},${row.discountpct},${row.subscribed},${row.notes},${row.createdat},${row.updatedat},${row.client_write_id})
+    ON CONFLICT (id) DO NOTHING RETURNING id`;
+  if (inserted.length === 0 && row.client_write_id) {
+    const existing = await sql`SELECT * FROM customers WHERE client_write_id=${row.client_write_id}`;
+    if (existing.length) return res.json(mapCustomer(existing[0]));
+  }
+  res.json(mapCustomer({ ...row, discountPct: row.discountpct }));
+}));
+
+app.put('/api/customers/:id', asHandler(async (req, res) => {
+  const c = req.body;
+  const name = text(c.name, 120);
+  if (!name) return res.status(400).json({ error: 'Customer name is required' });
+  const r = await sql`UPDATE customers SET name=${name}, phone=${text(c.phone, 30) || ''},
+    birthday=${text(c.birthday, 5) || ''}, tags=${JSON.stringify(Array.isArray(c.tags) ? c.tags.slice(0, 4) : [])},
+    discountpct=${Math.min(50, Math.max(0, parseFloat(c.discountPct) || 0))}, subscribed=${!!c.subscribed},
+    notes=${text(c.notes, 500) || ''}, updatedat=${new Date().toISOString()}
+    WHERE id=${req.params.id} RETURNING *`;
+  if (r.length === 0) return res.status(404).json({ error: 'Customer not found' });
+  res.json(mapCustomer(r[0]));
+}));
+
+app.delete('/api/customers/:id', asHandler(async (req, res) => {
+  await sql`DELETE FROM customers WHERE id=${req.params.id}`;
+  res.json({ success: true });
+}));
+
 app.post('/api/credit-eats/:id/pay', asHandler(async (req, res) => {
   const { amount } = req.body || {};
   const amt = parseFloat(amount) || 0;
@@ -2188,7 +2254,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
   obj.hasPin = hasPin;
 
   const BOOT_SALE_CAP = 2000;
-  const [products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, staff, counts] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, staff, customers, counts] = await Promise.all([
     sql`SELECT * FROM products WHERE deleted = false`.then(r => r.map(mapProduct)),
     sql`SELECT * FROM suppliers`.then(r => r.map(mapSupplier)),
     sql`SELECT * FROM supplier_prices`.then(r => r.map(mapSupplierPrice)),
@@ -2200,6 +2266,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
     sql`SELECT * FROM wastage_log ORDER BY date DESC, createdat DESC`.then(r => r.map(mapWastageLog)),
     sql`SELECT * FROM momo_transfers ORDER BY createdat DESC`.then(r => r.map(mapMomoTransfer)),
     sql`SELECT * FROM staff ORDER BY created_at ASC`.then(r => r.map(mapStaff)),
+    sql`SELECT * FROM customers ORDER BY name ASC`.then(r => r.map(mapCustomer)),
     sql`SELECT
       (SELECT COUNT(*)::int FROM sales) AS sales_total,
       (SELECT COUNT(*)::int FROM expenses) AS expenses_total`,
@@ -2208,7 +2275,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
   maybeAutoBackup().catch(() => {});
   res.json({
     products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats,
-    productionRegisters, wastageLogs, momoTransfers, staff, settings: obj,
+    productionRegisters, wastageLogs, momoTransfers, staff, customers, settings: obj,
     // Tells the client the history list was capped (aggregates still exact via
     // /api/summary, older rows are one pageable query away).
     salesTruncated: (counts[0]?.sales_total || 0) > BOOT_SALE_CAP,
@@ -2327,7 +2394,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
 
 // === FULL DATA EXPORT / BACKUP ===
 app.get('/api/export', requireAuth, asHandler(async (req, res) => {
-  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows, customerRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM supplier_prices`,
@@ -2346,6 +2413,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     sql`SELECT * FROM wastage_log`,
     sql`SELECT * FROM momo_transfers`,
     sql`SELECT * FROM staff`,
+    sql`SELECT * FROM customers`,
   ]);
   res.json({
     exportedAt: new Date().toISOString(),
@@ -2369,6 +2437,7 @@ app.get('/api/export', requireAuth, asHandler(async (req, res) => {
     // Staff PIN hashes ride along like the till pinHash in settings: a backup
     // that couldn't restore logins wouldn't be a backup.
     staff: staffRows.map(r => ({ ...mapStaff(r), pin_hash: r.pin_hash || '' })),
+    customers: customerRows.map(mapCustomer),
   });
 }));
 
@@ -2409,6 +2478,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     branch: text(s.branch, 50) || '',
     refundedat: s.refundedAt || null,
     client_write_id: s.clientWriteId || null,
+    split: (() => { try { return Array.isArray(s.splitTenders) ? JSON.stringify(s.splitTenders) : (typeof s.split === 'string' ? s.split : null); } catch { return null; } })(),
   }));
 
   const supplierRows = (d.suppliers || []).map(s => ({
@@ -2515,6 +2585,14 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     comment: text(t.comment, 300) || '', createdat: t.createdAt,
   }));
 
+  const customerRows = (d.customers || []).map(c => ({
+    id: c.id, name: text(c.name, 120), phone: text(c.phone, 30) || '',
+    birthday: text(c.birthday, 5) || '', tags: JSON.stringify(Array.isArray(c.tags) ? c.tags.slice(0, 4) : []),
+    discountpct: Math.min(50, Math.max(0, parseFloat(c.discountPct) || 0)),
+    subscribed: !!c.subscribed, notes: text(c.notes, 500) || '',
+    createdat: c.createdAt || new Date().toISOString(), updatedat: c.updatedAt || new Date().toISOString(),
+  }));
+
   const counts = {};
   await Promise.all([
     batchUpsert('settings', 'key', ['key', 'value'], settingsRows).then(n => counts.settings = n),
@@ -2522,7 +2600,8 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
     batchUpsert('supplier_prices', 'id', ['id', 'supplier_id', 'product_id', 'price', 'updated_at'], supplierPriceRows).then(n => counts.supplierPrices = n),
     batchUpsert('staff', 'id', ['id', 'name', 'role', 'pin_hash', 'active', 'created_at'], staffRows).then(n => counts.staff = n),
-    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id'], saleRows).then(n => counts.sales = n),
+    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id', 'split'], saleRows).then(n => counts.sales = n),
+    batchUpsert('customers', 'id', ['id', 'name', 'phone', 'birthday', 'tags', 'discountpct', 'subscribed', 'notes', 'createdat', 'updatedat'], customerRows).then(n => counts.customers = n),
     batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category', 'items'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100), items: itemsJson(e.items) }))).then(n => counts.expenses = n),
     batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
@@ -2543,7 +2622,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
 
 // === BACKUPS (automatic daily snapshots) ===
 async function gatherExport() {
-  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows] = await Promise.all([
+  const [products, suppliers, supplierPrices, sales, expenses, settingsRows, credit, transfers, tailoring, design, bookings, repairJobs, stockMoves, creditEats, productionRegisters, wastageLogs, momoTransfers, staffRows, customerRows] = await Promise.all([
     sql`SELECT * FROM products`,
     sql`SELECT * FROM suppliers`,
     sql`SELECT * FROM supplier_prices`,
@@ -2562,6 +2641,7 @@ async function gatherExport() {
     sql`SELECT * FROM wastage_log`,
     sql`SELECT * FROM momo_transfers`,
     sql`SELECT * FROM staff`,
+    sql`SELECT * FROM customers`,
   ]);
   return {
     exportedAt: new Date().toISOString(),
@@ -2585,6 +2665,7 @@ async function gatherExport() {
     // Staff PIN hashes ride along like the till pinHash in settings: a backup
     // that couldn't restore logins wouldn't be a backup.
     staff: staffRows.map(r => ({ ...mapStaff(r), pin_hash: r.pin_hash || '' })),
+    customers: customerRows.map(mapCustomer),
   };
 }
 
@@ -2852,6 +2933,7 @@ function mapSale(r) {
     items: JSON.parse(r.items), subtotal: r.subtotal, tax: r.tax, total: r.total,
     paymentMethod: r.paymentmethod, customerName: r.customername,
     discount: r.discount, notes: r.notes, refunded: !!r.refunded,
+    splitTenders: (() => { try { const v = JSON.parse(r.split || 'null'); return Array.isArray(v) ? v : undefined; } catch { return undefined; } })(),
     branch: r.branch || '',
     efrisStatus: r.efris_status || 'none',
     efrisInvoiceNo: r.efris_invoice_no || '',
@@ -2977,6 +3059,16 @@ function mapCreditEat(r) {
     category: r.category || 'Eatery',
     qty: r.qty || 1, unitPrice: r.unitprice || 0, total: r.total || 0,
     paidAmount: r.paidamount || 0, paid: !!r.paid,
+  };
+}
+
+function mapCustomer(r) {
+  let tags = [];
+  try { const v = JSON.parse(r.tags || '[]'); if (Array.isArray(v)) tags = v; } catch {}
+  return {
+    id: r.id, name: r.name || '', phone: r.phone || '', birthday: r.birthday || '',
+    tags, discountPct: r.discountpct || 0, subscribed: !!r.subscribed, notes: r.notes || '',
+    createdAt: r.createdat, updatedAt: r.updatedat,
   };
 }
 

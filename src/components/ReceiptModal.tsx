@@ -2,6 +2,7 @@ import { X, Printer, Share2, Copy, Check, Bluetooth } from 'lucide-react';
 import { useState } from 'react';
 import type { Sale, StoreSettings } from '../types';
 import { unitLabel } from '../utils/units';
+import { paymentLabel } from '../utils/serviceSale';
 import { printViaBluetooth } from '../utils/bluetoothPrint';
 import { efrisApi } from '../api';
 
@@ -152,11 +153,12 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     ...(sale.discount && sale.discount > 0 ? [`Discount: -${formatCurrency(sale.discount)}`] : []),
     '',
     `TOTAL: ${formatCurrency(sale.total)}`,
-    `PAYMENT: ${sale.paymentMethod}${sale.customerName ? ` • ${sale.customerName}` : ''}`,
+    `PAYMENT: ${paymentLabel(sale)}`,
     ...(sale.staffName ? [`SERVED BY: ${sale.staffName}`] : []),
     ...(fiscal.status === 'issued' && fiscal.fdn
       ? ['', `URA E-FISCAL RECEIPT`, `FDN: ${fiscal.fdn}`, ...(fiscal.invoiceNo ? [`INV: ${fiscal.invoiceNo}`] : []), ...(fiscal.verify ? [`VERIFY: ${fiscal.verify}`] : [])]
       : []),
+    ...(settings.receiptFooter ? [`${settings.receiptFooter}`] : []),
   ].join('\n');
 
   const handlePrint = () => {
@@ -239,7 +241,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           </div>
           <div className="flex justify-between text-[11px] text-zinc-700 mt-1">
             <span>PAYMENT</span>
-            <span>{sale.paymentMethod}{sale.customerName ? ` • ${sale.customerName}` : ''}</span>
+            <span>{paymentLabel(sale)}</span>
           </div>
           {sale.staffName && (
             <div className="flex justify-between text-[11px] text-zinc-700 mt-1">
@@ -249,6 +251,9 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           )}
           <div className="border-t border-dashed border-zinc-400 my-2" />
           <div className="text-center text-[10px] text-zinc-600">Thank you for your business!</div>
+          {settings.receiptFooter && (
+            <div className="text-center text-[10px] text-zinc-700 font-bold mt-1">{settings.receiptFooter}</div>
+          )}
           {fiscal.status === 'issued' && fiscal.fdn && (
             <>
               <div className="border-t border-dashed border-zinc-400 my-2" />

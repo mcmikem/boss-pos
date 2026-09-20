@@ -20,6 +20,7 @@ import { eateryDayClose } from '../utils/eateryClose';
 import ReceiptModal from './ReceiptModal';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 import { serviceCategoryOf } from '../utils/serviceCategories';
+import { splitLegs, paymentLabel } from '../utils/serviceSale';
 
 interface DashboardProps {
   sales: Sale[];
@@ -64,13 +65,17 @@ export default function Dashboard({
   const todaySales = todayAllSales.filter(s => !s.refunded);
   const todaySalesSum = todaySales.reduce((acc, s) => acc + s.total, 0);
 
-  const cashCollected = todaySales
-    .filter(s => s.paymentMethod === 'Cash')
-    .reduce((acc, s) => acc + s.total, 0);
+  // Split legs attribute to their own tiles so Cash Box + Sente z'Esimu
+  // stay exact when a sale straddles two methods.
+  const cashCollected = todaySales.reduce((acc, s) => {
+    if (s.paymentMethod === 'Cash') return acc + s.total;
+    return acc + splitLegs(s).filter(l => l.method === 'Cash').reduce((a, l) => a + l.amount, 0);
+  }, 0);
 
-  const momoCollected = todaySales
-    .filter(s => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')
-    .reduce((acc, s) => acc + s.total, 0);
+  const momoCollected = todaySales.reduce((acc, s) => {
+    if (s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money') return acc + s.total;
+    return acc + splitLegs(s).filter(l => l.method !== 'Cash').reduce((a, l) => a + l.amount, 0);
+  }, 0);
 
   // Sente z'Esimu = MoMo sales + money moved onto the phone today (Float +
   // Cash destinations from Close day). Owner payouts and bank deposits leave
@@ -562,6 +567,8 @@ export default function Dashboard({
               paymentBadge = <span className="text-[10px] font-bold bg-rose-950/40 text-red-400 px-2 py-0.5 border border-rose-800/30 rounded uppercase tracking-wider">Airtel</span>;
             } else if (sale.paymentMethod === 'Credit / Book') {
               paymentBadge = <span className="text-[10px] font-bold bg-blue-950/40 text-blue-400 px-2 py-0.5 border border-blue-800/30 rounded uppercase tracking-wider">Credit</span>;
+            } else if (sale.paymentMethod === 'Split') {
+              paymentBadge = <span className="text-[10px] font-bold bg-purple-950/40 text-purple-300 px-2 py-0.5 border border-purple-800/30 rounded uppercase tracking-wider">Split</span>;
             }
 
             return (
@@ -641,8 +648,11 @@ export default function Dashboard({
 
                 <div className="pt-2 border-t border-zinc-900 flex justify-between items-center text-xs text-zinc-400 font-sans uppercase">
                   <span>PAYMENT:</span>
-                  <span className="font-bold text-zinc-200">{selectedSaleForModal.paymentMethod}{selectedSaleForModal.customerName ? ` • ${selectedSaleForModal.customerName}` : ''}</span>
+                  <span className="font-bold text-zinc-200">{paymentLabel(selectedSaleForModal)}</span>
                 </div>
+                {settings.receiptFooter && (
+                  <p className="text-center text-[11px] text-zinc-400 font-bold mt-2">{settings.receiptFooter}</p>
+                )}
               </div>
 
             {selectedSaleForModal.refunded && (

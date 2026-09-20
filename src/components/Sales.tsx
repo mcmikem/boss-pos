@@ -3,9 +3,9 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer
+  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender } from '../types';
 import { nextOrderNumber, quoteApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import ProductCard from './ProductCard';
@@ -17,7 +17,7 @@ import ConfirmSaleModal from './ConfirmSaleModal';
 import type { TriggerToast } from './Toast';
 import CashTransferModal from './CashTransferModal';
 import Customers from './Customers';
-import { loadCustomers, findProfile, type CustomerProfile } from '../utils/customers';
+import { findProfile, type CustomerProfile } from '../utils/customers';
 import ReceiptModal from './ReceiptModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
@@ -123,6 +123,9 @@ interface SalesProps {
   onGoToStock?: () => void;
   simple?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
+  customers?: CustomerProfile[];
+  onSaveCustomer?: (c: CustomerProfile) => void;
+  onDeleteCustomer?: (id: string) => void;
 }
 
 const localOrderNumber = () => {
@@ -177,6 +180,7 @@ const DEMO_PRODUCTS: Product[] = [
 
 export default function Sales({
   products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false, onRequirePin,
+  customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Hide sold-out rows on crowded tills (per device). Services always show.
@@ -342,10 +346,11 @@ export default function Sales({
   // Last-used payment method wins per device (a MoMo-heavy till stays on
   // MoMo); falls back to the shop default on first run.
   const PAY_METHOD_KEY = 'boss_pos_pay_method';
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book'>(() => {
+  type PayMethod = 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book' | 'Split';
+  const [paymentMethod, setPaymentMethod] = useState<PayMethod>(() => {
     try {
       const last = localStorage.getItem(PAY_METHOD_KEY);
-      if (last === 'Cash' || last === 'MTN MoMo' || last === 'Airtel Money' || last === 'Credit / Book') return last;
+      if (last === 'Cash' || last === 'MTN MoMo' || last === 'Airtel Money' || last === 'Credit / Book' || last === 'Split') return last as PayMethod;
     } catch {}
     if (settings?.defaultPaymentMethod === 'MTN MoMo') return 'MTN MoMo';
     if (settings?.defaultPaymentMethod === 'Airtel Money') return 'Airtel Money';
@@ -365,6 +370,10 @@ export default function Sales({
   const [discount, setDiscount] = useState<string>('');
   const [customCashReceived, setCustomCashReceived] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
+  // Split tender: leg 1 typed, leg 2 = remainder. Cash-like legs only.
+  const [splitLeg1Method, setSplitLeg1Method] = useState<SplitTender['method']>('Cash');
+  const [splitLeg1Amount, setSplitLeg1Amount] = useState('');
+  const [splitLeg2Method, setSplitLeg2Method] = useState<SplitTender['method']>('MTN MoMo');
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState<boolean>(false);
   const [showConfirmSale, setShowConfirmSale] = useState<boolean>(false);
@@ -666,11 +675,20 @@ export default function Sales({
   // Credit without a name is money given to nobody — block it everywhere
   // (buttons + F2 + confirm modal) until the collector is named.
   const creditNameless = paymentMethod === 'Credit / Book' && customerName.trim() === '';
-  const isDisabled = cart.length === 0 || creditNameless || (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total);
+  // Split tender: leg 1 typed, leg 2 = remainder. Both legs must be positive
+  // and different methods (same-method twice is just one payment).
+  const splitLeg1 = Math.round(parseFloat(splitLeg1Amount) || 0);
+  const splitLeg2 = Math.round(total - splitLeg1);
+  const splitValid = paymentMethod !== 'Split' || (
+    total > 0 && splitLeg1 > 0 && splitLeg2 > 0 && splitLeg1Method !== splitLeg2Method
+  );
+  const isDisabled = cart.length === 0 || creditNameless || !splitValid || (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total);
   const disabledReason = cart.length === 0
     ? 'Cart is empty'
     : creditNameless
     ? 'Add the customer name — credit needs someone to collect from'
+    : !splitValid
+    ? 'Split legs must add up to the total (two methods)'
     : (paymentMethod === 'Cash' && customCashReceived !== '' && parseFloat(customCashReceived) < total)
     ? `Need ${formatCurrency(total - parseFloat(customCashReceived))} more`
     : '';
@@ -691,16 +709,8 @@ export default function Sales({
   const loyaltyLeft = visitsToReward(loyaltyPast, loyaltyN);
   const manualDiscountSet = (parseFloat(discount) || 0) > 0;
   const showLoyalty = loyaltyName !== '' && cart.length > 0 && !manualDiscountSet;
-  // Regulars directory (per device) — VIP standing discounts at the till.
-  const [profiles, setProfiles] = useState<CustomerProfile[]>(() => {
-    try { return loadCustomers(); } catch { return []; }
-  });
-  useEffect(() => {
-    const h = () => { try { setProfiles(loadCustomers()); } catch {} };
-    window.addEventListener('boss-pos-customers-updated', h);
-    return () => window.removeEventListener('boss-pos-customers-updated', h);
-  }, []);
-  const matchedProfile = findProfile(profiles, customerName);
+  // Regulars directory (server-shared) — VIP standing discounts at the till.
+  const matchedProfile = findProfile(customers, customerName);
   const showVipOffer = matchedProfile && (matchedProfile.discountPct || 0) > 0 && cart.length > 0 && !manualDiscountSet;
   const applyVip = () => {
     if (!matchedProfile) return;
@@ -819,6 +829,23 @@ export default function Sales({
       triggerToast(`Short by ${formatCurrency(saleTotal - cashPaidNum)} — collect full cash first`, 'error');
       return false;
     }
+    // Split guard (F2 bypasses the disabled button): legs must be positive,
+    // different methods, and sum exactly to the total.
+    let splitTenders: SplitTender[] | undefined;
+    if (paymentMethod === 'Split') {
+      const a = Math.round(parseFloat(splitLeg1Amount) || 0);
+      const b = Math.round(saleTotal - a);
+      if (!(saleTotal > 0 && a > 0 && b > 0 && splitLeg1Method !== splitLeg2Method)) {
+        setIsCompleting(false);
+        playError();
+        triggerToast('Split legs must add up to the total (two methods)', 'error');
+        return false;
+      }
+      splitTenders = [
+        { method: splitLeg1Method, amount: a },
+        { method: splitLeg2Method, amount: b },
+      ];
+    }
     let changeMsg = '';
     if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= saleTotal) {
       changeMsg = ` Change: ${formatCurrency(cashPaidNum - saleTotal)}`;
@@ -828,6 +855,7 @@ export default function Sales({
     const newSale: Sale = {
       id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, orderNumber, timestamp: new Date().toISOString(),
       items: itemsToSell, subtotal: saleSubtotal, tax, total: saleTotal, paymentMethod,
+      splitTenders,
       customerName: customerName.trim() || undefined,
       discount: saleDiscount > 0 ? saleDiscount : undefined,
       staffName: staffName?.trim() || undefined,
@@ -1069,6 +1097,46 @@ export default function Sales({
       </div>
     );
   };
+
+  // Split-tender editor shared by desktop cart, mobile sheet and Quick Sale:
+  // leg 1 typed (method + amount), leg 2 auto = remainder. Cash-like only.
+  const SPLIT_METHODS: SplitTender['method'][] = ['Cash', 'MTN MoMo', 'Airtel Money'];
+  const renderSplitEditor = (onDark: boolean) => (
+    <div className={`${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border border-white/5 p-3 rounded-2xl space-y-2 mt-2`}>
+      {([1, 2] as const).map(leg => {
+        const isFirst = leg === 1;
+        const method = isFirst ? splitLeg1Method : splitLeg2Method;
+        const setMethod = isFirst ? setSplitLeg1Method : setSplitLeg2Method;
+        return (
+          <div key={leg} className="flex items-center gap-2">
+            <span className="text-[10px] font-black text-zinc-500 uppercase w-8 shrink-0">Leg {leg}</span>
+            <div className="flex flex-1 bg-[#141414] rounded-lg border border-white/5 overflow-hidden">
+              {SPLIT_METHODS.map(m => (
+                <button key={m} onClick={() => setMethod(m)}
+                  className={`flex-1 py-2 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${method === m ? 'bg-gold-brand text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                  {m === 'MTN MoMo' ? 'MTN' : m === 'Airtel Money' ? 'Airtel' : 'Cash'}
+                </button>
+              ))}
+            </div>
+            {isFirst ? (
+              <input type="number" min="0" value={splitLeg1Amount}
+                onChange={(e) => setSplitLeg1Amount(e.target.value)}
+                aria-label="First leg amount"
+                placeholder={String(total)}
+                className="w-24 bg-[#141414] border border-white/5 text-gold-brand font-black text-right rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-gold-brand h-9 tabular-nums" />
+            ) : (
+              <span className="w-24 text-right text-xs font-black text-zinc-300 tabular-nums px-2" title="Remainder, automatic">
+                {splitLeg2 >= 0 ? formatCurrency(splitLeg2) : '—'}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {!splitValid && total > 0 && (
+        <p className="text-[10px] text-amber-400 font-bold uppercase">Legs must be positive, different methods, adding to {formatCurrency(total)}</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 relative min-w-0 overflow-x-hidden lg:h-[calc(100vh-140px)] lg:overflow-hidden pb-2" id="sales-tab-content">
@@ -1555,7 +1623,7 @@ export default function Sales({
             // the clipped column.
             <div className="mt-4 pt-4 border-t border-white/5 space-y-2 shrink-0 min-h-0 max-h-[42%] overflow-y-auto">
               <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-5 gap-1.5">
                 {/* Mistake 10 fix: one icon style, one neutral color — active state
                     carries meaning via border/gold, not 4 competing hues. */}
                 {[
@@ -1563,6 +1631,7 @@ export default function Sales({
                   { name: 'MTN MoMo', label: 'MTN', icon: <Smartphone className="w-4 h-4" /> },
                   { name: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" /> },
                   { name: 'Credit / Book', label: t(lang, 'credit'), icon: <UserCheck className="w-4 h-4" /> },
+                  { name: 'Split', label: 'Split', icon: <Split className="w-4 h-4" /> },
                 ].map(opt => (
                   <button key={opt.name} onClick={() => { setPaymentMethod(opt.name as any); setCustomCashReceived(''); }}
                     className={`flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
@@ -1678,6 +1747,7 @@ export default function Sales({
                   )}
                 </div>
               )}
+              {paymentMethod === 'Split' && renderSplitEditor(false)}
             </div>
           )}
 
@@ -1753,10 +1823,10 @@ export default function Sales({
           </div>
           <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
             <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
-            <div className="grid grid-cols-4 gap-1.5">
-              {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'].map(name => (
-                <button key={name} onClick={() => { setPaymentMethod(name as any); setCustomCashReceived(''); }}
-                  className={`py-3 rounded-xl text-xs border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
+            <div className="grid grid-cols-5 gap-1.5">
+              {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
+                <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
+                  className={`py-3 rounded-xl text-[10px] border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
                     paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500'
                   }`}>
                   {name === 'Credit / Book' ? t(lang, 'credit') : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
@@ -1831,6 +1901,7 @@ export default function Sales({
                 )}
               </div>
             )}
+            {paymentMethod === 'Split' && renderSplitEditor(false)}
           </div>
           {/* Improvement 2: sticky bottom action — total + CTA stay visible while
               the sheet scrolls, so the cashier can act the moment they decide. */}
@@ -1939,10 +2010,10 @@ export default function Sales({
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {cart.map(item => renderCompactCartRow(item, true))}
               </div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book'].map(name => (
-                  <button key={name} onClick={() => { setPaymentMethod(name as any); setCustomCashReceived(''); }}
-                    className={`py-2.5 rounded-xl text-xs border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
+              <div className="grid grid-cols-5 gap-1.5">
+                {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
+                  <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
+                    className={`py-2.5 rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
                       paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'
                     }`}>
                     {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
@@ -2001,6 +2072,7 @@ export default function Sales({
                   )}
                 </div>
               )}
+              {paymentMethod === 'Split' && renderSplitEditor(true)}
               <div className="flex justify-between items-center">
                 <span className="text-[13px] font-semibold text-zinc-300">Total</span>
                 <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
@@ -2037,6 +2109,10 @@ export default function Sales({
         paymentMethod={paymentMethod}
         cashReceived={customCashReceived}
         sellerName={staffName || undefined}
+        splitTenders={paymentMethod === 'Split' && splitValid ? [
+          { method: splitLeg1Method, amount: splitLeg1 },
+          { method: splitLeg2Method, amount: splitLeg2 },
+        ] : undefined}
         formatCurrency={formatCurrency}
         lang={lang}
       />
@@ -2049,10 +2125,13 @@ export default function Sales({
         categories={categories}
       />
 
-      {showCustomers && (
+      {showCustomers && onSaveCustomer && onDeleteCustomer && (
         <Customers
           sales={salesHistory}
           products={products}
+          customers={customers}
+          onSaveCustomer={onSaveCustomer}
+          onDeleteCustomer={onDeleteCustomer}
           formatCurrency={formatCurrency}
           triggerToast={triggerToast}
           onClose={() => setShowCustomers(false)}

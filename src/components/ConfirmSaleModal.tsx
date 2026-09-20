@@ -1,5 +1,6 @@
-import { SaleItem } from '../types';
+import { SaleItem, SplitTender } from '../types';
 import { t } from '../utils/i18n';
+import { splitLegs } from '../utils/serviceSale';
 
 interface ConfirmSaleModalProps {
   isOpen: boolean;
@@ -12,11 +13,12 @@ interface ConfirmSaleModalProps {
   paymentMethod: string;
   cashReceived?: string;
   sellerName?: string;
+  splitTenders?: SplitTender[];
   formatCurrency: (val: number) => string;
   lang?: unknown;
 }
 
-export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isCompleting = false, cart, total, discountNum, paymentMethod, cashReceived, sellerName, formatCurrency, lang }: ConfirmSaleModalProps) {
+export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isCompleting = false, cart, total, discountNum, paymentMethod, cashReceived, sellerName, splitTenders, formatCurrency, lang }: ConfirmSaleModalProps) {
   if (!isOpen) return null;
   const tendered = parseFloat(cashReceived || '');
   const showTender = paymentMethod === 'Cash' && cashReceived !== undefined && cashReceived !== '' && !isNaN(tendered);
@@ -60,6 +62,12 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isComplet
             <span className="text-zinc-400">{t(lang, 'payment')}</span>
             <span className="font-bold text-white">{paymentMethod}</span>
           </div>
+          {paymentMethod === 'Split' && splitLegs({ paymentMethod: 'Split', splitTenders }).map((leg, i) => (
+            <div key={i} className="flex justify-between text-xs">
+              <span className="text-zinc-400">{leg.method === 'MTN MoMo' ? 'MTN' : leg.method === 'Airtel Money' ? 'Airtel' : leg.method}</span>
+              <span className="font-bold text-white tabular-nums">{formatCurrency(leg.amount)}</span>
+            </div>
+          ))}
           {sellerName && (
             <div className="flex justify-between text-xs">
               <span className="text-zinc-400">Seller</span>

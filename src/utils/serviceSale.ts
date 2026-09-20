@@ -1,7 +1,27 @@
 import type { Sale } from '../types';
 import { nextOrderNumber } from '../api';
 
-// Uganda phone → wa.me digits: 0701… → 256701…, +256… → 256….
+// ---- Split-tender legs ----
+// A Split sale carries its cash-like legs here; every other method reads
+// amount straight off the sale total. Unknown/missing legs → [] (never crash
+// a report on old or hand-made rows).
+export function splitLegs(sale: Pick<Sale, 'paymentMethod' | 'splitTenders'>): { method: 'Cash' | 'MTN MoMo' | 'Airtel Money'; amount: number }[] {
+  if (sale.paymentMethod !== 'Split' || !Array.isArray(sale.splitTenders)) return [];
+  return sale.splitTenders.filter(l =>
+    l && (l.method === 'Cash' || l.method === 'MTN MoMo' || l.method === 'Airtel Money') &&
+    Number.isFinite(l.amount) && l.amount > 0);
+}
+
+const shortMethod = (m: string) => m === 'MTN MoMo' ? 'MTN' : m === 'Airtel Money' ? 'Airtel' : m;
+
+// Human payment label for receipts, badges and confirm screens.
+export function paymentLabel(sale: Pick<Sale, 'paymentMethod' | 'splitTenders' | 'customerName'>): string {
+  const legs = splitLegs(sale);
+  if (legs.length === 0) {
+    return `${sale.paymentMethod}${sale.customerName ? ` • ${sale.customerName}` : ''}`;
+  }
+  return `Split (${legs.map(l => `${shortMethod(l.method)} ${Math.round(l.amount).toLocaleString()}`).join(' + ')})`;
+}
 export function customerWhatsAppUrl(phone: string, message: string): string | null {
   const digits = (phone || '').replace(/\D/g, '');
   let intl = '';
