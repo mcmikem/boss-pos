@@ -1,4 +1,5 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { chunkRetried, markChunkRetried, clearChunkRetried, isChunkError } from '../utils/lazyRetry';
 
 interface Props {
   children: ReactNode;
@@ -25,14 +26,27 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   handleRetry = () => {
-    // A failed lazy-chunk fetch (404 after a deploy re-hashed the file) can't
-    // be fixed by re-rendering — the old chunk is gone. Reload so the newest
-    // index.html + chunks load. Anything else just clears and re-tries.
+    // A failed lazy-chunk fetch (404 after a deploy re-hashed the file, or a
+    // stuck service worker serving a stale shell) can't be fixed by
+    // re-rendering. First tap: plain reload. If it fails AGAIN in the same
+    // session, the service worker itself is the stale part — unregister it
+    // so the next load fetches a completely fresh app from the network.
     const msg = this.state.error?.message || '';
-    if (
-      msg.includes('Failed to fetch dynamically imported module') ||
-      msg.includes('Importing a module script failed')
-    ) {
+    if (isChunkError(msg)) {
+      if (!chunkRetried()) {
+        markChunkRetried();
+        window.location.reload();
+        return;
+      }
+      clearChunkRetried();
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker
+          .getRegistrations()
+          .then((rs) => Promise.all(rs.map((r) => r.unregister())))
+          .catch(() => {})
+          .finally(() => window.location.reload());
+        return;
+      }
       window.location.reload();
       return;
     }

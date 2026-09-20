@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef, lazy, Suspense, type Dispatch, type SetStateAction } from 'react';
+import { useState, useMemo, useEffect, useRef, Suspense, type Dispatch, type SetStateAction } from 'react';
+import { lazyRetry } from '../utils/lazyRetry';
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
@@ -34,13 +35,13 @@ import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type Parked
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
 // bundle) stays small — important on the slow connections this app targets.
-const TailoringOrders = lazy(() => import('./TailoringOrders'));
-const DesignOrders = lazy(() => import('./DesignOrders'));
-const EateryPricing = lazy(() => import('./EateryPricing'));
-const MorningProduction = lazy(() => import('./MorningProduction'));
-const Bookings = lazy(() => import('./Bookings'));
-const RepairJobs = lazy(() => import('./RepairJobs'));
-const Quotes = lazy(() => import('./Quotes'));
+const TailoringOrders = lazyRetry(() => import('./TailoringOrders'));
+const DesignOrders = lazyRetry(() => import('./DesignOrders'));
+const EateryPricing = lazyRetry(() => import('./EateryPricing'));
+const MorningProduction = lazyRetry(() => import('./MorningProduction'));
+const Bookings = lazyRetry(() => import('./Bookings'));
+const RepairJobs = lazyRetry(() => import('./RepairJobs'));
+const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
   <div className="flex items-center justify-center py-16">
     <div className="w-8 h-8 border-2 border-gold-brand border-t-transparent rounded-full animate-spin" />

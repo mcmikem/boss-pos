@@ -1,4 +1,5 @@
-import { useState, useEffect, lazy, Suspense, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, Suspense, useRef, useMemo, useCallback } from 'react';
+import { lazyRetry } from './utils/lazyRetry';
 import { 
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
 } from 'lucide-react';
@@ -36,11 +37,11 @@ import { AdminDashboard } from './components/AdminDashboard';
 import StaffSwitcher from './components/StaffSwitcher';
 import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
 import SyncProductsButton from './components/SyncProductsButton';
-const Inventory = lazy(() => import('./components/Inventory'));
-const Analytics = lazy(() => import('./components/Analytics'));
-const Expenses = lazy(() => import('./components/Expenses'));
-const CategoryRegister = lazy(() => import('./components/CategoryRegister'));
-const Sales = lazy(() => import('./components/Sales'));
+const Inventory = lazyRetry(() => import('./components/Inventory'));
+const Analytics = lazyRetry(() => import('./components/Analytics'));
+const Expenses = lazyRetry(() => import('./components/Expenses'));
+const CategoryRegister = lazyRetry(() => import('./components/CategoryRegister'));
+const Sales = lazyRetry(() => import('./components/Sales'));
 
 const THEMES_LIST: AppTheme[] = [
   { id: 'gold', name: 'Kampala Gold', brand: '#ffcc00', medium: '#f1c100', light: '#ffedc3' },
