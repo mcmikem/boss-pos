@@ -9,6 +9,7 @@ import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, St
 import { t } from '../utils/i18n';
 import { supplierDrift } from '../utils/cashflow';
 import CreditsLedger from './CreditsLedger';
+import Customers from './Customers';
 import ExpenseDetailModal from './ExpenseDetailModal';
 import Dashboard from './Dashboard';
 import { designOrderApi, summaryApi, type SummaryResult } from '../api';
@@ -121,6 +122,7 @@ export default function Analytics({
   const [deleteExpConfirm, setDeleteExpConfirm] = useState<string | null>(null);
   const [expenseCatFilter, setExpenseCatFilter] = useState<string | null>(null);
   const [saleSearch, setSaleSearch] = useState('');
+  const [showCustomers, setShowCustomers] = useState(false);
   const [branchFilter, setBranchFilter] = useState<string>('All');
   const branchOptions = useMemo(() => {
     const fromSettings = (settings.branches || []).filter(Boolean);
@@ -1148,9 +1150,15 @@ const colorsMap: { [key: string]: string } = {
             if (top.length === 0 && avgBasket <= 0) return null;
             return (
               <section className="boss-card p-5">
-                <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1 flex items-center gap-2">
-                  <User className="w-4 h-4 text-gold-brand" /> Top Customers ({timeFilter})
-                </h3>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+                    <User className="w-4 h-4 text-gold-brand" /> Top Customers ({timeFilter})
+                  </h3>
+                  <button onClick={() => setShowCustomers(true)}
+                    className="text-[10px] font-black uppercase text-gold-brand hover:text-gold-light cursor-pointer">
+                    Regulars →
+                  </button>
+                </div>
                 <p className="text-[10px] text-zinc-600 font-bold uppercase mb-3">
                   Avg basket <span className="text-gold-brand font-black">{formatCurrency(avgBasket)}</span> • name buyers at the till to grow this list
                 </p>
@@ -1297,6 +1305,15 @@ const colorsMap: { [key: string]: string } = {
               )}
             </div>
           </section>
+          {showCustomers && (
+            <Customers
+              sales={sales}
+              products={products}
+              formatCurrency={formatCurrency}
+              triggerToast={triggerToast}
+              onClose={() => setShowCustomers(false)}
+            />
+          )}
           <ExpenseDetailModal
             expense={selectedExpense}
             formatCurrency={formatCurrency}

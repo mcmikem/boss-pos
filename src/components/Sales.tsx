@@ -16,6 +16,8 @@ import ServiceQtyModal from './ServiceQtyModal';
 import ConfirmSaleModal from './ConfirmSaleModal';
 import type { TriggerToast } from './Toast';
 import CashTransferModal from './CashTransferModal';
+import Customers from './Customers';
+import { loadCustomers, findProfile, type CustomerProfile } from '../utils/customers';
 import ReceiptModal from './ReceiptModal';
 import QuickExpenseModal from './QuickExpenseModal';
 import ProfitAnalyzerModal from './ProfitAnalyzerModal';
@@ -370,6 +372,7 @@ export default function Sales({
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showFoodCost, setShowFoodCost] = useState(false);
   const [showTransfers, setShowTransfers] = useState(false);
+  const [showCustomers, setShowCustomers] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
   // Undo window for the just-completed sale: 10s to tap Undo, then it lapses
@@ -688,6 +691,23 @@ export default function Sales({
   const loyaltyLeft = visitsToReward(loyaltyPast, loyaltyN);
   const manualDiscountSet = (parseFloat(discount) || 0) > 0;
   const showLoyalty = loyaltyName !== '' && cart.length > 0 && !manualDiscountSet;
+  // Regulars directory (per device) — VIP standing discounts at the till.
+  const [profiles, setProfiles] = useState<CustomerProfile[]>(() => {
+    try { return loadCustomers(); } catch { return []; }
+  });
+  useEffect(() => {
+    const h = () => { try { setProfiles(loadCustomers()); } catch {} };
+    window.addEventListener('boss-pos-customers-updated', h);
+    return () => window.removeEventListener('boss-pos-customers-updated', h);
+  }, []);
+  const matchedProfile = findProfile(profiles, customerName);
+  const showVipOffer = matchedProfile && (matchedProfile.discountPct || 0) > 0 && cart.length > 0 && !manualDiscountSet;
+  const applyVip = () => {
+    if (!matchedProfile) return;
+    setDiscountType('percent');
+    setDiscount(String(Math.min(50, matchedProfile.discountPct || 0)));
+    triggerToast(`${matchedProfile.discountPct}% regular discount for ${matchedProfile.name}`, 'success');
+  };
   const applyLoyalty = () => {
     setDiscountType('percent');
     setDiscount(String(loyaltyP));
@@ -1122,6 +1142,10 @@ export default function Sales({
                   <button onClick={() => { setShowMoreActions(false); setShowTransfers(true); }}
                     className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
                     <ArrowRightLeft className="w-4 h-4 text-sky-400" /> Move money
+                  </button>
+                  <button onClick={() => { setShowMoreActions(false); setShowCustomers(true); }}
+                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                    <Star className="w-4 h-4 text-gold-brand" /> Regulars
                   </button>
                 </div>
               </>
@@ -1561,6 +1585,12 @@ export default function Sales({
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11" />
+                {showVipOffer && (
+                  <button onClick={applyVip}
+                    className="w-full h-11 rounded-xl bg-purple-950/40 border border-purple-600/50 text-purple-200 text-xs font-black uppercase tracking-wider hover:bg-purple-950/60 active:scale-[0.98] transition-all cursor-pointer">
+                    ★ {matchedProfile?.name} — apply {matchedProfile?.discountPct}% regular discount
+                  </button>
+                )}
                 {showLoyalty && (loyaltyDue ? (
                   <button onClick={applyLoyalty}
                     className="w-full h-11 rounded-xl bg-gold-brand/15 border border-gold-brand text-gold-brand text-xs font-black uppercase tracking-wider hover:bg-gold-brand/25 active:scale-[0.98] transition-all cursor-pointer">
@@ -1748,6 +1778,12 @@ export default function Sales({
               <input type="text" list="boss-cust-mobile" placeholder="Name? (regulars reward)" value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
                 className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
+            )}
+            {showVipOffer && (
+              <button onClick={applyVip}
+                className="w-full min-h-[48px] py-2 rounded-xl bg-purple-950/40 border border-purple-600/50 text-purple-200 text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer">
+                ★ {matchedProfile?.discountPct}% regular discount
+              </button>
             )}
             {showLoyalty && (loyaltyDue ? (
               <button onClick={applyLoyalty}
@@ -2013,6 +2049,15 @@ export default function Sales({
         categories={categories}
       />
 
+      {showCustomers && (
+        <Customers
+          sales={salesHistory}
+          products={products}
+          formatCurrency={formatCurrency}
+          triggerToast={triggerToast}
+          onClose={() => setShowCustomers(false)}
+        />
+      )}
       <QuickExpenseModal
         isOpen={showQuickExpense}
         onClose={() => setShowQuickExpense(false)}
