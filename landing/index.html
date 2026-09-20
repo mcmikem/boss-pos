@@ -369,6 +369,46 @@ h2 em::after{content:'';position:absolute;bottom:1px;left:0;right:0;height:3px;b
   *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
 
+/* INTERACTIVE TILL MOCKUPS (live demos where photos aren't ready yet) */
+.till-mini{background:#141414;border-radius:10px;overflow:hidden;color:#f5f1e6;text-align:left}
+.tm-top{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-size:10px;font-weight:800;letter-spacing:.1em}
+.tm-live{background:var(--gold);color:var(--ink);padding:2px 9px;border-radius:20px;font-size:9px}
+.tm-search{margin:0 12px 10px;padding:7px 12px;border:1.5px solid #3a3a32;border-radius:8px;background:#0e0e0c;font-size:11px;color:#8a836e}
+.tm-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 12px}
+.tm-item{padding:8px 6px;border:1.5px solid #3a3a32;border-radius:9px;background:#1c1c18;color:#f5f1e6;font-size:10px;font-weight:700;display:flex;flex-direction:column;gap:4px;align-items:center;transition:transform .12s var(--ease),background .15s,border-color .15s;cursor:pointer}
+.tm-item:hover{border-color:var(--gold)}
+.tm-item:active{transform:scale(.93)}
+.tm-item.tapped{background:var(--gold);color:var(--ink);border-color:var(--gold)}
+.tm-item.tapped em{color:var(--ink)}
+.tm-dot{width:22px;height:22px;border-radius:7px}
+.tm-item small{font-size:9px;line-height:1.2}
+.tm-item em{font-style:normal;font-size:9px;color:var(--gold);font-variant-numeric:tabular-nums}
+.tm-cart{margin:12px;background:#0e0e0c;border:1px solid #3a3a32;border-radius:10px;padding:10px 12px}
+.tm-rows{min-height:34px}
+.tm-empty{font-size:10px;color:#8a836e}
+.tm-row{display:flex;justify-content:space-between;font-size:10px;padding:3px 0;animation:row-in .3s var(--ease)}
+@keyframes row-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.tm-row b{color:var(--gold);font-variant-numeric:tabular-nums}
+.tm-total{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:8px;border-top:1.5px solid var(--gold);font-size:10px;font-weight:800;text-transform:uppercase}
+.tm-total strong{font-size:17px;color:var(--gold);font-variant-numeric:tabular-nums}
+.tm-total strong.bump{animation:bump .3s var(--ease)}
+@keyframes bump{50%{transform:scale(1.18)}}
+.tm-charge{width:100%;margin-top:8px;padding:10px;background:var(--gold);color:var(--ink);border-radius:7px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;transition:background .2s}
+.tm-charge.success{background:var(--green);color:#fff}
+/* close-out mockup */
+.close-mini{background:#141414;border-radius:10px;color:#f5f1e6;padding:16px 14px;text-align:left}
+.cm-head{display:flex;justify-content:space-between;align-items:center;font-size:10px;font-weight:800;letter-spacing:.1em;margin-bottom:12px}
+.cm-head span{color:var(--gold)}
+.cm-row{display:grid;grid-template-columns:52px 1fr 64px;gap:8px;align-items:center;margin-bottom:10px;font-size:10px;font-weight:700}
+.cm-row b{text-align:right;font-variant-numeric:tabular-nums;color:var(--gold)}
+.cm-bar{height:10px;background:#2a2a25;border-radius:6px;overflow:hidden}
+.cm-bar i{display:block;height:100%;width:0;border-radius:6px;background:var(--gold);transition:width 1.2s var(--ease)}
+.cm-bar i.green{background:var(--green-light)}
+.cm-bar i.red{background:var(--red)}
+.cm-foot{margin-top:12px;padding-top:10px;border-top:1.5px solid var(--gold);font-size:10px;font-weight:800;text-transform:uppercase;display:flex;justify-content:space-between}
+.cm-foot strong{color:var(--green-light)}
+.screen-item .till-mini,.screen-item .close-mini{position:relative;z-index:1;border-radius:8px}
+
 /* MOBILE */
 @media(max-width:900px){
   .hero-grid{grid-template-columns:1fr;gap:44px}
@@ -452,9 +492,23 @@ h2 em::after{content:'';position:absolute;bottom:1px;left:0;right:0;height:3px;b
       </div>
     </div>
     <div class="hero-visual">
-      <span class="screenshot-label">Real till · IMAC Enterprises</span>
+      <span class="screenshot-label">Live demo · tap it</span>
       <div class="screenshot-frame">
-        <img src="/till-sell.jpg" alt="BOSS POS sell screen showing real products, categories, and prices at IMAC Enterprises" onerror="this.remove()">
+        <div class="till-mini" id="heroTill" aria-label="Interactive demo of the BOSS sell screen">
+          <div class="tm-top"><span>IMAC · SELL</span><span class="tm-live">● OFFLINE</span></div>
+          <div class="tm-search">⌕ Search products</div>
+          <div class="tm-grid">
+            <button class="tm-item" data-name="Chapati" data-price="1000"><span class="tm-dot" style="background:linear-gradient(135deg,#f4c17d,#ed784f)"></span><small>Chapati</small><em>1,000</em></button>
+            <button class="tm-item" data-name="Rolex" data-price="2500"><span class="tm-dot" style="background:linear-gradient(135deg,#e8c878,#b47c2d)"></span><small>Rolex</small><em>2,500</em></button>
+            <button class="tm-item" data-name="Soda" data-price="2000"><span class="tm-dot" style="background:linear-gradient(135deg,#bac9d9,#6a86a0)"></span><small>Soda</small><em>2,000</em></button>
+            <button class="tm-item" data-name="Samosa" data-price="1500"><span class="tm-dot" style="background:linear-gradient(135deg,#99c5a1,#397d68)"></span><small>Samosa</small><em>1,500</em></button>
+          </div>
+          <div class="tm-cart">
+            <div class="tm-rows"><span class="tm-empty">Tap a product — or watch…</span></div>
+            <div class="tm-total"><span>Total</span><strong>0</strong></div>
+            <button class="tm-charge" type="button">Charge</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1313,19 +1367,35 @@ h2 em::after{content:'';position:absolute;bottom:1px;left:0;right:0;height:3px;b
     </div>
     <div class="screens-grid">
       <div class="screen-item reveal">
-        <div class="screen-ph" aria-hidden="true"><div><strong>Sell screen photo</strong>Add till-sell.jpg to show the real till here.</div></div>
-        <img src="/till-sell.jpg" alt="BOSS POS sell screen at IMAC Enterprises showing real products and prices" onerror="this.remove()">
+        <div class="till-mini" id="screenTill" aria-label="Interactive demo of the BOSS sell screen">
+          <div class="tm-top"><span>SELL</span><span class="tm-live">● OFFLINE</span></div>
+          <div class="tm-grid" style="grid-template-columns:repeat(3,1fr)">
+            <button class="tm-item" data-name="Speaker" data-price="12000"><span class="tm-dot" style="background:linear-gradient(135deg,#f4c17d,#ed784f)"></span><small>Speaker</small><em>12,000</em></button>
+            <button class="tm-item" data-name="Cable" data-price="4000"><span class="tm-dot" style="background:linear-gradient(135deg,#99c5a1,#397d68)"></span><small>Cable</small><em>4,000</em></button>
+            <button class="tm-item" data-name="Stockings" data-price="5000"><span class="tm-dot" style="background:linear-gradient(135deg,#e8c878,#b47c2d)"></span><small>Stockings</small><em>5,000</em></button>
+          </div>
+          <div class="tm-cart">
+            <div class="tm-rows"><span class="tm-empty">Tap a product…</span></div>
+            <div class="tm-total"><span>Total</span><strong>0</strong></div>
+            <button class="tm-charge" type="button">Charge</button>
+          </div>
+        </div>
         <div class="caption">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-          The sell screen. Real products, real prices, real categories.
+          The sell screen. Try it — tap the products.
         </div>
       </div>
       <div class="screen-item reveal">
-        <div class="screen-ph" aria-hidden="true"><div><strong>Close-out photo</strong>Add till-close.jpg to show the real close-out here.</div></div>
-        <img src="/till-close.jpg" alt="BOSS POS close-out screen showing cash, MoMo and credit reconciled" onerror="this.remove()">
+        <div class="close-mini" id="closeMini" aria-label="Animated demo of the BOSS close-out">
+          <div class="cm-head"><span>END OF DAY</span><span>✓ BALANCED</span></div>
+          <div class="cm-row"><span>Cash</span><div class="cm-bar"><i data-w="62"></i></div><b data-count="245000">0</b></div>
+          <div class="cm-row"><span>MoMo</span><div class="cm-bar"><i class="green" data-w="38"></i></div><b data-count="138000">0</b></div>
+          <div class="cm-row"><span>Credit</span><div class="cm-bar"><i class="red" data-w="14"></i></div><b data-count="45000">0</b></div>
+          <div class="cm-foot"><span>Drawer matches</span><strong>✓ 0 unexplained</strong></div>
+        </div>
         <div class="caption">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-          The close-out. Cash, MoMo, credit — all counted before you lock up.
+          The close-out. Cash, MoMo, credit — counted before you lock up.
         </div>
       </div>
     </div>
@@ -1655,6 +1725,107 @@ h2 em::after{content:'';position:absolute;bottom:1px;left:0;right:0;height:3px;b
   }
   window.addEventListener('scroll', onScroll, {passive:true});
   onScroll();
+  // ============ INTERACTIVE TILL DEMOS ============
+  function wireTill(rootId, autoPlay){
+    var root = document.getElementById(rootId);
+    if (!root) return;
+    var cart = {};
+    var rowsEl = root.querySelector('.tm-rows');
+    var totalEl = root.querySelector('.tm-total strong');
+    var chargeBtn = root.querySelector('.tm-charge');
+    var fmt = function(n){ return n.toLocaleString('en-US'); };
+    function render(){
+      var names = Object.keys(cart);
+      if (!names.length){
+        rowsEl.innerHTML = '<span class="tm-empty">Tap a product' + (autoPlay ? ' — or watch…' : '…') + '</span>';
+        totalEl.textContent = '0';
+        chargeBtn.textContent = 'Charge';
+        return;
+      }
+      var total = 0, html = '';
+      names.forEach(function(name){
+        var it = cart[name], sub = it.price * it.qty;
+        total += sub;
+        html += '<div class="tm-row"><span>' + name + ' ×' + it.qty + '</span><b>' + fmt(sub) + '</b></div>';
+      });
+      rowsEl.innerHTML = html;
+      totalEl.textContent = fmt(total);
+      totalEl.classList.remove('bump'); void totalEl.offsetWidth; totalEl.classList.add('bump');
+      chargeBtn.textContent = 'Charge · ' + fmt(total);
+    }
+    function tap(itemEl){
+      var name = itemEl.dataset.name, price = parseInt(itemEl.dataset.price, 10) || 0;
+      if (!cart[name]) cart[name] = {price: price, qty: 0};
+      cart[name].qty++;
+      itemEl.classList.add('tapped');
+      setTimeout(function(){ itemEl.classList.remove('tapped'); }, 220);
+      render();
+    }
+    root.querySelectorAll('.tm-item').forEach(function(el){
+      el.addEventListener('click', function(){ tap(el); });
+    });
+    chargeBtn.addEventListener('click', function(){
+      if (!Object.keys(cart).length){
+        chargeBtn.textContent = 'Add a product first';
+        setTimeout(render, 1100);
+        return;
+      }
+      chargeBtn.classList.add('success');
+      chargeBtn.textContent = '✓ Sale recorded';
+      setTimeout(function(){ cart = {}; render(); chargeBtn.classList.remove('success'); }, 1100);
+    });
+    // Auto-play the hero demo while it's on screen; real taps never fight it.
+    if (autoPlay && 'IntersectionObserver' in window){
+      var items = root.querySelectorAll('.tm-item');
+      var timer = null;
+      var step = function(){
+        var qty = Object.keys(cart).reduce(function(s, n){ return s + cart[n].qty; }, 0);
+        if (qty >= 6){
+          chargeBtn.click();
+        } else {
+          tap(items[Math.floor(Math.random() * items.length)]);
+        }
+      };
+      var io2 = new IntersectionObserver(function(entries){
+        entries.forEach(function(e){
+          if (e.isIntersecting && !timer) timer = setInterval(step, 1600);
+          else if (!e.isIntersecting && timer){ clearInterval(timer); timer = null; }
+        });
+      }, {threshold: 0.3});
+      io2.observe(root);
+    }
+  }
+  wireTill('heroTill', true);
+  wireTill('screenTill', false);
+
+  // ============ CLOSE-OUT DEMO: bars + counters when visible ============
+  var closeMini = document.getElementById('closeMini');
+  if (closeMini){
+    var played = false;
+    var playClose = function(){
+      if (played) return; played = true;
+      closeMini.querySelectorAll('.cm-bar i').forEach(function(bar){
+        requestAnimationFrame(function(){ bar.style.width = (bar.dataset.w || 0) + '%'; });
+      });
+      closeMini.querySelectorAll('.cm-row b').forEach(function(el){
+        var target = parseInt(el.dataset.count, 10) || 0, t0 = null;
+        var tick = function(ts){
+          if (!t0) t0 = ts;
+          var p = Math.min(1, (ts - t0) / 1200);
+          el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString('en-US');
+          if (p < 1) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    };
+    if ('IntersectionObserver' in window){
+      var io3 = new IntersectionObserver(function(entries){
+        entries.forEach(function(e){ if (e.isIntersecting){ playClose(); io3.disconnect(); } });
+      }, {threshold: 0.4});
+      io3.observe(closeMini);
+    } else { playClose(); }
+  }
+
   topBtn.addEventListener('click', function(){
     window.scrollTo({top:0, behavior:'smooth'});
   });
