@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText, ChevronDown
 } from 'lucide-react';
 import StatementModal from './StatementModal';
 import BeginnerTip from './BeginnerTip';
@@ -44,6 +44,8 @@ interface CategoryRegisterProps {
   onPrintClose?: () => void;
   onSendClose?: () => void;
   features?: Record<string, boolean>;
+  // Close-time gating: unaccounted/momo flags wait for the shop's close.
+  pastClose?: boolean;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -64,13 +66,46 @@ function formatDay(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// Collapsible close-out section: the page used to render everything at once
+// (summary, money map, balance, credit book, losses, money-out) as one
+// endless scroll. Glance + balance open by default; the rest open themselves
+// when the wizard jumps to them. Choice sticks per day + department.
+function CloseSection({ id, icon: Icon, title, hint, open, onToggle, action, children }: {
+  id?: string;
+  icon: (props: { className?: string }) => React.ReactNode;
+  title: React.ReactNode;
+  hint: string;
+  open: boolean;
+  onToggle: () => void;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="boss-card rounded-2xl overflow-hidden scroll-mt-20">
+      <div className="flex items-center gap-2 px-4 py-3">
+        <button onClick={onToggle} aria-expanded={open}
+          className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer active:opacity-70 transition-opacity">
+          <Icon className="w-4 h-4 text-gold-brand shrink-0" />
+          <span className="flex-1 min-w-0">
+            <span className="block text-xs font-black text-white uppercase tracking-widest truncate">{title}</span>
+            <span className="block text-[10px] text-zinc-500 font-bold truncate">{hint}</span>
+          </span>
+          <ChevronDown className={`w-4 h-4 text-zinc-500 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      {open && <div className="px-4 pb-4 border-t border-white/5 pt-3">{children}</div>}
+    </section>
+  );
+}
+
 export default function CategoryRegister({
   segments, products, sales, expenses = [], creditEats, productionRegisters, wastageLogs,
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
-  onPrintClose, onSendClose, features,
+  onPrintClose, onSendClose, features, pastClose = true,
 }: CategoryRegisterProps) {
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
@@ -108,8 +143,38 @@ export default function CategoryRegister({
     return next;
   });
   const scrollToSection = (id: string) => {
+    // Wizard jumps also unfold the target — a closed card would look dead.
+    const key = id === 'close-balance' ? 'balance' : id === 'close-losses' ? 'losses' : id === 'close-money' ? 'money' : null;
+    if (key) {
+      setSecOpen(prev => {
+        if (prev[key]) return prev;
+        const next = { ...prev, [key]: true };
+        try { localStorage.setItem(`boss_pos_closesec_${todayStr()}::${selected}`, JSON.stringify(next)); } catch {}
+        return next;
+      });
+      // Let the unfold render before scrolling to it.
+      setTimeout(() => { try { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {} }, 60);
+      return;
+    }
     try { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
   };
+
+  // Which close-out cards are unfolded. Glance + balance start open; credit,
+  // losses and money-out start folded and unfold from the wizard or a tap.
+  // Reloaded per day + department so yesterday's progress never leaks.
+  const secStoreKey = `boss_pos_closesec_${todayStr()}::${selected}`;
+  const [secOpen, setSecOpen] = useState<Record<string, boolean>>({ glance: true, balance: true, credit: false, losses: false, money: false });
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(secStoreKey) || '{}');
+      setSecOpen({ glance: true, balance: true, credit: false, losses: false, money: false, ...(saved && typeof saved === 'object' ? saved : {}) });
+    } catch {}
+  }, [secStoreKey]);
+  const toggleSec = (k: string) => setSecOpen(prev => {
+    const next = { ...prev, [k]: !prev[k] };
+    try { localStorage.setItem(secStoreKey, JSON.stringify(next)); } catch {}
+    return next;
+  });
 
   const [showCreditForm, setShowCreditForm] = useState(false);
   const [creditName, setCreditName] = useState('');
@@ -384,7 +449,8 @@ export default function CategoryRegister({
     production: productionRegisters,
     wastage: wastageLogs,
     voidCount: (() => { try { return voidsOnDay(todayKey); } catch { return 0; } })(),
-  }), [todayKey, segments, todayCollectedByCategory, drawerExpensesToday, momoTransfers, eodCapital, sales, products, productionRegisters, wastageLogs]);
+    pastClose,
+  }), [todayKey, segments, todayCollectedByCategory, drawerExpensesToday, momoTransfers, eodCapital, sales, products, productionRegisters, wastageLogs, pastClose]);
 
   useEffect(() => {
     for (const f of theftFlags.slice(0, 4)) {
@@ -634,7 +700,7 @@ export default function CategoryRegister({
         return (
           <section className="boss-card p-4 rounded-2xl border border-gold-brand/20">
             <div className="flex items-center justify-between mb-1.5">
-              <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Close the day \u2014 {selected}</h3>
+              <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Close the day — {selected}</h3>
               <span className="text-[11px] font-black text-gold-brand tabular-nums">{done}/3</span>
             </div>
             <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
@@ -677,23 +743,10 @@ export default function CategoryRegister({
         );
       })()}
 
-      {/* History time filter */}
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest shrink-0">History</p>
-        <div className="flex gap-1.5 overflow-x-auto scrollbar-none">
-          {HIST_FILTERS.map(f => (
-            <button key={f.key} onClick={() => setHistFilter(f.key)}
-              className={`py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider border whitespace-nowrap transition-all cursor-pointer active:scale-95 min-h-[36px] ${
-                histFilter === f.key
-                  ? 'bg-gold-brand border-gold-brand text-black'
-                  : 'bg-[#141414]/60 border-white/5 text-zinc-500 hover:text-zinc-300'
-              }`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
+      {/* Today at a glance: summary tiles + where the money sits */}
+      <CloseSection icon={LayoutGrid} title="Today at a glance"
+        hint={`${formatCurrency(allCollectedToday)} sold • ${formatCurrency(allFloatOut + allCashOut + allOwnerOut + allBankOut)} moved`}
+        open={secOpen.glance} onToggle={() => toggleSec('glance')}>
       {/* Today summary */}
       <section className="grid grid-cols-3 gap-2">
         {showProduction && (
@@ -791,20 +844,17 @@ export default function CategoryRegister({
           </table>
         </div>
       </section>
+      </CloseSection>
 
       {/* ============ DAILY BALANCE / CLOSE-OUT (daily-make only: made-sold-lost means nothing without production) ============ */}
       {showProduction && (
-      <section id="close-balance" className="boss-card p-5 rounded-2xl scroll-mt-20">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-gold-brand" /> {t(lang, 'closeBalance')}
-          </h3>
-          <div className="flex items-center gap-2">
-            <input type="date" value={balanceDate} max={todayStr()} onChange={e => setBalanceDate(e.target.value || todayStr())}
-              className="bg-zinc-900 border border-zinc-800 text-white rounded-lg h-9 px-2 text-xs outline-none focus:border-gold-brand" />
-          </div>
-        </div>
-
+      <CloseSection id="close-balance" icon={CalendarDays} title={t(lang, 'closeBalance')}
+        hint={`${balanceRows.length} lines • ${totalAutoCarry} auto-carry`}
+        open={secOpen.balance} onToggle={() => toggleSec('balance')}
+        action={
+          <input type="date" value={balanceDate} max={todayStr()} onChange={e => setBalanceDate(e.target.value || todayStr())}
+            className="bg-zinc-900 border border-zinc-800 text-white rounded-lg h-9 px-2 text-xs outline-none focus:border-gold-brand" />
+        }>
         {balanceRows.length === 0 ? (
           <div className="text-center py-6">
             <CalendarDays className="w-9 h-9 text-gold-brand/40 mx-auto mb-2" />
@@ -880,21 +930,19 @@ export default function CategoryRegister({
             </div>
           </>
         )}
-      </section>
+      </CloseSection>
       )}
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
-      <section className="boss-card p-5 rounded-2xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <Users className="w-4 h-4 text-emerald-400" /> Ababanjibwa Sente
-          </h3>
+      <CloseSection icon={Users} title="Ababanjibwa Sente"
+        hint={openCredits.length > 0 ? `${formatCurrency(outstanding)} outstanding` : 'books clear'}
+        open={secOpen.credit} onToggle={() => toggleSec('credit')}
+        action={
           <button onClick={() => setShowCreditForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
             <Plus className="w-3.5 h-3.5" /> {showCreditForm ? t(lang, 'closeBtn') : t(lang, 'addCreditK')}
           </button>
-        </div>
-
+        }>
         {showCreditForm && (
           <div className="bg-zinc-950/60 border border-emerald-600/20 rounded-xl p-4 space-y-3 mb-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1020,18 +1068,33 @@ export default function CategoryRegister({
             )})}
           </div>
         )}
-      </section>
+      </CloseSection>
 
       {/* ============ 2. REMAINING / EXPIRED (LOSES) ============ */}
-      <section id="close-losses" className="boss-card p-5 rounded-2xl scroll-mt-20">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <PackageX className="w-4 h-4 text-rose-400" /> {t(lang, 'remainingK')} / {t(lang, 'expiredK')} ({t(lang, 'losses')})
-          </h3>
+      <CloseSection id="close-losses" icon={PackageX} title={`${t(lang, 'remainingK')} / ${t(lang, 'expiredK')} (${t(lang, 'losses')})`}
+        hint={`${todayLossCount} logged • lost ${formatCurrency(todayWastage)}`}
+        open={secOpen.losses} onToggle={() => toggleSec('losses')}
+        action={
           <button onClick={() => setShowWasteForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-rose-600/20 text-rose-400 border border-rose-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
             <Plus className="w-3.5 h-3.5" /> {showWasteForm ? t(lang, 'closeBtn') : t(lang, 'logLoss')}
           </button>
+        }>
+        {/* History range lives here now — it filters the loss list below. */}
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest shrink-0">History</p>
+          <div className="flex gap-1.5 overflow-x-auto scrollbar-none">
+            {HIST_FILTERS.map(f => (
+              <button key={f.key} onClick={() => setHistFilter(f.key)}
+                className={`py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider border whitespace-nowrap transition-all cursor-pointer active:scale-95 min-h-[36px] ${
+                  histFilter === f.key
+                    ? 'bg-gold-brand border-gold-brand text-black'
+                    : 'bg-[#141414]/60 border-white/5 text-zinc-500 hover:text-zinc-300'
+                }`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {showWasteForm && (
@@ -1128,19 +1191,18 @@ export default function CategoryRegister({
             ))}
           </div>
         )}
-      </section>
+      </CloseSection>
 
       {/* ============ 3. MONEY OUT — mobile money / owner / float ============ */}
-      <section id="close-money" className="boss-card p-5 rounded-2xl scroll-mt-20">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <Smartphone className="w-4 h-4 text-cyan-400" /> {t(lang, 'moneyOut')} (who took it & where)
-          </h3>
+      <CloseSection id="close-money" icon={Smartphone} title={`${t(lang, 'moneyOut')} (who took it & where)`}
+        hint={`${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`}
+        open={secOpen.money} onToggle={() => toggleSec('money')}
+        action={
           <button onClick={() => setShowMomoForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
             <Plus className="w-3.5 h-3.5" /> {showMomoForm ? 'Close' : 'Record Money Out'}
           </button>
-        </div>
+        }>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
@@ -1285,7 +1347,7 @@ export default function CategoryRegister({
             })}
           </div>
         )}
-      </section>
+      </CloseSection>
 
       {/* Payment modal */}
       {statementFor && (

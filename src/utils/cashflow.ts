@@ -637,8 +637,27 @@ export function buildTheftFlags(args: {
   production: ProductionRegister[];
   wastage: WastageLog[];
   voidCount?: number;
+  // Close-time gating: unaccounted-cash / MoMo-gap flags are end-of-day
+  // verdicts. Before the shop's close time they would fire on money that
+  // simply hasn't been moved yet — so they wait. Defaults true (legacy).
+  pastClose?: boolean;
 }): TheftFlag[] {
+  const pastClose = args.pastClose !== false;
   const flags: TheftFlag[] = [];
+  // Phone-money tender per category: MTN/Airtel sales sit on the phone, not
+  // in the drawer — the flag must say "move to float", not "missing".
+  const momoByCat: Record<string, number> = {};
+  try {
+    for (const s of args.sales) {
+      if (s.refunded || localDayKey(s.timestamp) !== args.dayKey) continue;
+      if (s.paymentMethod !== 'MTN MoMo' && s.paymentMethod !== 'Airtel Money') continue;
+      for (const i of s.items) {
+        const prod = args.products.find((p) => p.id === i.productId);
+        const cat = prod?.category || 'Eatery';
+        momoByCat[cat] = (momoByCat[cat] || 0) + (i.lineTotal || 0);
+      }
+    }
+  } catch {}
   for (const cat of args.categories) {
     const opening = getOpeningCapital(args.dayKey, cat, args.eodCapital);
     const closing = getClosingCapital(args.dayKey, cat, args.eodCapital);
@@ -656,12 +675,25 @@ export function buildTheftFlags(args: {
       bankOut: m.bank || 0,
     });
     if (r.status === 'missing') {
-      flags.push({
-        kind: 'unaccounted',
-        severity: 'critical',
-        title: `${cat}: ${Math.round(r.unaccounted).toLocaleString()} UGX unaccounted`,
-        detail: `Opened ${r.openingCapital.toLocaleString()}, sold ${r.collected.toLocaleString()}, moved ${r.movedOut.toLocaleString()}, capital ${r.closingCapital.toLocaleString()}. Still in drawer with no record — move to float/cash/owner or keep as capital.`,
-      });
+      // Before close: the evening move hasn't happened — not a verdict.
+      if (!pastClose) continue;
+      const phone = momoByCat[cat] || 0;
+      const amt = Math.round(r.unaccounted);
+      if (phone >= amt - 500) {
+        flags.push({
+          kind: 'unaccounted',
+          severity: 'warn',
+          title: `${cat}: ${amt.toLocaleString()} UGX phone money not moved to float`,
+          detail: `Opened ${r.openingCapital.toLocaleString()}, sold ${r.collected.toLocaleString()} (phone money), moved ${r.movedOut.toLocaleString()}, capital ${r.closingCapital.toLocaleString()}. MTN/Airtel sales sit on the phone, not the drawer — move it to float in Close day → Money out, or keep as capital.`,
+        });
+      } else {
+        flags.push({
+          kind: 'unaccounted',
+          severity: 'critical',
+          title: `${cat}: ${amt.toLocaleString()} UGX unaccounted`,
+          detail: `Opened ${r.openingCapital.toLocaleString()}, sold ${r.collected.toLocaleString()}, moved ${r.movedOut.toLocaleString()}, capital ${r.closingCapital.toLocaleString()}. Still in drawer with no record — move to float/cash/owner or keep as capital.`,
+        });
+      }
     } else if (r.status === 'over-moved') {
       flags.push({
         kind: 'unaccounted',
@@ -720,7 +752,7 @@ export function buildTheftFlags(args: {
     .filter((s) => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')
     .reduce((a, s) => a + (s.total || 0), 0);
   const gap = momoSales - totalFloat;
-  if (momoSales > 0 && gap >= 10000) {
+  if (pastClose && momoSales > 0 && gap >= 10000) {
     flags.push({
       kind: 'momo',
       severity: 'warn',

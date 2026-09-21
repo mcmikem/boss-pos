@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp } from './dates';
+import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp, isPastClose, isShopDayOff } from './dates';
 
 describe('localDayKey', () => {
   it('returns a zero-padded YYYY-MM-DD', () => {
@@ -79,5 +79,35 @@ describe('middayStamp', () => {
     expect(localDayKey(middayStamp('yesterday'))).toBe(localDayKey(new Date().toISOString()));
     expect(localDayKey(middayStamp(''))).toBe(localDayKey(new Date().toISOString()));
     expect(localDayKey(middayStamp(null))).toBe(localDayKey(new Date().toISOString()));
+  });
+});
+describe('shop hours', () => {
+  const at = (h: number, m = 0, day = 2) => {
+    // Tuesday 2026-09-22 base, override weekday via day offset
+    const d = new Date(2026, 8, 22 + (day - 2), h, m, 0);
+    return d;
+  };
+  it('flags anytime when hours are not set (legacy)', () => {
+    expect(isPastClose(undefined, at(9))).toBe(true);
+    expect(isPastClose({}, at(9))).toBe(true);
+  });
+  it('waits for close during the day, fires after', () => {
+    const hours = { openTime: '08:00', closeTime: '21:00' };
+    expect(isPastClose(hours, at(14))).toBe(false);
+    expect(isPastClose(hours, at(21))).toBe(true);
+    expect(isPastClose(hours, at(23, 30))).toBe(true);
+  });
+  it('stays quiet on days off', () => {
+    const hours = { closeTime: '21:00', closedDays: [0] };
+    expect(isShopDayOff(hours, at(22, 0, 0))).toBe(true); // Sunday
+    expect(isPastClose(hours, at(22, 0, 0))).toBe(false);
+    expect(isShopDayOff(hours, at(22, 0, 2))).toBe(false); // Tuesday
+    expect(isPastClose(hours, at(22, 0, 2))).toBe(true);
+  });
+  it('handles overnight shifts', () => {
+    const hours = { openTime: '18:00', closeTime: '02:00' };
+    expect(isPastClose(hours, at(20))).toBe(false); // mid-shift
+    expect(isPastClose(hours, at(3))).toBe(true); // after close, before open
+    expect(isPastClose(hours, at(10))).toBe(true); // last night's 2am close passed
   });
 });

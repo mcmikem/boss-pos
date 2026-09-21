@@ -351,6 +351,9 @@ export interface StoreSettings {
   efris?: EfrisConfig;
   branches?: string[];
   eodCapital?: Record<string, number>;
+  openTime?: string; // shop opens "08:00" (24h HH:MM) — close-out flags wait for close
+  closeTime?: string; // shop closes "21:00" — unaccounted-cash flags fire after this
+  closedDays?: number[]; // 0=Sun..6=Sat days the shop never opens (no close flags)
   largeText?: boolean; // accessibility: bigger type + targets (Settings → Display)
   lockMinutes?: number; // idle auto-lock delay (10/30/60); solo sellers can relax it
   features?: Record<string, boolean>; // Till control master switches (all default ON)

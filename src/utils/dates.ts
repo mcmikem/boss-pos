@@ -48,6 +48,54 @@ export function middayStamp(dayKey: string | undefined | null): string {
   return new Date().toISOString();
 }
 
+// ---- Shop hours: when the close-out flags may fire ----
+// Unaccounted-cash / MoMo-gap flags are end-of-day verdicts — firing them at
+// 2pm for money that simply hasn't been moved yet is noise. The shop sets
+// open/close times + days off in Settings; flags wait for close.
+
+export interface ShopHours {
+  openTime?: string; // "08:00"
+  closeTime?: string; // "21:00"
+  closedDays?: number[]; // 0=Sun..6=Sat
+}
+
+function parseHM(v: string | undefined | null): number | null {
+  if (!v || !/^\d{1,2}:\d{2}$/.test(v)) return null;
+  const [h, m] = v.split(':').map(Number);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
+}
+
+// True when the shop never opens on the given day (no close happens, so no
+// close-out flags are expected).
+export function isShopDayOff(hours: ShopHours | undefined | null, now: Date = new Date()): boolean {
+  try {
+    const off = hours?.closedDays;
+    if (!Array.isArray(off) || off.length === 0) return false;
+    return off.includes(now.getDay());
+  } catch {
+    return false;
+  }
+}
+
+// True when the day's close has passed (or no hours are set yet — legacy
+// behaviour flags immediately so shops that never configure hours lose
+// nothing). Overnight shifts (close <= open, e.g. 18:00–02:00) are handled:
+// after close and before next open counts as past close.
+export function isPastClose(hours: ShopHours | undefined | null, now: Date = new Date()): boolean {
+  try {
+    if (isShopDayOff(hours, now)) return false;
+    const close = parseHM(hours?.closeTime);
+    if (close === null) return true;
+    const open = parseHM(hours?.openTime);
+    const t = now.getHours() * 60 + now.getMinutes();
+    if (open === null || close > open) return t >= close;
+    return t >= close && t < open;
+  } catch {
+    return true;
+  }
+}
+
 // Alert tier for a product expiry: expired (passed), soon (within 30 days),
 // or ok. Services and dateless products are always ok.
 export function expiryStatus(expiryDate: string | undefined | null, todayKey?: string): 'expired' | 'soon' | 'ok' {

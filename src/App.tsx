@@ -4,6 +4,8 @@ import FirstSaleTour, { isTourDone } from './components/FirstSaleTour';
 import { 
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
 } from 'lucide-react';
+import type { ComponentType } from 'react';
+import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
 import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
 import { enrichProductsWithIcons } from './data/icons';
@@ -19,7 +21,7 @@ import { downloadBlob } from './utils/download';
 import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
-import { localDayKey, todayLocalKey } from './utils/dates';
+import { localDayKey, todayLocalKey, isPastClose } from './utils/dates';
 import { readSyncReview, clearSyncReview, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
@@ -151,6 +153,7 @@ function removeDeletedExpense(id: string): void {
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
+  'openTime','closeTime','closedDays',
 ]);
 function serializeSettings(s: StoreSettings): string {
   const filtered: Record<string, unknown> = {};
@@ -217,6 +220,44 @@ function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'c
     </div>
   );
 }
+
+// Settings accordion section: one collapsible card per area so the panel
+// reads as doors (Shop, Selling, Staff, Money, Security, Look, Data), not
+// eighty inputs. Which door is open sticks per device.
+function SettingsSection({ id, icon: Icon, title, hint, open, onToggle, children }: {
+  id: string;
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  hint: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="boss-card rounded-2xl border border-white/5 overflow-hidden scroll-mt-2">
+      <button onClick={onToggle} aria-expanded={open}
+        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left cursor-pointer active:bg-white/5 transition-colors">
+        <Icon className="w-4 h-4 text-gold-brand shrink-0" />
+        <span className="flex-1 min-w-0">
+          <span className="block text-xs font-black text-white uppercase tracking-widest">{title}</span>
+          <span className="block text-[10px] text-zinc-500 font-bold truncate">{hint}</span>
+        </span>
+        <ChevronDown className={`w-4 h-4 text-zinc-500 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div className="px-4 pb-4 space-y-3 border-t border-white/5 pt-3">{children}</div>}
+    </section>
+  );
+}
+
+const SETTINGS_SECTIONS = [
+  { key: 'shop', label: 'Shop' },
+  { key: 'selling', label: 'Selling' },
+  { key: 'staff', label: 'Staff' },
+  { key: 'money', label: 'Money' },
+  { key: 'security', label: 'PINs' },
+  { key: 'look', label: 'Look' },
+  { key: 'data', label: 'Data' },
+] as const;
 
 export default function App() {  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -298,6 +339,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return () => window.removeEventListener('keydown', onKey);
   }, [showMore]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Settings accordion: which door is open sticks per device (default Shop).
+  const [settingsSection, setSettingsSection] = useState<string>(() => {
+    try { return localStorage.getItem('boss_pos_settings_section') || 'shop'; } catch { return 'shop'; }
+  });
+  const openSettingsSection = (key: string) => {
+    setSettingsSection(key);
+    try { localStorage.setItem('boss_pos_settings_section', key); } catch {}
+    try {
+      requestAnimationFrame(() => document.getElementById(`set-${key}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    } catch {}
+  };
+  const toggleSettingsSection = (key: string) => {
+    const next = settingsSection === key ? '' : key;
+    setSettingsSection(next);
+    try { localStorage.setItem('boss_pos_settings_section', next); } catch {}
+  };
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
   // Why the till keeps asking for PIN: last 10 lock reasons (boot/idle/revoke).
@@ -2258,6 +2315,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
               window.open(url, '_blank', 'noopener');
             }}
             features={settings.features}
+            pastClose={isPastClose(settings)}
           />
           </Suspense>
           </ErrorBoundary>
@@ -2747,7 +2805,17 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </div>
               ) : (
               <>
-              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest">Shop</p>
+              {/* Section doors: seven areas, one open at a time — jump via chips. */}
+              <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur flex gap-1.5 overflow-x-auto scrollbar-none">
+                {SETTINGS_SECTIONS.map(s => (
+                  <button key={s.key} onClick={() => openSettingsSection(s.key)}
+                    className={`shrink-0 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer ${settingsSection === s.key ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/10 text-zinc-400 hover:text-zinc-200'}`}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              <SettingsSection id="set-shop" icon={Store} title="Shop" hint="Name, type, language, hours, branches"
+                open={settingsSection === 'shop'} onToggle={() => toggleSettingsSection('shop')}>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Name <SettingHelp label="Shop Name" text="Your shop's name. It shows at the top of every till, on receipts and on the daily close message." /></label>
                 <input type="text" value={settings.shopName} onChange={(e) => setSettings(prev => ({ ...prev, shopName: e.target.value || 'My Shop' }))}
@@ -2795,7 +2863,100 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </select>
                 <p className="text-[10px] text-zinc-600">Luganda covers Sell, Expenses, Money, Reports and Close day. Settings stay in English.</p>
               </div>
-              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest pt-2">Selling</p>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop hours <SettingHelp label="Shop hours" text="Opening and closing times plus days off. Unaccounted-cash flags wait until after close — no more mid-day alarms for money that simply hasn't been moved yet. Blank = flag anytime (old behaviour)." /></label>
+                <div className="flex gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">Opens</p>
+                    <input type="time" value={settings.openTime || ''}
+                      onChange={(e) => setSettings(prev => ({ ...prev, openTime: e.target.value || undefined }))}
+                      className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none tabular-nums" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">Closes</p>
+                    <input type="time" value={settings.closeTime || ''}
+                      onChange={(e) => setSettings(prev => ({ ...prev, closeTime: e.target.value || undefined }))}
+                      className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none tabular-nums" />
+                  </div>
+                </div>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase mt-2 mb-1">Days off (no close flags)</p>
+                <div className="flex gap-1.5">
+                  {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => {
+                    const off = (settings.closedDays || []).includes(i);
+                    return (
+                      <button key={i} onClick={() => setSettings(prev => {
+                        const cur = prev.closedDays || [];
+                        return { ...prev, closedDays: off ? cur.filter(x => x !== i) : [...cur, i] };
+                      })}
+                        title={off ? 'Tap to mark open' : 'Tap to mark closed'}
+                        className={`flex-1 h-10 rounded-xl text-xs font-black transition-all active:scale-95 cursor-pointer border ${off ? 'bg-rose-950/40 border-rose-600/50 text-rose-300' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-zinc-600">Close-out flags fire {settings.closeTime ? `after ${settings.closeTime}` : 'anytime until you set a closing time'}.</p>
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <LayoutGrid className="w-3.5 h-3.5 text-gold-brand" /> Branches
+                </label>
+                <label className="block text-[10px] text-zinc-500 font-bold uppercase">This till belongs to</label>
+                <select value={tillBranch} onChange={(e) => setTillBranch(e.target.value)}
+                  className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
+                  <option value="">Main shop (no branch)</option>
+                  {(settings.branches || []).map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                {isManager ? (
+                  <>
+                    <label className="block text-[10px] text-zinc-500 font-bold uppercase pt-1">All branches (one per line or comma)</label>
+                    <input type="text" value={(settings.branches || []).join(', ')} placeholder="e.g. Owino, Kikuubo"
+                      onChange={(e) => setSettings(prev => ({
+                        ...prev,
+                        branches: e.target.value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).slice(0, 20),
+                      }))}
+                      className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                    {(settings.branches || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(settings.branches || []).map(b => (
+                          <span key={b} className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/10 rounded-lg pl-2.5 pr-1.5 py-1 text-[11px] font-bold text-zinc-200">
+                            {b}
+                            <button
+                              onClick={() => {
+                                if (!confirm(`Delete branch "${b}"? Old sales keep the name, new sales can't use it.`)) return;
+                                setSettings(prev => ({ ...prev, branches: (prev.branches || []).filter(x => x !== b) }));
+                                if (tillBranch === b) setTillBranch('');
+                                triggerToast(`Deleted branch "${b}"`, 'info');
+                              }}
+                              className="p-1 text-zinc-500 hover:text-rose-400 rounded cursor-pointer"
+                              title={`Delete ${b}`}
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                        <button
+                          onClick={() => {
+                            if (!confirm('Clear ALL branches? Tills fall back to main shop.')) return;
+                            setSettings(prev => ({ ...prev, branches: [] }));
+                            setTillBranch('');
+                            triggerToast('All branches cleared', 'info');
+                          }}
+                          className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 px-2 py-1 cursor-pointer"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">Each sale is stamped with its till's branch; Reports can filter per branch. Stock stays pooled across branches. Rename carefully — old sales keep the old name.</p>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-zinc-600 leading-relaxed">Branch list is managed by a manager. Your sales are stamped “{tillBranch || 'main shop'}”.</p>
+                )}
+              </div>
+              </SettingsSection>
+              <SettingsSection id="set-selling" icon={ShoppingCart} title="Selling" hint="Modules, till control, payments, goals, rewards"
+                open={settingsSection === 'selling'} onToggle={() => toggleSettingsSection('selling')}>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Extra Modules <SettingHelp label="Extra Modules" text="Order screens for side businesses — tailoring, design & print, bookings, repairs. Off means hidden everywhere until you need them." /></label>
                 <div className="grid grid-cols-2 gap-2">
@@ -2867,21 +3028,6 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </div>
                 <p className="text-[10px] text-zinc-600">Everything is on by default — turn off what your shop doesn’t use. Choices sync to all tills.</p>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
-                  <Palette className="w-3.5 h-3.5 text-gold-brand" /> Color Theme <SettingHelp label="Color Theme" text="Recolours every till in the shop — pick the colour your staff recognises. Purely visual, never touches money." />
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {THEMES_LIST.map(t => (
-                    <button key={t.id} onClick={() => setSettings(prev => ({ ...prev, themeId: t.id }))}
-                      className={`px-2.5 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${settings.themeId === t.id ? 'bg-white/5 text-white border-gold-brand' : 'bg-transparent text-zinc-500 border-white/5 hover:text-zinc-300'}`}
-                      style={{ borderColor: settings.themeId === t.id ? t.brand : 'transparent' }}>
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: t.brand }}></span>
-                      <span className="truncate">{t.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Default Payment <SettingHelp label="Default Payment" text="The payment button pre-selected in every new cart. Cashiers can still switch per sale — this just saves a tap." /></label>
                 <div className="grid grid-cols-4 gap-1">
@@ -2945,7 +3091,9 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   <p className="text-[10px] text-zinc-600 self-center leading-snug">Every <b className="text-zinc-300">{settings.loyaltyEveryN ?? 10}th</b> visit earns <b className="text-zinc-300">{settings.loyaltyPct ?? 5}%</b> off — offered, never forced.</p>
                 </div>
               </div>
-              <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest pt-2">Staff &amp; money</p>
+              </SettingsSection>
+              <SettingsSection id="set-staff" icon={Users} title="Staff" hint="Who sells, staff logins"
+                open={settingsSection === 'staff'} onToggle={() => toggleSettingsSection('staff')}>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Who is selling <SettingHelp label="Who is selling" text="The name stamped on every sale, so Reports can show sales per seller. Each phone remembers its own seller." /></label>
                 <button onClick={handleSwitchStaff}
@@ -2992,63 +3140,9 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   <p className="text-[10px] text-zinc-600 leading-relaxed">You are clocked in as {activeStaff?.name} (cashier). A manager can add staff here.</p>
                 )}
               </div>
-              <div className="border-t border-white/5 pt-3 space-y-2">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <LayoutGrid className="w-3.5 h-3.5 text-gold-brand" /> Branches
-                </label>
-                <label className="block text-[10px] text-zinc-500 font-bold uppercase">This till belongs to</label>
-                <select value={tillBranch} onChange={(e) => setTillBranch(e.target.value)}
-                  className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
-                  <option value="">Main shop (no branch)</option>
-                  {(settings.branches || []).map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-                {isManager ? (
-                  <>
-                    <label className="block text-[10px] text-zinc-500 font-bold uppercase pt-1">All branches (one per line or comma)</label>
-                    <input type="text" value={(settings.branches || []).join(', ')} placeholder="e.g. Owino, Kikuubo"
-                      onChange={(e) => setSettings(prev => ({
-                        ...prev,
-                        branches: e.target.value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).slice(0, 20),
-                      }))}
-                      className="w-full h-11 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
-                    {(settings.branches || []).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {(settings.branches || []).map(b => (
-                          <span key={b} className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/10 rounded-lg pl-2.5 pr-1.5 py-1 text-[11px] font-bold text-zinc-200">
-                            {b}
-                            <button
-                              onClick={() => {
-                                if (!confirm(`Delete branch "${b}"? Old sales keep the name, new sales can't use it.`)) return;
-                                setSettings(prev => ({ ...prev, branches: (prev.branches || []).filter(x => x !== b) }));
-                                if (tillBranch === b) setTillBranch('');
-                                triggerToast(`Deleted branch "${b}"`, 'info');
-                              }}
-                              className="p-1 text-zinc-500 hover:text-rose-400 rounded cursor-pointer"
-                              title={`Delete ${b}`}
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </span>
-                        ))}
-                        <button
-                          onClick={() => {
-                            if (!confirm('Clear ALL branches? Tills fall back to main shop.')) return;
-                            setSettings(prev => ({ ...prev, branches: [] }));
-                            setTillBranch('');
-                            triggerToast('All branches cleared', 'info');
-                          }}
-                          className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 px-2 py-1 cursor-pointer"
-                        >
-                          Clear all
-                        </button>
-                      </div>
-                    )}
-                    <p className="text-[10px] text-zinc-600 leading-relaxed">Each sale is stamped with its till's branch; Reports can filter per branch. Stock stays pooled across branches. Rename carefully — old sales keep the old name.</p>
-                  </>
-                ) : (
-                  <p className="text-[10px] text-zinc-600 leading-relaxed">Branch list is managed by a manager. Your sales are stamped “{tillBranch || 'main shop'}”.</p>
-                )}
-              </div>
+              </SettingsSection>
+              <SettingsSection id="set-money" icon={Wallet} title="Money" hint="Owner number, sheets, EFRIS receipts"
+                open={settingsSection === 'money'} onToggle={() => toggleSettingsSection('money')}>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
                   <Download className="w-3.5 h-3.5 text-emerald-400" /> Google Sheets
@@ -3157,6 +3251,30 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 )}
               </div>
               )}
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Send the close to the owner</label>
+                <button onClick={() => printDailyClose(new Date().toISOString().slice(0,10), sales, expenses, products)}
+                  className="w-full h-10 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20">
+                  Print Daily Close (PDF)
+                </button>
+                <div className="border border-white/5 rounded-xl p-3 space-y-2 bg-[#0A0A0A]">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Send close to owner</label>
+                  <input type="tel" inputMode="tel" value={settings.ownerPhone || ''} placeholder="Owner WhatsApp (e.g. 0772...)"
+                    onChange={(e) => setSettings(prev => ({ ...prev, ownerPhone: e.target.value.replace(/\D/g, '').slice(0, 12) || undefined }))}
+                    className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                  <button onClick={() => {
+                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
+                    if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
+                    window.open(url, '_blank', 'noopener');
+                  }} className="w-full h-10 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60">
+                    WhatsApp today's close
+                  </button>
+                  <p className="text-[10px] text-zinc-600">Totals, cash vs MoMo, expenses, what is left — one message, no account needed.</p>
+                </div>
+              </div>
+              </SettingsSection>
+              <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Till PIN, auto-lock, manager PIN, log out all"
+                open={settingsSection === 'security'} onToggle={() => toggleSettingsSection('security')}>
               {isManager && (
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
@@ -3229,6 +3347,24 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </div>
 </div>
               )}
+              </SettingsSection>
+              <SettingsSection id="set-look" icon={Palette} title="Look & feel" hint="Colours, text size, sounds, tour"
+                open={settingsSection === 'look'} onToggle={() => toggleSettingsSection('look')}>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  <Palette className="w-3.5 h-3.5 text-gold-brand" /> Color Theme
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {THEMES_LIST.map(t => (
+                    <button key={t.id} onClick={() => setSettings(prev => ({ ...prev, themeId: t.id }))}
+                      className={`px-2.5 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${settings.themeId === t.id ? 'bg-white/5 text-white border-gold-brand' : 'bg-transparent text-zinc-500 border-white/5 hover:text-zinc-300'}`}
+                      style={{ borderColor: settings.themeId === t.id ? t.brand : 'transparent' }}>
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: t.brand }}></span>
+                      <span className="truncate">{t.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
                     const newTheme = theme === 'light' ? 'dark' : 'light';
@@ -3270,6 +3406,9 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   className={`w-full h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${simpleTill ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-gold-brand/40'}`}>
                   {simpleTill ? 'Simple till: On' : 'Simple till: Off'}
                 </button>
+              </SettingsSection>
+              <SettingsSection id="set-data" icon={Database} title="Data & sync" hint="Backups, sync queue, gaps, exports"
+                open={settingsSection === 'data'} onToggle={() => toggleSettingsSection('data')}>
               {isManager && (
                 <div className="border-t border-white/5 pt-3 space-y-2">
                   <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Data</label>
@@ -3391,24 +3530,6 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     {reconcileResult.negativeStock.length===0 && reconcileResult.totalMismatches===0 && <div className="text-emerald-300">No gaps</div>}
                   </div>
                 )}
-                <button onClick={() => printDailyClose(new Date().toISOString().slice(0,10), sales, expenses, products)}
-                  className="w-full h-10 bg-gold-brand/10 border border-gold-brand/30 text-gold-brand rounded-xl text-xs font-black uppercase tracking-wider hover:bg-gold-brand/20">
-                  Print Daily Close (PDF)
-                </button>
-                <div className="border border-white/5 rounded-xl p-3 space-y-2 bg-[#0A0A0A]">
-                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Send close to owner</label>
-                  <input type="tel" inputMode="tel" value={settings.ownerPhone || ''} placeholder="Owner WhatsApp (e.g. 0772...)"
-                    onChange={(e) => setSettings(prev => ({ ...prev, ownerPhone: e.target.value.replace(/\D/g, '').slice(0, 12) || undefined }))}
-                    className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
-                  <button onClick={() => {
-                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
-                    if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
-                    window.open(url, '_blank', 'noopener');
-                  }} className="w-full h-10 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60">
-                    WhatsApp today's close
-                  </button>
-                  <p className="text-[10px] text-zinc-600">Totals, cash vs MoMo, expenses, what is left — one message, no account needed.</p>
-                </div>
                 <button onClick={async () => {
                   try {
                     const b = await backupsApi.data();
@@ -3463,6 +3584,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <p className="text-[10px] text-zinc-600">Restoring merges over existing records. Create a fresh backup first.</p>
               </div>
               )}
+              </SettingsSection>
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();
                 const apiCacheKey = `boss_api_cache_/api/products`;

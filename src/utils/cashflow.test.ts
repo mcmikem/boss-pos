@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeDayCash, findMissingProduction, prevDayKey } from './cashflow';
+import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags } from './cashflow';
 
 describe('computeDayCash', () => {
   it('flags money collected but never moved nor kept as capital', () => {
@@ -119,5 +119,40 @@ describe('findMissingProduction', () => {
   it('ignores services and non-eatery stock', () => {
     const svc = { id: 'p-svc', name: 'Haircut', category: 'Salon', cost: 0, price: 5000, stockQty: 0, isService: true } as never;
     expect(findMissingProduction([{ productId: 'p-svc', productName: 'Haircut', qty: 1 }], [svc] as never, [], [], '2026-09-12')).toHaveLength(0);
+  });
+});
+
+describe('buildTheftFlags close gating (Library 7k case)', () => {
+  const prod = () => ({ id: 'p-doc', name: 'Doc Scan', category: 'Library', cost: 100, price: 500, stockQty: 10, lowStockThreshold: 2 });
+  const saleOn = (method: string) => ({
+    id: `s-${method}`, orderNumber: 'Order #8692', timestamp: '2026-09-21T12:00:00.000',
+    items: [{ productId: 'p-doc', productName: 'Doc Scan', qty: 14, unitPrice: 500, unitCost: 100, lineTotal: 7000 }],
+    subtotal: 7000, tax: 0, total: 7000, paymentMethod: method, refunded: false,
+  });
+  const base = (over: Record<string, unknown> = {}) => ({
+    dayKey: '2026-09-21', categories: ['Library'], collected: { Library: 7000 },
+    drawerExpenses: {}, moneyOut: {}, sales: [saleOn('Airtel Money')],
+    products: [prod()], production: [], wastage: [], ...over,
+  });
+
+  it('stays quiet before close — the evening move has not happened', () => {
+    const flags = buildTheftFlags(base({ pastClose: false }) as never);
+    expect(flags.filter((f) => f.kind === 'unaccounted')).toHaveLength(0);
+  });
+
+  it('points phone money to float after close (warn, never critical)', () => {
+    const flags = buildTheftFlags(base({ pastClose: true }) as never);
+    const u = flags.filter((f) => f.kind === 'unaccounted');
+    expect(u).toHaveLength(1);
+    expect(u[0].severity).toBe('warn');
+    expect(u[0].title).toMatch(/phone money/);
+  });
+
+  it('cash still missing stays critical after close', () => {
+    const flags = buildTheftFlags(base({ pastClose: true, sales: [saleOn('Cash')] }) as never);
+    const u = flags.filter((f) => f.kind === 'unaccounted');
+    expect(u).toHaveLength(1);
+    expect(u[0].severity).toBe('critical');
+    expect(u[0].title).toMatch(/unaccounted/);
   });
 });
