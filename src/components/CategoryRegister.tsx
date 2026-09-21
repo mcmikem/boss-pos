@@ -394,6 +394,12 @@ export default function CategoryRegister({
           f.title,
           f.detail,
           `theft:${todayKey}:${f.kind}:${f.title}`.slice(0, 120),
+          {
+            action:
+              f.kind === 'no-production'
+                ? { label: 'Log batch', tab: 'sales' }
+                : { label: 'Open Close day', tab: 'registers' },
+          },
         );
       } catch {}
     }
@@ -858,8 +864,8 @@ export default function CategoryRegister({
                               <span className="text-emerald-300 font-black tabular-nums" title="Auto-carries to tomorrow unless logged expired">→{recon}</span>
                               {carried <= 0 && (
                                 <button onClick={() => carryRow({ product, recon })}
-                                  title={`Confirm tray count ${recon} (optional — auto-carries anyway)`}
-                                  className="text-[10px] text-zinc-500 font-black border border-white/10 rounded-lg px-1.5 py-0.5 hover:border-emerald-500/40 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer tabular-nums">✓</button>
+                                  title={`Log tray count ${recon} (optional — auto-carries anyway)`}
+                                  className="text-[10px] font-black uppercase tracking-wider text-zinc-500 border border-white/10 rounded-lg px-1.5 py-0.5 hover:border-emerald-500/40 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer tabular-nums">log</button>
                               )}
                             </span>
                           ) : (

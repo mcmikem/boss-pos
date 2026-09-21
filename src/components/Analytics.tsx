@@ -1039,7 +1039,7 @@ const colorsMap: { [key: string]: string } = {
                                       <p className="text-[10px] text-zinc-500 font-bold uppercase">
                                         {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                         {sale.paymentMethod ? ` • ${sale.paymentMethod}` : ''}
-                                        {sale.staffName ? ` • ${sale.staffName}` : ''}
+                                        {` • ${sale.staffName ? sale.staffName : 'unattributed'}`}
                                         {saleCategories(sale) ? ` • ${saleCategories(sale)}` : ''}
                                       </p>
                                     </div>
@@ -1070,7 +1070,7 @@ const colorsMap: { [key: string]: string } = {
                                     <Coins className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                                     <div className="min-w-0">
                                       <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
-                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category} • tap for receipt</p>
+                                      <p className="text-[10px] text-zinc-500 font-bold uppercase">{exp.category} • {exp.staffName ? exp.staffName : 'unattributed'} • tap for receipt</p>
                                     </div>
                                   </div>
                                   <p className="text-xs font-black text-rose-400 shrink-0">-{formatCurrency(exp.amount)}</p>

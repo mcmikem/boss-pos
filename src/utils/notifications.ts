@@ -15,6 +15,13 @@ export type NoticeKind =
   | 'sync'
   | 'info';
 
+export type NoticeTab = 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers';
+
+export interface NoticeAction {
+  label: string;
+  tab: NoticeTab;
+}
+
 export interface AppNotice {
   id: string;
   kind: NoticeKind;
@@ -23,6 +30,7 @@ export interface AppNotice {
   at: string; // ISO
   read: boolean;
   dedupeKey: string; // e.g. low:p123:2026-09-12
+  action?: NoticeAction; // jump button: "Restock → Stock", "Move it → Close day"
 }
 
 const LIST_KEY = 'boss_pos_notices_v1';
@@ -60,6 +68,9 @@ function loadThrottle(): Record<string, number> {
 
 function saveThrottle(m: Record<string, number>): void {
   try {
+    // Prune entries older than 8 days so the map never grows forever.
+    const cutoff = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    for (const k of Object.keys(m)) if ((m[k] || 0) < cutoff) delete m[k];
     localStorage.setItem(THROTTLE_KEY, JSON.stringify(m));
   } catch {}
 }
@@ -75,13 +86,15 @@ export function unreadCount(): number {
 /**
  * Push a notification, throttled by dedupeKey (24h). Returns the notice or
  * null when suppressed as a repeat. Set opts.force to bypass (critical).
+ * opts.action adds a jump button ("Restock → Stock") so a notice is a task,
+ * not just something to read.
  */
 export function pushNotice(
   kind: NoticeKind,
   title: string,
   body: string,
   dedupeKey: string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; action?: NoticeAction },
 ): AppNotice | null {
   const now = Date.now();
   const throttle = loadThrottle();
@@ -104,6 +117,7 @@ export function pushNotice(
     at: new Date(now).toISOString(),
     read: false,
     dedupeKey,
+    ...(opts?.action ? { action: opts.action } : {}),
   };
   saveList([notice, ...loadList()]);
   return notice;

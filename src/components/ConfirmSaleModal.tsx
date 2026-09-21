@@ -105,7 +105,7 @@ export default function ConfirmSaleModal({ isOpen, onClose, onConfirm, isComplet
           {/* Only dismiss on success: handleCompleteSale returns false when it
               blocks the sale (e.g. underpaid cash) so the cashier can fix the
               tender instead of re-opening the modal. */}
-          <button onClick={async () => { const ok = await onConfirm(); if (ok !== false) onClose(); }} disabled={isCompleting}
+          <button onClick={async () => { const ok = await onConfirm(); if (ok !== false) onClose(); }} disabled={isCompleting} id="tour-confirm-btn"
             className="flex-1 h-11 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed">
             {isCompleting ? t(lang, 'saving') : t(lang, 'confirm')}
           </button>

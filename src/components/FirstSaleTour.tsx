@@ -118,19 +118,37 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
   const onSalesTab = activeTab === 'sales';
   const onInventoryTab = activeTab === 'inventory';
   const prodTarget = onSalesTab ? firstVisible('#catalog-scroll-container .grid > *:first-child') : firstVisible('#sales-nav-btn', '#more-nav-btn');
-  const completeTarget = firstVisible('#tour-complete-sale');
+  const completeTarget = firstVisible('.tour-complete-sale');
+  const confirmTarget = firstVisible('#tour-confirm-btn');
   const cartTarget = onSalesTab ? firstVisible('#mobile-cart-fab', '#desktop-cart') : firstVisible('#sales-nav-btn', '#more-nav-btn');
   const stockTarget = firstVisible('#inventory-nav-btn', '#more-nav-btn');
   const closeTarget = firstVisible('#registers-nav-btn', '#more-nav-btn');
   const addTarget = firstVisible('#tour-add-product');
   const emptyTarget = onInventoryTab ? (addTarget || stockTarget) : stockTarget;
 
-  // Step 2 follows the cart: closed → point at the opener; open (Complete
-  // sale button on screen) → point at it. Nothing to do is impossible — the
-  // pointer always sits on the next real control.
-  const cartOpenTarget = onSalesTab ? completeTarget : firstVisible('#sales-nav-btn', '#more-nav-btn');
-  const chargeTarget = cartOpenTarget || cartTarget;
-  const chargeIsComplete = !!cartOpenTarget;
+  // Cash picked? The selected payment carries a gold background class. When a
+  // previous session left MoMo/Credit picked, Complete sale may sit disabled —
+  // so the tour points at Cash FIRST instead of a dead button (the "stuck"
+  // tap). Checked live in the DOM because payment state lives in Sales.
+  const cashBtn = firstVisible('.tour-cash-btn');
+  let cashPicked = true;
+  try {
+    const el = cashBtn ? document.querySelector(cashBtn) : null;
+    cashPicked = !el || /bg-gold-brand\/1[05]/.test(el.className);
+  } catch {
+    cashPicked = true;
+  }
+  const needCash = onSalesTab && cashBtn && !cashPicked;
+
+  // Step 2 follows the cart and can never strand the seller: confirm dialog
+  // open → point at Confirm; Cash unpicked → point at Cash; Complete sale on
+  // screen → point at it; otherwise point at the cart opener.
+  const confirmOpen = onSalesTab ? confirmTarget : firstVisible('#sales-nav-btn', '#more-nav-btn');
+  const chargeTarget = confirmOpen || (needCash ? cashBtn : completeTarget) || cartTarget;
+  const chargePhase: 'confirm' | 'cash' | 'complete' | 'open' =
+    confirmOpen ? (onSalesTab ? 'confirm' : 'open')
+    : needCash ? 'cash'
+    : completeTarget ? 'complete' : 'open';
 
   const VOICE: Record<string, string> = {
     welcome: 'Hi! I am Budi, your till buddy. First sale in three quick taps. Watch my pointer, and tap where I draw. Let us go.',
@@ -138,9 +156,34 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
     openStock: 'Your shelf is empty. Tap the Stock button I circled, and add one thing you sell.',
     addProduct: 'Tap the gold plus. Type the name, the price, and how many, then save.',
     openCart: 'Nice! Now tap the gold cart button to open your cart.',
-    completeSale: 'Cash is already picked. Hit the big Complete sale button.',
+    pickCash: 'Tap Cash first, so the till knows how they paid.',
+    completeSale: 'Cash is picked. Hit the big Complete sale button.',
+    confirmSale: 'Last one — check the receipt, then hit Confirm.',
     backToSell: 'Head back to Sell first, then tap the flashing cart.',
     closeDay: 'Beautiful! First sale done. Tonight, tap Close day and count your drawer. That is the whole job. Good luck selling!',
+  };
+
+  const CHARGE_COPY: Record<typeof chargePhase, { title: string; body: string; voice: string }> = {
+    open: {
+      title: '2 · Open your cart',
+      body: onSalesTab ? 'Tap the gold Cart button to open your cart.' : 'Head back to Sell first — then tap the flashing cart.',
+      voice: onSalesTab ? VOICE.openCart : VOICE.backToSell,
+    },
+    cash: {
+      title: '2 · Pick Cash',
+      body: 'Tap Cash so the till knows how they paid — then the big button wakes up.',
+      voice: VOICE.pickCash,
+    },
+    complete: {
+      title: '2 · Hit Complete sale',
+      body: 'Cash is picked — hit the big Complete sale button inside the gold ring.',
+      voice: VOICE.completeSale,
+    },
+    confirm: {
+      title: '2 · Confirm it',
+      body: onSalesTab ? 'Check the receipt, then hit Confirm — money in the drawer.' : 'Head back to Sell to finish the sale.',
+      voice: VOICE.confirmSale,
+    },
   };
 
   const steps = [
@@ -178,16 +221,12 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
           ],
         },
     {
-      title: chargeIsComplete ? '2 · Hit Complete sale' : '2 · Open your cart',
-      body: chargeIsComplete
-        ? 'Cash is already picked — hit the big Complete sale button inside the gold ring.'
-        : onSalesTab
-          ? 'Tap the gold Cart button to open your cart.'
-          : 'Head back to Sell first — then tap the flashing cart.',
-      voice: chargeIsComplete ? VOICE.completeSale : onSalesTab ? VOICE.openCart : VOICE.backToSell,
+      title: CHARGE_COPY[chargePhase].title,
+      body: CHARGE_COPY[chargePhase].body,
+      voice: CHARGE_COPY[chargePhase].voice,
       target: chargeTarget,
       actions: [
-        ...(!onSalesTab && !chargeIsComplete ? [{ label: 'Back to Sell', primary: true, run: () => onNavigate('sales') }] : []),
+        ...(!onSalesTab && chargePhase === 'open' ? [{ label: 'Back to Sell', primary: true, run: () => onNavigate('sales') }] : []),
         { label: 'Next', primary: true, run: () => setStep(3) },
         { label: 'Skip', primary: false, run: finish },
       ],
@@ -209,7 +248,7 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
   useEffect(() => {
     if (step > 0) speak(s.voice);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, chargeIsComplete, onSalesTab, onInventoryTab, hasProducts]);
+  }, [step, chargePhase, onSalesTab, onInventoryTab, hasProducts]);
 
   const rect = useTarget(s.target);
   const cx = rect ? rect.left + rect.width / 2 : 0;
@@ -232,17 +271,32 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
           <div className="absolute inset-x-0 bottom-0 bg-black/70" style={{ top: rect.bottom + 8 }} />
           <div className="absolute top-0 bottom-0 bg-black/70" style={{ left: 0, width: Math.max(0, rect.left - 8), top: rect.top - 8, height: rect.height + 16 }} />
           <div className="absolute top-0 bottom-0 bg-black/70" style={{ right: 0, width: Math.max(0, window.innerWidth - rect.right - 8), top: rect.top - 8, height: rect.height + 16 }} />
-          {/* Hand-drawn circle: an ellipse that sketches itself around the
-              target the moment the pointer lands — arrow, circle, exact spot. */}
+          {/* Hand-drawn scribble: a wobbly pen circle that sketches itself
+              around the target the moment the pointer lands — arrow, circle,
+              exact spot. Seeded per target so it never jitters between polls
+              and never looks like a perfect oval. */}
           {(() => {
-            const rx = rect.width / 2 + 14;
-            const ry = rect.height / 2 + 14;
-            const c = Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));
+            let seed = Math.floor(cx * 13 + cy * 71) || 7;
+            const rnd = () => {
+              seed = (seed * 9301 + 49297) % 233280;
+              return seed / 233280 - 0.5;
+            };
+            const rx = rect.width / 2 + 16;
+            const ry = rect.height / 2 + 16;
+            const N = 30;
+            const pts: string[] = [];
+            for (let i = 0; i <= N; i++) {
+              // Overshoot past the start like a real pen circling back over itself.
+              const a = (i / N) * Math.PI * 2 + (i === N ? 0.45 : 0);
+              const wob = 1 + rnd() * 0.13;
+              pts.push(`${(cx + Math.cos(a) * rx * wob).toFixed(1)},${(cy + Math.sin(a) * ry * wob).toFixed(1)}`);
+            }
+            const d = `M${pts.join(' L')}`;
             return (
-              <svg key={`${s.target}:${step}`} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true">
-                <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="none"
-                  stroke="#d4af37" strokeWidth={4} strokeLinecap="round"
-                  className="tour-draw" style={{ ['--tour-c' as string]: c }} />
+              <svg key={`${s.target}:${step}:${chargePhase}`} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true">
+                <path d={d} fill="none" stroke="#d4af37" strokeOpacity={0.35} strokeWidth={8} strokeLinecap="round"
+                  transform="translate(2.5,3)" pathLength={100} className="tour-draw" />
+                <path d={d} fill="none" stroke="#e8c33a" strokeWidth={3.5} strokeLinecap="round" pathLength={100} className="tour-draw" />
               </svg>
             );
           })()}

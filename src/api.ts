@@ -8,7 +8,7 @@ import { stashSyncReview } from './utils/syncReview';
 export function normalizeExpenses(rows: unknown): Expense[] {
   const list = Array.isArray(rows) ? rows : [];
   return list.map((r) => {
-    const e = r as Expense & { items?: unknown };
+    const e = r as Expense & { items?: unknown; staffname?: unknown };
     let items: ExpenseItem[] | undefined;
     try {
       const raw = typeof e.items === 'string' && e.items ? JSON.parse(e.items) : e.items;
@@ -20,7 +20,10 @@ export function normalizeExpenses(rows: unknown): Expense[] {
         if (clean.length) items = clean;
       }
     } catch { /* legacy row without breakdown */ }
-    return items ? { ...(e as Expense), items } : (e as Expense);
+    // Server rows are snake_case (staffname); the till reads camelCase.
+    const staffName = (e.staffName || (typeof e.staffname === 'string' ? e.staffname : '') || '').trim();
+    const out = { ...(e as Expense), ...(items ? { items } : {}), ...(staffName ? { staffName } : {}) };
+    return out;
   });
 }
 

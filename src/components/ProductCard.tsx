@@ -76,7 +76,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             : 'border-white/5 hover:border-gold-brand/30'
         }`}
       >
-        <div className="relative w-full" style={{ paddingTop: '100%' }}>
+        <div className="relative w-full" style={{ paddingTop: '72%' }}>
           {product.imageUrl ? (
             <img referrerPolicy="no-referrer" src={product.imageUrl} alt=""
               className="absolute inset-0 w-full h-full object-cover"
@@ -101,8 +101,8 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             </div>
           )}
         </div>
-        <div className="p-3 flex flex-col gap-1 flex-1 min-h-0 w-full">
-          <span className="text-[15px] font-bold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
+        <div className="p-2 flex flex-col gap-0.5 flex-1 min-h-0 w-full">
+          <span className="text-sm font-bold text-zinc-100 leading-snug line-clamp-2">
             {product.name}
           </span>
           <span className="flex items-center justify-end mt-auto gap-2">
@@ -134,9 +134,9 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
           : 'border-white/5 hover:border-gold-brand/30'
       }`}
     >
-      {/* aspect-ratio isn't supported on the old Androids this app targets
-          (Chrome < 88), so force a square with the padding-top: 100% trick. */}
-      <div className="relative w-full" style={{ paddingTop: '100%', backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
+      {/* 4:3 photo (not square): price already lives on the image, so a
+          shorter card fits more items per screen and survives big keyboards. */}
+      <div className="relative w-full" style={{ paddingTop: '72%', backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
         {product.imageUrl ? (
           <img referrerPolicy="no-referrer" src={product.imageUrl} alt={product.name}
             className="absolute inset-0 w-full h-full object-cover"
@@ -183,12 +183,12 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         )}
       </div>
 
-      <div className="p-3 flex flex-col gap-1 flex-1 min-h-0">
+      <div className="p-2 flex flex-col gap-0.5 flex-1 min-h-0">
         {/* Mistake 7 fix: title stands out without shouting — sentence case,
             semibold (not black/uppercase), tight leading for easy scanning. */}
         {/* Names first (scanning), price second: new users look for the item,
             not the number. */}
-        <h3 className="text-sm sm:text-[15px] font-semibold text-zinc-100 leading-snug line-clamp-2 min-h-[2.5em]">
+        <h3 className="text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
           {product.name}
         </h3>
         {/* Price is on the photo now — this row keeps only the trust signal

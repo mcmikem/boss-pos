@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Bell, CheckCheck, Trash2, X } from 'lucide-react';
+import { ArrowRight, Bell, CheckCheck, Trash2, X } from 'lucide-react';
 import {
-  listNotices, unreadCount, markNoticeRead, markAllRead, deleteNotice,
-  type AppNotice,
+  listNotices, unreadCount, markNoticeRead, markAllRead, deleteNotice, clearRead,
+  type AppNotice, type NoticeTab,
 } from '../utils/notifications';
 
 const KIND_DOT: Record<string, string> = {
@@ -16,7 +16,7 @@ const KIND_DOT: Record<string, string> = {
   info: 'bg-zinc-500',
 };
 
-export default function NotificationsBell() {
+export default function NotificationsBell({ onNavigate }: { onNavigate?: (tab: NoticeTab) => void }) {
   const [open, setOpen] = useState(false);
   const [notices, setNotices] = useState<AppNotice[]>(() => {
     try { return listNotices(); } catch { return []; }
@@ -79,6 +79,15 @@ export default function NotificationsBell() {
                     <CheckCheck className="w-4 h-4" />
                   </button>
                 )}
+                {notices.some(n => n.read) && (
+                  <button
+                    onClick={() => { clearRead(); refresh(); }}
+                    className="px-2 h-7 text-[10px] font-black uppercase tracking-wider text-zinc-500 hover:text-rose-400 rounded-lg hover:bg-white/5 cursor-pointer"
+                    title="Remove all read notifications"
+                  >
+                    Clear
+                  </button>
+                )}
                 <button onClick={() => setOpen(false)} className="p-1.5 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer">
                   <X className="w-4 h-4" />
                 </button>
@@ -96,6 +105,14 @@ export default function NotificationsBell() {
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-black text-white leading-snug">{n.title}</p>
                     {n.body && <p className="text-[11px] text-zinc-500 font-bold mt-0.5 leading-snug">{n.body}</p>}
+                    {n.action && onNavigate && (
+                      <button
+                        onClick={() => { markNoticeRead(n.id); setOpen(false); refresh(); onNavigate(n.action!.tab); }}
+                        className="mt-1.5 h-8 px-3 rounded-lg bg-gold-brand/15 border border-gold-brand/40 text-gold-brand text-[10px] font-black uppercase tracking-wider hover:bg-gold-brand/25 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        {n.action.label} <ArrowRight className="w-3 h-3" />
+                      </button>
+                    )}
                     <p className="text-[9px] text-zinc-600 font-bold uppercase mt-1">
                       {new Date(n.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       {!n.read && <span className="text-rose-400 ml-1.5">• new</span>}

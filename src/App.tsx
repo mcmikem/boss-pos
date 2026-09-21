@@ -479,8 +479,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const fetchAllData = async () => {
     const cached = loadProducts();
     if (cached) {
+      // Warm boot: paint the cached shelf instantly, then refresh EVERYTHING
+      // underneath. Returning here used to leave sales/production empty until
+      // the next poll — the "made today 0 on my phone" ghost.
       setProducts(enrichProductsWithIcons(cached));
       setLoading(false);
+      try {
+        applyBootData(await bootApi.get());
+      } catch {
+        // Cache stands; the periodic poll retries silently.
+      }
       return;
     }
 
@@ -637,9 +645,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (meta) meta.setAttribute('content', name);
   }, [settings.shopName]);
 
-  // Multi-till visibility: silently re-boot every 3 minutes so changes made on
-  // a second till show up without a manual reload. Skipped while offline and
-  // never overlapped. Keeps the "Synced Xm ago" pill honest too.
+  // Multi-till visibility: re-boot every 3 minutes so changes made on a
+  // second till show up without a manual reload (plus instant refresh on
+  // focus/return and SSE push). Skipped while offline and never overlapped.
+  // Keeps the "Synced Xm ago" pill honest too. NOTE: this used to fire every
+  // 30s with a FULL boot payload — on 3G that choked the till and made every
+  // screen sluggish.
   useEffect(() => {
     if (authState !== 'ready') return;
     let busy = false;
@@ -660,7 +671,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         busy = false;
       }
     };
-    const iv = setInterval(syncNow, 30 * 1000);
+    const iv = setInterval(syncNow, 3 * 60 * 1000);
     const onVis = () => {
       if (document.visibilityState === 'visible') syncNow();
     };
@@ -773,7 +784,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         `${neg.length} item${neg.length !== 1 ? 's' : ''} NEGATIVE stock`,
         `${neg.slice(0, 3).map(p => p.name).join(', ')}${neg.length > 3 ? ` +${neg.length - 3} more` : ''} — tap bell, then Inventory → Check gaps.`,
         `neg:${day}`,
-        { force: false },
+        { force: false, action: { label: 'Check gaps', tab: 'inventory' } },
       );
     }
     const low = products.filter(p => !p.isService && p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty >= 0);
@@ -784,6 +795,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         `${low.length} item${low.length !== 1 ? 's' : ''} low on stock`,
         `${first}${low.length > 3 ? ` +${low.length - 3} more` : ''} — restock from Inventory.`,
         `low:${day}`,
+        { action: { label: 'Restock', tab: 'inventory' } },
       );
     }
     // No browser Notification() here on purpose: the bell holds history and
@@ -1219,10 +1231,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setUpdatingApp(true);
     const localBuild = typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ ? __BUILD_COMMIT__ : 'dev';
     const localShort = localBuild === 'dev' ? 'dev' : localBuild.slice(0, 7);
+    // Dead WiFi hangs a plain fetch for minutes (navigator.onLine lies) — the
+    // "checking… nonstop" freeze. Bound everything so the button always lands.
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([p, new Promise<T>((_, rej) => window.setTimeout(() => rej(new Error('timeout')), ms))]);
     try {
       let serverShort: string | null = null;
       try {
-        const r = await fetch('/api/version', { cache: 'no-store' });
+        const ctrl = new AbortController();
+        const t = window.setTimeout(() => ctrl.abort(), 12000);
+        const r = await fetch('/api/version', { cache: 'no-store', signal: ctrl.signal });
+        window.clearTimeout(t);
         if (r.ok) serverShort = ((await r.json()).short as string) || null;
       } catch {}
       if (serverShort && localShort !== 'dev' && serverShort !== 'dev' && serverShort !== localShort) {
@@ -1250,7 +1269,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         triggerToast('Not installed as an app — just open the website', 'info');
         return;
       }
-      await reg.update();
+      await withTimeout(reg.update(), 15000);
       const pending = reg.installing || reg.waiting;
       if (pending) {
         triggerToast('Update found — restarting the app…', 'success');
@@ -1584,10 +1603,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleAddExpense = async (newExpense: Expense) => {
-    // Stamp who recorded it + default source drawer for the cash equation.
+    // Stamp who recorded it (clocked-in seller wins) + default source drawer.
+    const who = activeStaff?.name || staffName;
     const stamped = {
       ...newExpense,
-      ...(staffName ? { staffName } : {}),
+      ...(who ? { staffName: who } : {}),
       ...((newExpense as Expense & { source?: string }).source
         ? {}
         : { source: 'drawer' }),
@@ -2148,7 +2168,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
             isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
             categories={categories}
-            staffName={staffName} setStaffName={setStaffName}
+            staffName={activeStaff?.name || staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
             tillBranch={tillBranch}
@@ -2287,7 +2307,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onAddExpense={handleAddExpense} expenseCategories={expenseCategories}
             isQuickSale={isQuickSale} setIsQuickSale={setIsQuickSale}
             categories={categories}
-            staffName={staffName} setStaffName={setStaffName}
+            staffName={activeStaff?.name || staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
             tillBranch={tillBranch}
@@ -2401,7 +2421,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             <span className="max-w-[64px] min-[400px]:max-w-[90px] sm:max-w-[120px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
             {staffConfigured && <span className="hidden sm:inline text-[8px] text-zinc-600 shrink-0">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
           </button>
-          <NotificationsBell />
+          <NotificationsBell onNavigate={(t) => setActiveTab(t)} />
           <button onClick={() => {
             const next = theme === 'light' ? 'dark' : 'light';
             setTheme(next);

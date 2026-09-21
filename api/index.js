@@ -99,6 +99,9 @@ async function initDB() {
   )`;
   // EFRIS fiscalisation state per sale (guarded ALTERs so existing DBs migrate).
   try { await sql`ALTER TABLE sales ADD COLUMN efris_status TEXT DEFAULT 'none'`; } catch {}
+  // Who rang it: stamped by the till, shown on every sale row. Backfills ''.
+  try { await sql`ALTER TABLE sales ADD COLUMN IF NOT EXISTS staffname TEXT DEFAULT ''`; } catch {}
+  try { await sql`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS staffname TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN efris_invoice_no TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN efris_fdn TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE sales ADD COLUMN efris_verify TEXT DEFAULT ''`; } catch {}
@@ -1400,8 +1403,8 @@ app.post('/api/sales', asHandler(async (req, res) => {
           JOIN products p ON p.id = sub."productId" AND p.isService = false
         ),
         ins AS (
-          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,branch,client_write_id,split)
-          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${serverTax},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${branch},${cwid},${splitJson}
+          INSERT INTO sales (id,orderNumber,timestamp,items,subtotal,tax,total,paymentMethod,customerName,discount,notes,branch,client_write_id,split,staffname)
+          SELECT ${saleId},${orderNumber},${serverNow},${itemsJson},${s.subtotal||0},${serverTax},${s.total||0},${s.paymentMethod||'Cash'},${customerName},${s.discount||null},${effectiveNotes},${branch},${cwid},${splitJson},${text(s.staffName, 80)}
           WHERE NOT EXISTS (SELECT 1 FROM checkstock WHERE oversold)
           ON CONFLICT (id) DO NOTHING
           RETURNING id, items
@@ -1584,8 +1587,8 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const category = text(e.category, 100);
   const items = itemsJson(e.items);
   const source = ['drawer', 'cash', 'momo', 'owner', 'bank'].includes(e.source) ? e.source : 'drawer';
-  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,items,source,client_write_id)
-    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${items},${source},${e.clientWriteId||null})
+  const inserted = await sql`INSERT INTO expenses (id,timestamp,description,amount,category,items,source,client_write_id,staffname)
+    VALUES (${e.id},${e.timestamp},${description},${num(e.amount)},${category},${items},${source},${e.clientWriteId||null},${text(e.staffName, 80)})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM expenses WHERE client_write_id=${e.clientWriteId}`;
@@ -2477,6 +2480,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     notes: text(s.notes, 500) || null, refunded: !!s.refunded,
     branch: text(s.branch, 50) || '',
     refundedat: s.refundedAt || null,
+    staffname: text(s.staffName, 80) || '',
     client_write_id: s.clientWriteId || null,
     split: (() => { try { return Array.isArray(s.splitTenders) ? JSON.stringify(s.splitTenders) : (typeof s.split === 'string' ? s.split : null); } catch { return null; } })(),
   }));
@@ -2600,9 +2604,9 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('suppliers', 'id', ['id', 'name', 'contactperson', 'phone', 'email'], supplierRows).then(n => counts.suppliers = n),
     batchUpsert('supplier_prices', 'id', ['id', 'supplier_id', 'product_id', 'price', 'updated_at'], supplierPriceRows).then(n => counts.supplierPrices = n),
     batchUpsert('staff', 'id', ['id', 'name', 'role', 'pin_hash', 'active', 'created_at'], staffRows).then(n => counts.staff = n),
-    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id', 'split'], saleRows).then(n => counts.sales = n),
+    batchUpsert('sales', 'id', ['id', 'ordernumber', 'timestamp', 'items', 'subtotal', 'tax', 'total', 'paymentmethod', 'customername', 'discount', 'notes', 'refunded', 'refundedat', 'branch', 'client_write_id', 'split', 'staffname'], saleRows).then(n => counts.sales = n),
     batchUpsert('customers', 'id', ['id', 'name', 'phone', 'birthday', 'tags', 'discountpct', 'subscribed', 'notes', 'createdat', 'updatedat'], customerRows).then(n => counts.customers = n),
-    batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category', 'items'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100), items: itemsJson(e.items) }))).then(n => counts.expenses = n),
+    batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category', 'items', 'staffname'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100), items: itemsJson(e.items), staffname: text(e.staffName || e.staffname, 80) || '' }))).then(n => counts.expenses = n),
     batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
     batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
@@ -2933,6 +2937,7 @@ function mapSale(r) {
     items: JSON.parse(r.items), subtotal: r.subtotal, tax: r.tax, total: r.total,
     paymentMethod: r.paymentmethod, customerName: r.customername,
     discount: r.discount, notes: r.notes, refunded: !!r.refunded,
+    staffName: r.staffname || '',
     splitTenders: (() => { try { const v = JSON.parse(r.split || 'null'); return Array.isArray(v) ? v : undefined; } catch { return undefined; } })(),
     branch: r.branch || '',
     efrisStatus: r.efris_status || 'none',

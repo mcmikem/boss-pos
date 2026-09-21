@@ -423,10 +423,35 @@ export default function Sales({
     setVisibleCount(30);
   }, [selectedCategory, searchQuery]);
 
+  // Most-sold first: 30-day quantities per product and revenue per category.
+  // Best sellers surface at the top of the shelf and the chip row, so rush
+  // hour is tap-tap-done. Stable for never-sold items (catalog order kept).
+  const salesRank = useMemo(() => {
+    const cutoff = Date.now() - 30 * 86400000;
+    const qty = new Map<string, number>();
+    const rev: Record<string, number> = {};
+    const catOf = new Map<string, string>();
+    for (const p of products) catOf.set(p.id, p.category);
+    for (const s of salesHistory) {
+      if (s.refunded) continue;
+      const t = Date.parse(s.timestamp);
+      if (!Number.isFinite(t) || t < cutoff) continue;
+      for (const i of s.items) {
+        qty.set(i.productId, (qty.get(i.productId) || 0) + (i.qty || 0));
+        const c = catOf.get(i.productId) || '';
+        if (c) rev[c] = (rev[c] || 0) + (i.lineTotal || 0);
+      }
+    }
+    return { qty, rev };
+  }, [salesHistory, products]);
+  const sortedCategories = useMemo(
+    () => [...categories].sort((a, b) => (salesRank.rev[b] || 0) - (salesRank.rev[a] || 0)),
+    [categories, salesRank]);
   const byCategory = useMemo(() => catalog
     .filter(p => selectedCategory === 'All' || p.category === selectedCategory)
-    .filter(p => !inStockOnly || p.isService || p.stockQty > 0),
-    [catalog, selectedCategory, inStockOnly]);
+    .filter(p => !inStockOnly || p.isService || p.stockQty > 0)
+    .sort((a, b) => (salesRank.qty.get(b.id) || 0) - (salesRank.qty.get(a.id) || 0)),
+    [catalog, selectedCategory, inStockOnly, salesRank]);
   // Forgiving search (#9): typo-tolerant (threshold 0.5, location-free) so
   // "chaptai", "ROLAX" or extra spaces still find chapati / rolex.
   const fuse = useMemo(() => new Fuse(byCategory, {
@@ -472,7 +497,8 @@ export default function Sales({
       try {
         pushNotice('info', `${product.name} is out of stock`,
           `Tapped ${product.stockQty} left on ${dayKeyOf()}. Restock from Inventory so tomorrow's sales aren't lost.`,
-          `oos:${product.id}:${dayKeyOf()}`);
+          `oos:${product.id}:${dayKeyOf()}`,
+          { action: { label: 'Restock', tab: 'inventory' } });
       } catch {}
       return;
     }
@@ -483,7 +509,7 @@ export default function Sales({
         playError();
         triggerToast(`${product.name} is EXPIRED — remove it, do not sell`, 'error');
         try {
-          pushNotice('expiry', `Blocked expired sale: ${product.name}`, 'Cashier tried to sell expired stock. Remove or write it off as a loss.', `exp-block:${product.id}:${dayKeyOf()}`);
+          pushNotice('expiry', `Blocked expired sale: ${product.name}`, 'Cashier tried to sell expired stock. Remove or write it off as a loss.', `exp-block:${product.id}:${dayKeyOf()}`, { action: { label: 'Write off', tab: 'registers' } });
         } catch {}
         return;
       }
@@ -836,6 +862,7 @@ export default function Sales({
             `Sold beyond batch + leftover: ${names}`,
             `Seller ${staffName || 'unknown'} sold ${names} beyond today's batch and automatic leftover. Confirm the batch or check the tray.`,
             `noprod:${todayLocalKey()}:${missing.map(m => m.productId).join(',').slice(0, 80)}`,
+            { action: { label: 'Log batch', tab: 'sales' } },
           );
         } catch {}
       }
@@ -1183,8 +1210,9 @@ export default function Sales({
             <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
           {/* Seller lives in the top bar now — no duplicate chip here. */}
-          {/* Compact icon-only toolbar: Custom + Quick stay visible, everything
-              else hides under ⋯ so the catalog keeps the screen. */}
+          {/* Compact icon toolbar: Custom + Quick + Scan stay visible (daily
+              drivers), everything else hides under ⋯ so the catalog keeps
+              the screen. */}
           <button onClick={() => setIsCustomChargeOpen(true)}
             title="Custom charge — sell something not on the list" aria-label="Custom charge"
             className="shrink-0 h-10 w-10 px-0 bg-gold-brand/10 hover:bg-gold-brand/20 border border-gold-brand/30 text-gold-brand font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
@@ -1196,6 +1224,11 @@ export default function Sales({
             className="shrink-0 h-10 w-10 px-0 bg-gold-brand text-black font-black rounded-xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
             id="open-quick-sale-btn">
             <Zap className="w-4 h-4" />
+          </button>
+          <button onClick={() => setIsScannerOpen(true)}
+            title="Scan barcode" aria-label="Scan barcode"
+            className="shrink-0 h-10 w-10 px-0 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 rounded-xl transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center">
+            <Barcode className="w-5 h-5" />
           </button>
           <div className="relative shrink-0">
             <button onClick={() => setShowMoreActions(v => !v)}
@@ -1211,10 +1244,18 @@ export default function Sales({
               <>
                 <div className="fixed inset-0 z-[60]" onClick={() => setShowMoreActions(false)} aria-hidden="true" />
                 <div className="absolute right-0 top-full mt-2 z-[61] w-56 bg-[#141414] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1">
-                  <button onClick={() => { setShowMoreActions(false); setIsScannerOpen(true); }}
-                    className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
-                    <Barcode className="w-4 h-4 text-gold-brand" /> Scan barcode
-                  </button>
+                  {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
+                    <button onClick={() => { setShowMoreActions(false); repeatLastSale(); }}
+                      className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                      <RotateCcw className="w-4 h-4 text-gold-brand" /> Repeat last sale
+                    </button>
+                  )}
+                  {cart.length === 0 && salesHistory.length > 0 && (
+                    <button onClick={() => { setShowMoreActions(false); setReprintSale(salesHistory[0]); }}
+                      className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                      <Printer className="w-4 h-4 text-zinc-400" /> Reprint receipt
+                    </button>
+                  )}
                   {!simpleTill && (
                   <button onClick={() => { setShowMoreActions(false); setShowQuotes(true); }}
                     id="open-quotes-btn"
@@ -1312,22 +1353,8 @@ export default function Sales({
 
         {/* Money strip removed: the briefing card already shows today's takings. */}
 
-        {cart.length === 0 && (lastSaleItems || salesHistory.length > 0) && (
-          <div className="flex flex-wrap gap-2">
-            {lastSaleItems && lastSaleItems.length > 0 && (
-              <button onClick={repeatLastSale}
-                className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
-                <RotateCcw className="w-3.5 h-3.5" /> Repeat last sale
-              </button>
-            )}
-            {salesHistory.length > 0 && (
-              <button onClick={() => setReprintSale(salesHistory[0])}
-                className="flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-gold-brand bg-[#141414]/60 border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 h-9 transition-all cursor-pointer touch-target uppercase tracking-wider">
-                <Printer className="w-3.5 h-3.5" /> Reprint receipt
-              </button>
-            )}
-          </div>
-        )}
+        {/* Repeat + reprint moved into the ⋯ toolbar menu above (rarely used,
+            so they no longer spend vertical screen on every sell). */}
         {reprintSale && (
           <ReceiptModal
             sale={reprintSale}
@@ -1373,7 +1400,7 @@ export default function Sales({
               }`}>
               <span className="text-sm uppercase tracking-wider font-black">{t(lang, 'all')}</span>
             </button>
-              {categories.map(cat => {
+              {sortedCategories.map(cat => {
                 const isActive = selectedCategory === cat;
                 const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
@@ -1664,7 +1691,7 @@ export default function Sales({
                   { name: 'Split', label: 'Split', icon: <Split className="w-4 h-4" /> },
                 ].map(opt => (
                   <button key={opt.name} onClick={() => { setPaymentMethod(opt.name as any); setCustomCashReceived(''); }}
-                    className={`flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
+                    className={`${opt.name === 'Cash' ? 'tour-cash-btn ' : ''}flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
                       paymentMethod === opt.name ? 'border-gold-brand bg-gold-brand/15 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500 hover:border-white/10 hover:text-zinc-300'
                     }`}>
                     <div className="mb-1 shrink-0">{opt.icon}</div>
@@ -1805,7 +1832,7 @@ export default function Sales({
             {/* Mistake 15 fix: CTA is refined (not shouting ALL-CAPS black) and
                 carries the total price — user knows what they pay before tapping. */}
             <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-              className={`w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
+              className={`tour-complete-sale w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
                 !isDisabled
                   ? 'bg-gold-brand text-black hover:bg-gold-medium shadow-[0_4px_15px_rgba(255,204,0,0.25)]'
                   : 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
@@ -1860,7 +1887,7 @@ export default function Sales({
             <div className="grid grid-cols-5 gap-1.5">
               {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
                 <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
-                  className={`py-3 rounded-xl text-[10px] border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
+                    className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-3 rounded-xl text-[10px] border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
                     paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500'
                   }`}>
                   {name === 'Credit / Book' ? t(lang, 'credit') : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
@@ -1945,7 +1972,7 @@ export default function Sales({
               <span className="text-2xl font-bold text-gold-brand font-display tabular-nums">{formatCurrency(total)}</span>
             </div>
             <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-              className={`w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
+              className={`tour-complete-sale w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
                 !isDisabled
                   ? 'bg-gold-brand text-black shadow-[0_4px_20px_rgba(255,204,0,0.3)]'
                   : 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
@@ -2047,7 +2074,7 @@ export default function Sales({
               <div className="grid grid-cols-5 gap-1.5">
                 {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
                   <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
-                    className={`py-2.5 rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
+                    className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-2.5 rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
                       paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'
                     }`}>
                     {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
@@ -2111,9 +2138,9 @@ export default function Sales({
                 <span className="text-[13px] font-semibold text-zinc-300">Total</span>
                 <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
               </div>
-              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled} id="tour-complete-sale"
+              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
                 title={isDisabled && disabledReason ? disabledReason : undefined}
-                className="w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                className="tour-complete-sale w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                 {`${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
               </button>
               {isDisabled && disabledReason && (

@@ -306,7 +306,7 @@ export default function Expenses({
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-white uppercase truncate">{exp.description}</p>
                     <p className="text-xs text-zinc-500 font-bold mt-0.5 uppercase truncate">
-                      {exp.category} • {new Date(exp.timestamp).toLocaleDateString()} • tap for receipt
+                      {exp.category} • {new Date(exp.timestamp).toLocaleDateString()} • {exp.staffName ? exp.staffName : 'unattributed'} • tap for receipt
                     </p>
                   </div>
                 </div>

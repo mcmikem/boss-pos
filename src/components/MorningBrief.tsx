@@ -48,8 +48,13 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       .catch(() => {});
     return () => { live = false; };
   }, []);
+  // Minimised by default: on small phones the tiles push "today in…" below
+  // the fold, so the card opens as one greeting line. Choice sticks per device.
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem('boss_pos_brief_collapsed') === '1'; } catch { return false; }
+    try {
+      const v = localStorage.getItem('boss_pos_brief_collapsed');
+      return v === null ? true : v === '1';
+    } catch { return true; }
   });
   const toggleCollapsed = () => {
     setCollapsed(prev => {

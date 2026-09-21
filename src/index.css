@@ -273,14 +273,15 @@ html {
   animation: tour-card-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2);
 }
 
-/* Hand-drawn tour circle: the ellipse draws itself (dashoffset sweep) the
-   moment the pointer lands on a new target — the Clicky "it draws" move. */
+/* Hand-drawn tour scribble: the pen path draws itself (dashoffset sweep)
+   the moment the pointer lands on a new target — the Clicky "it draws" move.
+   pathLength=100 on the path keeps the math trivial. */
 .tour-draw {
-  stroke-dasharray: var(--tour-c);
+  stroke-dasharray: 100;
   animation: tour-draw-sweep 0.55s ease-out forwards;
 }
 @keyframes tour-draw-sweep {
-  from { stroke-dashoffset: var(--tour-c); }
+  from { stroke-dashoffset: 100; }
   to { stroke-dashoffset: 0; }
 }
 
