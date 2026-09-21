@@ -994,7 +994,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (sales.length === 0 && tourStep > 2) setTourStep(0);
     if (sales.length > 0 && tourStep < 3) setTourStep(3);
   }, [sales.length, tourDone, tourStep]);
-  const tourVisible = !tourDone && activeTab === 'sales';
+  const tourVisible = !tourDone && (activeTab === 'sales' || activeTab === 'inventory' || activeTab === 'registers');
   const replayTour = () => {
     try { localStorage.removeItem('boss_pos_tour_done'); } catch {}
     setTourDone(false);
@@ -2632,7 +2632,8 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           onDone={() => setTourDone(true)}
           onNavigate={(t) => setActiveTab(t)}
           cartCount={cart.reduce((s, i) => s + i.qty, 0)}
-          hasProducts={products.length > 0} />
+          hasProducts={products.length > 0}
+          activeTab={activeTab} />
       )}
 
       {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}

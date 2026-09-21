@@ -880,7 +880,7 @@ export default function Inventory({
         </div>
       </section>
 
-      <button onClick={() => setIsAddingNew(true)}
+      <button onClick={() => setIsAddingNew(true)} id="tour-add-product"
         className="fixed bottom-24 right-4 z-40 w-14 h-14 bg-gold-brand text-black rounded-2xl shadow-2xl flex items-center justify-center active:scale-95 transition-transform border border-white/10">
         <Plus className="w-8 h-8" />
       </button>
