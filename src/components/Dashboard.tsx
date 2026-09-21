@@ -30,6 +30,7 @@ interface DashboardProps {
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'registers') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
+  onReturnItems?: (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => void;
   settings: StoreSettings;
   onAddExpense: (expense: Expense) => void;
   expenseCategories: string[];
@@ -45,6 +46,7 @@ export default function Dashboard({
   onNavigate,
   onRepeatLastSale,
   onRefundSale,
+  onReturnItems,
   settings,
   onAddExpense,
   expenseCategories,
@@ -635,6 +637,22 @@ export default function Dashboard({
                       </span>
                       <span className="text-zinc-500 shrink-0">x{item.qty}</span>
                       <span className="text-gold-light shrink-0">{formatCurrency(item.lineTotal)}</span>
+                      {!selectedSaleForModal.refunded && onReturnItems && (
+                        <button onClick={() => {
+                            const raw = item.qty > 1
+                              ? window.prompt(`Return how many of ${item.productName}? (max ${item.qty})`, String(item.qty))
+                              : '1';
+                            if (raw === null) return;
+                            const q = Math.min(item.qty, Math.max(0, Math.round(parseFloat(raw) || 0)));
+                            if (q <= 0) return;
+                            onReturnItems(selectedSaleForModal.id, [{ productId: item.productId, variantId: item.variantId, qty: q }]);
+                            setSelectedSaleForModal(null);
+                          }}
+                          title={`Return ${item.productName}`}
+                          className="shrink-0 px-2 py-1 text-[10px] font-black uppercase text-zinc-500 hover:text-amber-300 border border-white/5 hover:border-amber-500/40 rounded-lg transition-all cursor-pointer">
+                          Return
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

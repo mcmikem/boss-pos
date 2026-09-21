@@ -15,6 +15,7 @@ import { verifyPinAgainstHash } from './utils/crypto';
 import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } from './utils/locklog';
 import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
+import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
 import { localDayKey, todayLocalKey } from './utils/dates';
@@ -1448,10 +1449,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     triggerToast(`${sale.orderNumber} deleted`, 'info');
   };
 
-  const handleRefundSale = async (saleId: string, skipPin = false) => {
+  const handleRefundSale = async (saleId: string, skipPin = false): Promise<boolean> => {
     const saleToRefund = sales.find(s => s.id === saleId);
-    if (!saleToRefund || saleToRefund.refunded) return;
-    if (!skipPin && !(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return;
+    if (!saleToRefund || saleToRefund.refunded) return false;
+    if (!skipPin && !(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return false;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
@@ -1474,9 +1475,66 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         });
       });
       triggerToast('Failed to refund sale — stock unchanged', 'error');
-      return;
+      return false;
     }
     triggerToast(`${saleToRefund.orderNumber} refunded. Stock restored.`, 'info');
+    return true;
+  };
+
+  // Partial return ("take back 1 of 3"): refund the whole sale, then re-ring
+  // the kept lines as a linked balance sale. Reports stay exact because
+  // refunded rows are excluded everywhere, and both halves stay in history.
+  // Scale discounts + split legs by the kept ratio so the math still ties.
+  const handleReturnItems = async (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale || sale.refunded) return;
+    const kept = computeKeptItems(sale.items, returns);
+    const returnedQty = sale.items.reduce((a, i) => a + i.qty, 0) - kept.reduce((a, i) => a + i.qty, 0);
+    if (returnedQty <= 0) return;
+    const clamped = returns;
+    const label = kept.length < sale.items.length || returnedQty > 0
+      ? sale.items
+          .map(item => {
+            const kq = kept.find(k => `${k.productId}::${k.variantId || ''}` === `${item.productId}::${item.variantId || ''}`)?.qty ?? 0;
+            const rq = Math.round((item.qty - kq) * 1000) / 1000;
+            return rq > 0 ? `${item.productName} ×${rq}` : null;
+          })
+          .filter(Boolean)
+          .join(', ')
+      : '';
+    if (!window.confirm(`Return ${label}?\n\n${sale.orderNumber} will be refunded and re-rung without ${clamped.length > 1 ? 'them' : 'it'}.`)) return;
+    const refunded = await handleRefundSale(saleId);
+    if (!refunded) return;
+    if (kept.length === 0) return;
+    const subtotal = kept.reduce((a, i) => a + i.lineTotal, 0);
+    const discount = scaleKept(sale.discount || 0, subtotal, sale.subtotal);
+    const total = Math.max(0, subtotal - discount);
+    let splitTenders = sale.splitTenders;
+    if (sale.paymentMethod === 'Split' && sale.splitTenders && sale.splitTenders.length > 0 && total > 0) {
+      let assigned = 0;
+      splitTenders = sale.splitTenders.map((l, i, arr) => {
+        if (i === arr.length - 1) return { method: l.method, amount: Math.max(0, total - assigned) };
+        const a = scaleKept(l.amount, subtotal, sale.subtotal);
+        assigned += a;
+        return { method: l.method, amount: a };
+      }).filter(l => l.amount > 0);
+    }
+    const balance: Sale = {
+      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      // Temp numbers are renumbered to the canonical sequence server-side.
+      orderNumber: `Temp #${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      items: kept, subtotal, tax: 0, total,
+      paymentMethod: sale.paymentMethod,
+      splitTenders,
+      customerName: sale.customerName,
+      discount: discount > 0 ? discount : undefined,
+      notes: `Balance re-ring of ${sale.orderNumber} (returned: ${label})`,
+      staffName: activeStaff?.name || staffName?.trim() || sale.staffName,
+      branch: sale.branch,
+    };
+    await handleAddSale(balance);
+    triggerToast(`Returned ${label} — balance re-rung`, 'success');
   };
 
   // New-cashier safety net: undo your own just-made sale (≤60s old)
@@ -2177,6 +2235,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             showSuppliers={showSuppliers} setShowSuppliers={setShowSuppliers}
             onNavigate={(tab) => setActiveTab(tab)}
             onRepeatLastSale={handleRepeatLastSale} onRefundSale={handleRefundSale}
+            onReturnItems={handleReturnItems}
             onVoidSale={handleVoidSale}
             settings={settings}
           />

@@ -50,6 +50,7 @@ interface AnalyticsProps {
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'registers') => void;
   onRepeatLastSale: () => void;
   onRefundSale: (saleId: string) => void;
+  onReturnItems?: (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => void;
   onVoidSale?: (saleId: string) => void;
   settings: StoreSettings;
 }
@@ -81,6 +82,7 @@ export default function Analytics({
   onNavigate,
   onRepeatLastSale,
   onRefundSale,
+  onReturnItems,
   onVoidSale,
   settings
 }: AnalyticsProps) {
@@ -720,7 +722,7 @@ const colorsMap: { [key: string]: string } = {
           <Dashboard
             sales={sales} expenses={expenses} products={products}
             formatCurrency={formatCurrency} onNavigate={onNavigate}
-            onRepeatLastSale={onRepeatLastSale} onRefundSale={onRefundSale}
+            onRepeatLastSale={onRepeatLastSale} onRefundSale={onRefundSale} onReturnItems={onReturnItems}
             settings={settings}
             onAddExpense={onAddExpense}
             expenseCategories={expenseCategories}
