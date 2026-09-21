@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags } from './cashflow';
+import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags, tenderByCategory, momoExpensesByCategory } from './cashflow';
 
 describe('computeDayCash', () => {
   it('flags money collected but never moved nor kept as capital', () => {
@@ -154,5 +154,58 @@ describe('buildTheftFlags close gating (Library 7k case)', () => {
     expect(u).toHaveLength(1);
     expect(u[0].severity).toBe('critical');
     expect(u[0].title).toMatch(/unaccounted/);
+  });
+});
+
+describe('tender buckets (drawer vs sente zesimu)', () => {
+  const prods = () => ([
+    { id: 'p-scan', name: 'Doc Scan', category: 'Library', cost: 100, price: 500, stockQty: 10, lowStockThreshold: 2 },
+    { id: 'p-chap', name: 'Chapati', category: 'Eatery', cost: 400, price: 1000, stockQty: 30, lowStockThreshold: 5 },
+  ]);
+  const item = (productId: string, qty: number, lineTotal: number) => ({ productId, productName: productId, qty, unitPrice: 0, unitCost: 0, lineTotal });
+  const sale = (id: string, method: string, items: unknown[], extra: Record<string, unknown> = {}) => ({
+    id, orderNumber: id, timestamp: '2026-09-21T12:00:00.000', items,
+    subtotal: 0, tax: 0, total: 0, paymentMethod: method, refunded: false, ...extra,
+  });
+  const T = '2026-09-21';
+
+  it('splits cash tender to drawer, MoMo tender to phone', () => {
+    const r = tenderByCategory([
+      sale('s1', 'Cash', [item('p-chap', 2, 2000)]),
+      sale('s2', 'Airtel Money', [item('p-scan', 14, 7000)]),
+    ] as never, prods() as never, T);
+    expect(r.Eatery).toMatchObject({ cash: 2000, momo: 0 });
+    expect(r.Library).toMatchObject({ cash: 0, momo: 7000 });
+  });
+
+  it('apportions split-tender legs across categories', () => {
+    const r = tenderByCategory([
+      sale('s3', 'Split', [item('p-chap', 1, 1000), item('p-scan', 1, 500)], {
+        splitTenders: [{ method: 'Cash', amount: 1000 }, { method: 'MTN MoMo', amount: 500 }],
+      }),
+    ] as never, prods() as never, T);
+    // chapati holds 2/3 of the sale total, scan 1/3 — legs split the same way
+    expect(r.Eatery.cash).toBe(667);
+    expect(r.Eatery.momo).toBe(333);
+    expect(r.Library.cash).toBe(333);
+    expect(r.Library.momo).toBe(167);
+  });
+
+  it('ignores credit sales and refunds', () => {
+    const r = tenderByCategory([
+      sale('s4', 'Credit / Book', [item('p-chap', 5, 5000)]),
+      { ...sale('s5', 'Cash', [item('p-chap', 5, 5000)]), refunded: true },
+    ] as never, prods() as never, T);
+    expect(r.Eatery || { cash: 0, momo: 0 }).toMatchObject({ cash: 0, momo: 0 });
+  });
+
+  it('counts only momo-source expenses as phone spend', () => {
+    const ex = (source: string | undefined, amount: number, category: string) => ({
+      id: `e-${source}-${amount}`, timestamp: `${T}T10:00:00.000`, description: 'x', amount, category, source,
+    });
+    const r = momoExpensesByCategory([
+      ex('momo', 3000, 'Library'), ex('drawer', 5000, 'Library'), ex(undefined, 1000, 'Library'),
+    ] as never, T);
+    expect(r).toMatchObject({ Library: 3000 });
   });
 });

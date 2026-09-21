@@ -802,19 +802,6 @@ const colorsMap: { [key: string]: string } = {
             );
           })()}
 
-          {/* Credits Ledger — includes till credit sales AND Ababanjibwa Sente book */}
-          <div className="lg:col-span-1">
-            <CreditsLedger 
-              sales={sales}
-              creditPayments={creditPayments}
-              creditEats={creditEats}
-              onPayCreditEat={onPayCreditEat}
-              formatCurrency={formatCurrency}
-              onPayCredit={onPayCredit}
-              triggerToast={triggerToast}
-            />
-          </div>
-
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div className="sm:col-span-2 boss-card border-l-4 border-l-gold-brand p-5 flex flex-col justify-between min-h-32 min-w-0" title="Category that sold the most money in this period">
               <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Top Category ({timeFilter}) <Info className="w-3 h-3 text-zinc-600" /></span>
@@ -863,6 +850,19 @@ const colorsMap: { [key: string]: string } = {
                 </details>
               )}
             </div>
+          </div>
+
+          {/* Credits Ledger — includes till credit sales AND Ababanjibwa Sente book */}
+          <div className="lg:col-span-1">
+            <CreditsLedger 
+              sales={sales}
+              creditPayments={creditPayments}
+              creditEats={creditEats}
+              onPayCreditEat={onPayCreditEat}
+              formatCurrency={formatCurrency}
+              onPayCredit={onPayCredit}
+              triggerToast={triggerToast}
+            />
           </div>
 
           {(() => {

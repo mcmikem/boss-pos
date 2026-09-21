@@ -202,6 +202,67 @@ export function moneyOutByCategory(
   return map;
 }
 
+// Expenses paid from phone money (Mobile Money float). These reduce the
+// sente-zesimu bucket, never the drawer.
+export function momoExpensesByCategory(expenses: Expense[], dayKey: string): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const e of expenses) {
+    if (localDayKey(e.timestamp) !== dayKey) continue;
+    const src = (e as Expense & { source?: string }).source;
+    if (src !== 'momo') continue;
+    map[e.category] = (map[e.category] || 0) + (e.amount || 0);
+  }
+  return map;
+}
+
+// Tender split per category: cash sales live in the drawer, MTN/Airtel sales
+// sit on the phone (sente zesimu). Split-tender legs are apportioned across
+// the sale's categories by line share; Credit / Book never counts as held.
+export function tenderByCategory(
+  sales: Sale[],
+  products: Product[],
+  dayKey: string,
+): Record<string, { cash: number; momo: number }> {
+  const map: Record<string, { cash: number; momo: number }> = {};
+  const touch = (cat: string): { cash: number; momo: number } =>
+    (map[cat] = map[cat] || { cash: 0, momo: 0 });
+  for (const s of sales) {
+    if (s.refunded) continue;
+    if (s.paymentMethod === 'Credit / Book') continue;
+    if (localDayKey(s.timestamp) !== dayKey) continue;
+    const cats = new Map<string, number>();
+    for (const item of s.items) {
+      const prod = products.find((p) => p.id === item.productId);
+      const cat = prod?.category || 'Eatery';
+      cats.set(cat, (cats.get(cat) || 0) + (item.lineTotal || 0));
+    }
+    const saleTotal = [...cats.values()].reduce((a, b) => a + b, 0);
+    if (saleTotal <= 0) continue;
+    if (s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money') {
+      for (const [cat, amt] of cats) touch(cat).momo += amt;
+    } else if (s.paymentMethod === 'Split' && Array.isArray(s.splitTenders) && s.splitTenders.length > 0) {
+      let cashLegs = 0;
+      let momoLegs = 0;
+      for (const leg of s.splitTenders) {
+        if (leg.method === 'Cash') cashLegs += leg.amount || 0;
+        else momoLegs += leg.amount || 0;
+      }
+      for (const [cat, amt] of cats) {
+        const share = amt / saleTotal;
+        touch(cat).cash += cashLegs * share;
+        touch(cat).momo += momoLegs * share;
+      }
+    } else {
+      for (const [cat, amt] of cats) touch(cat).cash += amt;
+    }
+  }
+  for (const v of Object.values(map)) {
+    v.cash = Math.round(v.cash);
+    v.momo = Math.round(v.momo);
+  }
+  return map;
+}
+
 // Expenses paid from the drawer reduce the drawer. An expense explicitly
 // marked with source 'momo'|'owner'|'bank' did NOT leave the drawer.
 // Legacy expenses (no source) are assumed drawer-paid — the safe default for

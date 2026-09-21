@@ -14,7 +14,7 @@ import { isOn, type FeatureKey } from '../utils/features';
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
-  prevDayKey, openingForDay,
+  prevDayKey, openingForDay, tenderByCategory, momoExpensesByCategory,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
 
@@ -64,6 +64,12 @@ function formatDay(iso: string): string {
   const d = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Compact money for chip sublabels: 5000 -> "5k".
+function compactUGX(v: number): string {
+  const n = Math.round(v || 0);
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
 // Collapsible close-out section: the page used to render everything at once
@@ -159,15 +165,14 @@ export default function CategoryRegister({
     try { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
   };
 
-  // Which close-out cards are unfolded. Glance + balance start open; credit,
-  // losses and money-out start folded and unfold from the wizard or a tap.
-  // Reloaded per day + department so yesterday's progress never leaks.
+  // Which close-out cards are unfolded. Balance starts open (it is step 1);
+  // glance is reference and starts folded. Reloaded per day + department.
   const secStoreKey = `boss_pos_closesec_${todayStr()}::${selected}`;
-  const [secOpen, setSecOpen] = useState<Record<string, boolean>>({ glance: true, balance: true, credit: false, losses: false, money: false });
+  const [secOpen, setSecOpen] = useState<Record<string, boolean>>({ glance: false, balance: true, credit: false, losses: false, money: false });
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(secStoreKey) || '{}');
-      setSecOpen({ glance: true, balance: true, credit: false, losses: false, money: false, ...(saved && typeof saved === 'object' ? saved : {}) });
+      setSecOpen({ glance: false, balance: true, credit: false, losses: false, money: false, ...(saved && typeof saved === 'object' ? saved : {}) });
     } catch {}
   }, [secStoreKey]);
   const toggleSec = (k: string) => setSecOpen(prev => {
@@ -472,6 +477,25 @@ export default function CategoryRegister({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [todayKey, theftFlags.length]);
 
+  // Tender + phone-money buckets: cash sales live in the drawer (plus
+  // yesterday's kept capital), MTN/Airtel sales + float moves live on the
+  // phone (sente zesimu) minus MoMo-paid expenses.
+  const tenderToday = useMemo(() => tenderByCategory(sales, products, todayStrKey), [sales, products, todayStrKey]);
+  const momoExpToday = useMemo(() => momoExpensesByCategory(expenses, todayStrKey), [expenses, todayStrKey]);
+  const bucketFor = (cat: string): { drawer: number; phone: number } => {
+    const opening = getOpeningCapital(todayKey, cat, eodCapital);
+    const t = tenderToday[cat] || { cash: 0, momo: 0 };
+    const drawerExp = drawerExpensesToday[cat] || 0;
+    const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+    const moved = m.float + m.cash + m.owner + m.bank;
+    return {
+      drawer: opening + t.cash - drawerExp - moved,
+      phone: t.momo + m.float - (momoExpToday[cat] || 0),
+    };
+  };
+  const allDrawer = segments.reduce((s, cat) => s + bucketFor(cat).drawer, 0);
+  const allPhone = segments.reduce((s, cat) => s + bucketFor(cat).phone, 0);
+
   // Per-department view of today's money, for the reconciliation table.
   const todayMoneyOutByCat = useMemo(() => {
     const map: { [cat: string]: { float: number; cash: number; owner: number; bank: number } } = {};
@@ -571,22 +595,78 @@ export default function CategoryRegister({
         </button>
       )}
 
-      {/* Category segment chips */}
+      {/* Category segment chips — busiest department first, takings on the chip */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {segments.map(cat => (
+        {[...segments]
+          .sort((a, b) => (todayCollectedByCategory[b] || 0) - (todayCollectedByCategory[a] || 0))
+          .map(cat => {
+          const sold = todayCollectedByCategory[cat] || 0;
+          return (
           <button key={cat} onClick={() => setSelected(cat)}
-            className={`py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 whitespace-nowrap min-h-[44px] ${
+            className={`py-2 px-4 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 whitespace-nowrap min-h-[44px] ${
               selected === cat
                 ? 'bg-gold-brand border-gold-brand text-black'
                 : 'bg-[#141414]/60 border-white/5 text-zinc-400 hover:text-zinc-200'
             }`}>
-            {cat}
+            {cat}{sold > 0 && <span className="opacity-60"> • {compactUGX(sold)}</span>}
           </button>
-        ))}
+          );
+        })}
       </div>
       {!isDailyMake && workflowHint && (
         <p className="text-[11px] text-zinc-500 font-bold -mt-3">{workflowHint}</p>
       )}
+
+      {/* Verdict hero: the one answer the boss opens this page for. Detail
+          lives in the flags + cards below; this says balanced or how much. */}
+      {(() => {
+        const moves = moneyOutByCategory(momoTransfers, todayKey);
+        let collected = 0, moved = 0, out = 0;
+        for (const cat of segments) {
+          const m = moves[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+          const r = computeDayCash({
+            category: cat, dayKey: todayKey,
+            openingCapital: getOpeningCapital(todayKey, cat, eodCapital),
+            closingCapital: getClosingCapital(todayKey, cat, eodCapital),
+            collected: todayCollectedByCategory[cat] || 0,
+            drawerExpenses: drawerExpensesToday[cat] || 0,
+            floatOut: m.float, cashOut: m.cash, ownerOut: m.owner, bankOut: m.bank || 0,
+          });
+          collected += r.collected;
+          moved += r.movedOut;
+          if (r.status === 'missing') out += r.unaccounted;
+        }
+        out = Math.round(out);
+        const crit = theftFlags.some(f => f.severity === 'critical');
+        const warn = theftFlags.some(f => f.severity === 'warn');
+        const tone = crit || out > 0 ? 'rose' : warn ? 'amber' : 'emerald';
+        return (
+          <section className={`rounded-2xl border p-4 flex items-center gap-3 ${
+            tone === 'rose' ? 'bg-rose-950/30 border-rose-600/40'
+            : tone === 'amber' ? 'bg-amber-950/25 border-amber-600/30'
+            : 'bg-emerald-950/25 border-emerald-600/30'}`}>
+            <div className={`text-2xl font-black font-display tabular-nums shrink-0 ${
+              tone === 'rose' ? 'text-rose-300' : tone === 'amber' ? 'text-amber-300' : 'text-emerald-300'}`}>
+              {out > 0 ? formatCurrency(out) : theftFlags.length > 0 ? '!' : '✓'}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-xs font-black uppercase tracking-wider ${
+                tone === 'rose' ? 'text-rose-200' : tone === 'amber' ? 'text-amber-200' : 'text-emerald-200'}`}>
+                {out > 0 ? 'Still out — move it' : theftFlags.length > 0 ? 'Needs a look below' : 'Every shilling home'}
+              </p>
+              <p className="text-[10px] text-zinc-400 font-bold uppercase mt-0.5">
+                {formatCurrency(moved)} of {formatCurrency(collected)} moved{theftFlags.length > 0 ? ` • ${theftFlags.length} flag${theftFlags.length !== 1 ? 's' : ''} below` : ''}
+              </p>
+            </div>
+            {out > 0 && (
+              <button onClick={() => scrollToSection('close-money')}
+                className="shrink-0 h-10 px-4 bg-gold-brand text-black rounded-xl text-[11px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                Move it
+              </button>
+            )}
+          </section>
+        );
+      })()}
 
       {/* Theft / accountability flags: unaccounted cash, no-production sales */}
       {theftFlags.length > 0 && (
@@ -619,6 +699,10 @@ export default function CategoryRegister({
         </h3>
         <p className="text-[10px] text-zinc-500 font-bold uppercase mb-3">
           {t(lang, 'opening')} {formatCurrency(smartCash.openingCapital)} (yesterday's capital) + {t(lang, 'soldK')} {formatCurrency(smartCash.collected)}
+          {(() => {
+            const t = tenderToday[selected] || { cash: 0, momo: 0 };
+            return (t.cash > 0 || t.momo > 0) ? ` (cash ${formatCurrency(t.cash)} • phone ${formatCurrency(t.momo)})` : '';
+          })()}
           {smartCash.drawerExpenses > 0 && <> − Expenses {formatCurrency(smartCash.drawerExpenses)}</>} − Moved {formatCurrency(smartCash.movedOut)} − Capital {formatCurrency(smartCash.closingCapital)}
         </p>
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -743,108 +827,6 @@ export default function CategoryRegister({
         );
       })()}
 
-      {/* Today at a glance: summary tiles + where the money sits */}
-      <CloseSection icon={LayoutGrid} title="Today at a glance"
-        hint={`${formatCurrency(allCollectedToday)} sold • ${formatCurrency(allFloatOut + allCashOut + allOwnerOut + allBankOut)} moved`}
-        open={secOpen.glance} onToggle={() => toggleSec('glance')}>
-      {/* Today summary */}
-      <section className="grid grid-cols-3 gap-2">
-        {showProduction && (
-        <div className="boss-card p-3 border-l-4 border-l-amber-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'madeK')} • today</p>
-          <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayProdCost)}</p>
-        </div>
-        )}
-        <div className="boss-card p-3 border-l-4 border-l-rose-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'losses')} • today</p>
-          <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
-          {todayCarried > 0 && (
-            <p className="text-[10px] text-amber-300 font-bold uppercase mt-0.5">+ {formatCurrency(todayCarried)} carried → tomorrow</p>
-          )}
-        </div>
-        <div className="boss-card p-3 border-l-4 border-l-emerald-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'outstanding')}</p>
-          <p className="text-lg font-black text-emerald-400 font-display mt-1">{formatCurrency(outstanding)}</p>
-        </div>
-        <div className="boss-card p-3 border-l-4 border-l-cyan-500 col-span-3 sm:col-span-1">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'collectedToday')}</p>
-          <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
-          <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-            {t(lang, 'floatK')}: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
-            {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
-            {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
-            {' · '}Bank: <span className="text-sky-300 font-black">{formatCurrency(bankOutToday)}</span>
-          </p>
-        </div>
-      </section>
-
-      {/* Where the money is today — across ALL departments */}
-      <section className="boss-card p-4 rounded-2xl border border-cyan-900/40 bg-cyan-950/10">
-        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-          <Wallet className="w-3.5 h-3.5 text-cyan-400" /> Where the money is today (all departments)
-        </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'soldToday')}</p>
-            <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'floatK')}</p>
-            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allFloatOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash</p>
-            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allCashOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'ownerK')}</p>
-            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'bankK')}</p>
-            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(allBankOut)}</p>
-          </div>
-        </div>
-        <p className="text-[10px] text-zinc-600 mt-2">
-          Unaccounted balance (sold − moved out): <span className="text-gold-brand font-black">{formatCurrency(allCollectedToday - (allFloatOut + allCashOut + allOwnerOut + allBankOut))}</span> — still in the drawers.
-        </p>
-
-        {/* Reconciliation: who sold, moved, and where it should still be, per dept */}
-        <div className="mt-3 overflow-x-auto no-scrollbar">
-          <table className="w-full text-[10px] font-bold uppercase">
-            <thead>
-              <tr className="text-zinc-500">
-                <th className="text-left py-1.5 pr-2">Department</th>
-                <th className="text-right px-2">Sold</th>
-                <th className="text-right px-2 text-emerald-500">Float</th>
-                <th className="text-right px-2 text-zinc-300">Cash</th>
-                <th className="text-right px-2 text-amber-400">Owner</th>
-                <th className="text-right px-2 text-sky-300">Bank</th>
-                <th className="text-right pl-2 text-gold-brand">In drawers</th>
-              </tr>
-            </thead>
-            <tbody>
-              {segments.map(cat => {
-                const sold = todayCollectedByCategory[cat] || 0;
-                const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
-                const left = sold - m.float - m.cash - m.owner - m.bank;
-                return (
-                  <tr key={cat} className={`border-t border-white/5 ${cat === selected ? 'text-white' : 'text-zinc-400'}`}>
-                    <td className="py-1.5 pr-2">{cat}</td>
-                    <td className="text-right px-2">{formatCurrency(sold)}</td>
-                    <td className="text-right px-2 text-emerald-400">{formatCurrency(m.float)}</td>
-                    <td className="text-right px-2 text-zinc-300">{formatCurrency(m.cash)}</td>
-                    <td className="text-right px-2 text-amber-400">{formatCurrency(m.owner)}</td>
-                    <td className="text-right px-2 text-sky-300">{formatCurrency(m.bank)}</td>
-                    <td className="text-right pl-2 font-black">{formatCurrency(Math.max(0, left))}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      </CloseSection>
 
       {/* ============ DAILY BALANCE / CLOSE-OUT (daily-make only: made-sold-lost means nothing without production) ============ */}
       {showProduction && (
@@ -933,142 +915,6 @@ export default function CategoryRegister({
       </CloseSection>
       )}
 
-      {/* ============ 1. ABABANJIBWA SENTE ============ */}
-      <CloseSection icon={Users} title="Ababanjibwa Sente"
-        hint={openCredits.length > 0 ? `${formatCurrency(outstanding)} outstanding` : 'books clear'}
-        open={secOpen.credit} onToggle={() => toggleSec('credit')}
-        action={
-          <button onClick={() => setShowCreditForm(v => !v)}
-            className="flex items-center gap-1 text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showCreditForm ? t(lang, 'closeBtn') : t(lang, 'addCreditK')}
-          </button>
-        }>
-        {showCreditForm && (
-          <div className="bg-zinc-950/60 border border-emerald-600/20 rounded-xl p-4 space-y-3 mb-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'customerName')}</label>
-                <input type="text" value={creditName} onChange={e => setCreditName(e.target.value)}
-                  placeholder="e.g. Nakato Sarah" autoFocus
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-                {creditName.trim() && (() => {
-                  const owes = owesFor(creditName);
-                  const typed = Math.max(0, Math.round(parseFloat(creditCap) || 0));
-                  const cap = typed > 0 ? typed : capFor(creditName);
-                  if (owes <= 0 && cap <= 0) return null;
-                  const over = cap > 0 && owes >= cap;
-                  return (
-                    <p className={`text-[10px] font-black uppercase mt-1 ${over ? 'text-rose-400' : 'text-zinc-500'}`}>
-                      Owes {formatCurrency(owes)}{cap > 0 ? ` / cap ${formatCurrency(cap)}` : ' • no cap set'}
-                    </p>
-                  );
-                })()}
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cap (optional)</label>
-                <input type="number" min="0" value={creditCap} onChange={e => setCreditCap(e.target.value)}
-                  placeholder={(() => { const c = capFor(creditName); return c > 0 ? String(c) : 'e.g. 50000'; })()}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'dateK')}</label>
-                <input type="date" value={creditDate} onChange={e => setCreditDate(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'itemTakenK')}</label>
-                <select value={creditItem} onChange={e => selectOnChange(e.target.value, setCreditCustomItem, setCreditItem, setCreditPrice, () => {})}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
-                  <option value="">Select item...</option>
-                  {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — {formatCurrency(p.price)}</option>)}
-                  <option value="__custom">Other / custom item...</option>
-                </select>
-                {creditItem === '__custom' && (
-                  <input type="text" value={creditCustomItem} onChange={e => setCreditCustomItem(e.target.value)}
-                    placeholder="Type the item name..." autoFocus
-                    className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-                )}
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'qtyK')}</label>
-                <input type="number" min="1" value={creditQty} onChange={e => setCreditQty(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'unitPriceK')}</label>
-                <input type="number" min="0" value={creditPrice} onChange={e => setCreditPrice(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-bold text-zinc-400 uppercase">
-                Total demanded: <span className="text-emerald-400 font-black text-base">
-                  {formatCurrency((parseInt(creditQty, 10) || 0) * (parseFloat(creditPrice) || 0))}
-                </span>
-              </p>
-              <button onClick={handleSubmitCredit}
-                className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> {t(lang, 'saveCredit')}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {openCredits.length === 0 ? (
-          <div className="text-center py-8">
-            <Check className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-40" />
-            <p className="text-xs text-zinc-500 font-bold uppercase">No outstanding credit in {selected}</p>
-          </div>
-        ) : (
-          <div className="space-y-2 max-h-80 overflow-y-auto">
-            {openCredits.map(c => {
-              const d = daysOverdue(c.date);
-              const buck = ageingBucket(d);
-              return (
-              <div key={c.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-white truncate flex items-center gap-1.5">{c.customerName} {d>7 && <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${buck==='overdue' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>{d}d overdue</span>}</p>
-                    <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">
-                      {formatDay(c.date)} • {c.qty}× {c.item} • {d}d ago
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(c.total - c.paidAmount)}</p>
-                    <p className="text-[10px] text-zinc-500 font-bold">due of {formatCurrency(c.total)}</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-2">
-                <button onClick={() => { setPayId(c.id); setPayAmount(String(c.total - c.paidAmount)); }}
-                  className="flex-1 h-9 bg-emerald-600/15 text-emerald-400 border border-emerald-600/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/25 cursor-pointer">
-                  {t(lang, 'recordPayment')}
-                </button>
-                <button onClick={() => setStatementFor(c.customerName)} title={`Print ${c.customerName}'s statement`}
-                  className="h-9 px-3 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:border-gold-brand/40 hover:text-gold-brand cursor-pointer flex items-center gap-1">
-                  <FileText className="w-3.5 h-3.5" /> Bill
-                </button>
-                <button
-                  onClick={() => {
-                    const due = c.total - c.paidAmount;
-                    const msg = `Hello ${c.customerName}, reminder from ${shopName || 'our shop'}: ${c.qty}× ${c.item} (${formatDay(c.date)}) — balance ${formatCurrency(due)} of ${formatCurrency(c.total)}. Please clear it when you can. Thank you!`;
-                    // wa.me share link needs no saved number: WhatsApp opens with
-                    // the text prefilled and the cashier just picks the customer.
-                    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
-                    const w = window.open(url, '_blank', 'noopener');
-                    if (w) triggerToast('Pick the customer in WhatsApp to send', 'success');
-                    else triggerToast('Could not open WhatsApp — copy manually', 'error');
-                  }}
-                  title={`Remind ${c.customerName}`}
-                  className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-950/50 cursor-pointer"
-                >
-                  WhatsApp
-                </button>
-                </div>
-              </div>
-            )})}
-          </div>
-        )}
-      </CloseSection>
 
       {/* ============ 2. REMAINING / EXPIRED (LOSES) ============ */}
       <CloseSection id="close-losses" icon={PackageX} title={`${t(lang, 'remainingK')} / ${t(lang, 'expiredK')} (${t(lang, 'losses')})`}
@@ -1347,6 +1193,259 @@ export default function CategoryRegister({
             })}
           </div>
         )}
+      </CloseSection>
+
+      {/* ============ 1. ABABANJIBWA SENTE ============ */}
+      <CloseSection icon={Users} title="Ababanjibwa Sente"
+        hint={openCredits.length > 0 ? `${formatCurrency(outstanding)} outstanding` : 'books clear'}
+        open={secOpen.credit} onToggle={() => toggleSec('credit')}
+        action={
+          <button onClick={() => setShowCreditForm(v => !v)}
+            className="flex items-center gap-1 text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
+            <Plus className="w-3.5 h-3.5" /> {showCreditForm ? t(lang, 'closeBtn') : t(lang, 'addCreditK')}
+          </button>
+        }>
+        {showCreditForm && (
+          <div className="bg-zinc-950/60 border border-emerald-600/20 rounded-xl p-4 space-y-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'customerName')}</label>
+                <input type="text" value={creditName} onChange={e => setCreditName(e.target.value)}
+                  placeholder="e.g. Nakato Sarah" autoFocus
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+                {creditName.trim() && (() => {
+                  const owes = owesFor(creditName);
+                  const typed = Math.max(0, Math.round(parseFloat(creditCap) || 0));
+                  const cap = typed > 0 ? typed : capFor(creditName);
+                  if (owes <= 0 && cap <= 0) return null;
+                  const over = cap > 0 && owes >= cap;
+                  return (
+                    <p className={`text-[10px] font-black uppercase mt-1 ${over ? 'text-rose-400' : 'text-zinc-500'}`}>
+                      Owes {formatCurrency(owes)}{cap > 0 ? ` / cap ${formatCurrency(cap)}` : ' • no cap set'}
+                    </p>
+                  );
+                })()}
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cap (optional)</label>
+                <input type="number" min="0" value={creditCap} onChange={e => setCreditCap(e.target.value)}
+                  placeholder={(() => { const c = capFor(creditName); return c > 0 ? String(c) : 'e.g. 50000'; })()}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'dateK')}</label>
+                <input type="date" value={creditDate} onChange={e => setCreditDate(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'itemTakenK')}</label>
+                <select value={creditItem} onChange={e => selectOnChange(e.target.value, setCreditCustomItem, setCreditItem, setCreditPrice, () => {})}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
+                  <option value="">Select item...</option>
+                  {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — {formatCurrency(p.price)}</option>)}
+                  <option value="__custom">Other / custom item...</option>
+                </select>
+                {creditItem === '__custom' && (
+                  <input type="text" value={creditCustomItem} onChange={e => setCreditCustomItem(e.target.value)}
+                    placeholder="Type the item name..." autoFocus
+                    className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+                )}
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'qtyK')}</label>
+                <input type="number" min="1" value={creditQty} onChange={e => setCreditQty(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+              </div>
+              <div>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'unitPriceK')}</label>
+                <input type="number" min="0" value={creditPrice} onChange={e => setCreditPrice(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-zinc-400 uppercase">
+                Total demanded: <span className="text-emerald-400 font-black text-base">
+                  {formatCurrency((parseInt(creditQty, 10) || 0) * (parseFloat(creditPrice) || 0))}
+                </span>
+              </p>
+              <button onClick={handleSubmitCredit}
+                className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
+                <Check className="w-4 h-4" /> {t(lang, 'saveCredit')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {openCredits.length === 0 ? (
+          <div className="text-center py-8">
+            <Check className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-40" />
+            <p className="text-xs text-zinc-500 font-bold uppercase">No outstanding credit in {selected}</p>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {openCredits.map(c => {
+              const d = daysOverdue(c.date);
+              const buck = ageingBucket(d);
+              return (
+              <div key={c.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-white truncate flex items-center gap-1.5">{c.customerName} {d>7 && <span className={`text-[8px] px-1.5 py-0.5 rounded font-black uppercase ${buck==='overdue' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>{d}d overdue</span>}</p>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">
+                      {formatDay(c.date)} • {c.qty}× {c.item} • {d}d ago
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(c.total - c.paidAmount)}</p>
+                    <p className="text-[10px] text-zinc-500 font-bold">due of {formatCurrency(c.total)}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-2">
+                <button onClick={() => { setPayId(c.id); setPayAmount(String(c.total - c.paidAmount)); }}
+                  className="flex-1 h-9 bg-emerald-600/15 text-emerald-400 border border-emerald-600/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/25 cursor-pointer">
+                  {t(lang, 'recordPayment')}
+                </button>
+                <button onClick={() => setStatementFor(c.customerName)} title={`Print ${c.customerName}'s statement`}
+                  className="h-9 px-3 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:border-gold-brand/40 hover:text-gold-brand cursor-pointer flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5" /> Bill
+                </button>
+                <button
+                  onClick={() => {
+                    const due = c.total - c.paidAmount;
+                    const msg = `Hello ${c.customerName}, reminder from ${shopName || 'our shop'}: ${c.qty}× ${c.item} (${formatDay(c.date)}) — balance ${formatCurrency(due)} of ${formatCurrency(c.total)}. Please clear it when you can. Thank you!`;
+                    // wa.me share link needs no saved number: WhatsApp opens with
+                    // the text prefilled and the cashier just picks the customer.
+                    const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                    const w = window.open(url, '_blank', 'noopener');
+                    if (w) triggerToast('Pick the customer in WhatsApp to send', 'success');
+                    else triggerToast('Could not open WhatsApp — copy manually', 'error');
+                  }}
+                  title={`Remind ${c.customerName}`}
+                  className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-950/50 cursor-pointer"
+                >
+                  WhatsApp
+                </button>
+                </div>
+              </div>
+            )})}
+          </div>
+        )}
+      </CloseSection>
+
+      {/* Today at a glance: summary tiles + where the money sits */}
+      <CloseSection icon={LayoutGrid} title="Today at a glance"
+        hint={`${formatCurrency(allCollectedToday)} sold • ${formatCurrency(allFloatOut + allCashOut + allOwnerOut + allBankOut)} moved`}
+        open={secOpen.glance} onToggle={() => toggleSec('glance')}>
+      {/* Today summary */}
+      <section className="grid grid-cols-3 gap-2">
+        {showProduction && (
+        <div className="boss-card p-3 border-l-4 border-l-amber-500">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'madeK')} • today</p>
+          <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayProdCost)}</p>
+        </div>
+        )}
+        <div className="boss-card p-3 border-l-4 border-l-rose-500">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'losses')} • today</p>
+          <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
+          {todayCarried > 0 && (
+            <p className="text-[10px] text-amber-300 font-bold uppercase mt-0.5">+ {formatCurrency(todayCarried)} carried → tomorrow</p>
+          )}
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-emerald-500">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'outstanding')}</p>
+          <p className="text-lg font-black text-emerald-400 font-display mt-1">{formatCurrency(outstanding)}</p>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-cyan-500 col-span-3 sm:col-span-1">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'collectedToday')}</p>
+          <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
+            {t(lang, 'floatK')}: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
+            {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
+            {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
+            {' · '}Bank: <span className="text-sky-300 font-black">{formatCurrency(bankOutToday)}</span>
+          </p>
+        </div>
+      </section>
+
+      {/* Where the money is today — across ALL departments */}
+      <section className="boss-card p-4 rounded-2xl border border-cyan-900/40 bg-cyan-950/10">
+        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+          <Wallet className="w-3.5 h-3.5 text-cyan-400" /> Where the money is today (all departments)
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'soldToday')}</p>
+            <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'floatK')}</p>
+            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allFloatOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash</p>
+            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allCashOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'ownerK')}</p>
+            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'bankK')}</p>
+            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(allBankOut)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-gold-brand/30 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash in drawers</p>
+            <p className="text-base font-black text-gold-brand font-display">{formatCurrency(allDrawer)}</p>
+          </div>
+          <div className="bg-zinc-950/60 border border-emerald-600/30 rounded-xl p-3">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Sente zesimu (phone)</p>
+            <p className="text-base font-black text-emerald-300 font-display">{formatCurrency(allPhone)}</p>
+          </div>
+        </div>
+        <p className="text-[10px] text-zinc-600 mt-2">
+          Still held: <span className="text-gold-brand font-black">{formatCurrency(allDrawer)}</span> drawer
+          {' · '}<span className="text-emerald-300 font-black">{formatCurrency(allPhone)}</span> phone —
+          capital kept stays in the drawer and opens tomorrow.
+        </p>
+
+        {/* Reconciliation: opening capital + tender buckets per dept — where
+            it should still be, drawer cash vs phone money */}
+        <div className="mt-3 overflow-x-auto no-scrollbar">
+          <table className="w-full text-[10px] font-bold uppercase">
+            <thead>
+              <tr className="text-zinc-500">
+                <th className="text-left py-1.5 pr-2">Department</th>
+                <th className="text-right px-2">Sold</th>
+                <th className="text-right px-2 text-emerald-500">Float</th>
+                <th className="text-right px-2 text-zinc-300">Cash</th>
+                <th className="text-right px-2 text-amber-400">Owner</th>
+                <th className="text-right px-2 text-sky-300">Bank</th>
+                <th className="text-right px-2 text-gold-brand">Drawer</th>
+                <th className="text-right pl-2 text-emerald-300">Phone</th>
+              </tr>
+            </thead>
+            <tbody>
+              {segments.map(cat => {
+                const sold = todayCollectedByCategory[cat] || 0;
+                const m = todayMoneyOutByCat[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+                const b = bucketFor(cat);
+                return (
+                  <tr key={cat} className={`border-t border-white/5 ${cat === selected ? 'text-white' : 'text-zinc-400'}`}>
+                    <td className="py-1.5 pr-2">{cat}</td>
+                    <td className="text-right px-2">{formatCurrency(sold)}</td>
+                    <td className="text-right px-2 text-emerald-400">{formatCurrency(m.float)}</td>
+                    <td className="text-right px-2 text-zinc-300">{formatCurrency(m.cash)}</td>
+                    <td className="text-right px-2 text-amber-400">{formatCurrency(m.owner)}</td>
+                    <td className="text-right px-2 text-sky-300">{formatCurrency(m.bank)}</td>
+                    <td className="text-right px-2 font-black text-gold-brand">{formatCurrency(b.drawer)}</td>
+                    <td className="text-right pl-2 font-black text-emerald-300">{formatCurrency(b.phone)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
       </CloseSection>
 
       {/* Payment modal */}

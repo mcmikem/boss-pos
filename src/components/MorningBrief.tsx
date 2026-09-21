@@ -6,7 +6,7 @@ import { bookingApi } from '../api';
 import type { Booking } from '../types';
 import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown, Wallet } from 'lucide-react';
 import type { Sale, CreditEat, Product, Expense, MomoTransfer } from '../types';
-import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory } from '../utils/cashflow';
+import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
 import { stockoutLosses } from '../utils/stockout';
@@ -80,27 +80,27 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       bySeller.set(name, cur);
     }
     const topSeller = Array.from(bySeller.values()).sort((a, b) => b.total - a.total)[0] || null;
-    // Live drawer: what should physically sit in drawers + phone right now
-    // (all departments): opening + sold − drawer spend − moved out.
+    // Live holdings: drawer cash vs phone money (sente zesimu), all
+    // departments. Drawer = kept capital + cash sales − drawer spend − moved
+    // out. Phone = MoMo sales + float moves − MoMo-paid expenses.
     const cats = new Set<string>();
     products.forEach(p => { if (p.category) cats.add(p.category); });
     const drawerExp = drawerExpensesByCategory(expenses, today);
     const moved = moneyOutByCategory(momoTransfers, today);
+    const tender = tenderByCategory(sales, products, today);
+    const momoExp = momoExpensesByCategory(expenses, today);
     let inDrawers = 0;
+    let drawerCash = 0;
+    let phoneCash = 0;
     for (const cat of cats) {
-      let collected = 0;
-      for (const s of sales) {
-        if (s.refunded || localDayKey(s.timestamp) !== today) continue;
-        if (s.paymentMethod === 'Credit / Book') continue;
-        for (const i of s.items) {
-          const prod = products.find(x => x.id === i.productId);
-          if ((prod?.category || '') === cat) collected += i.lineTotal || 0;
-        }
-      }
+      const t = tender[cat] || { cash: 0, momo: 0 };
       const m = moved[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
-      inDrawers += getOpeningCapital(today, cat, eodCapital) + collected
-        - (drawerExp[cat] || 0) - m.float - m.cash - m.owner - (m.bank || 0);
+      const movedOut = m.float + m.cash + m.owner + (m.bank || 0);
+      drawerCash += getOpeningCapital(today, cat, eodCapital) + t.cash
+        - (drawerExp[cat] || 0) - movedOut;
+      phoneCash += t.momo + m.float - (momoExp[cat] || 0);
     }
+    inDrawers = drawerCash + phoneCash;
     // Rush hour: busiest sales hour today (5am–11pm sane range for display).
     const hourly = new Array<number>(24).fill(0);
     for (const s of sales) {
@@ -125,6 +125,8 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       topSeller,
       rushHour, rushCount, fmtHour,
       inDrawers,
+      drawerCash,
+      phoneCash,
     };
   }, [sales, products, creditEats]);
 
@@ -166,7 +168,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     {
       label: 'In drawer',
       value: formatCurrency(Math.max(0, Math.round(brief.inDrawers))),
-      sub: 'cash + phone, live',
+      sub: `cash ${formatCurrency(Math.max(0, Math.round(brief.drawerCash)))} • phone ${formatCurrency(Math.max(0, Math.round(brief.phoneCash)))}`,
       tone: 'text-cyan-300',
       icon: <Wallet className="w-3.5 h-3.5 text-cyan-400" />,
       act: () => onNavigate('registers'),
