@@ -230,13 +230,113 @@ export interface MissingProduction {
 
 // A "remaining" log is tomorrow's opening stock, NOT a loss — only expired
 // (and legacy rows from before reasons existed) count as truly lost.
+// Leftover carry is AUTOMATIC: anything not sold or recorded as expired
+// stays on the tray and opens the next day. No manual "carry" tap needed.
 function isTrueLoss(x: WastageLog): boolean {
   return x.reason !== 'remaining';
+}
+
+function dayKeyMinus(dayKey: string, n: number): string {
+  let k = dayKey;
+  for (let i = 0; i < n; i++) k = prevDayKey(k);
+  return k;
+}
+
+function sumFor(
+  list: { qty?: number }[],
+): number {
+  return list.reduce((s, x) => s + (x.qty || 0), 0);
+}
+
+function madeOn(
+  productId: string,
+  productName: string,
+  production: ProductionRegister[],
+  day: string,
+): number {
+  return sumFor(
+    production.filter((x) => (x.productId === productId || (!x.productId && x.item === productName)) && x.date === day),
+  );
+}
+
+function soldOn(productId: string, sales: Sale[], day: string): number {
+  let n = 0;
+  for (const s of sales) {
+    if (s.refunded) continue;
+    if (localDayKey(s.timestamp) !== day) continue;
+    for (const i of s.items) if (i.productId === productId) n += i.qty || 0;
+  }
+  return n;
+}
+
+function expiredOn(
+  productId: string,
+  productName: string,
+  wastage: WastageLog[],
+  day: string,
+): number {
+  return sumFor(
+    wastage.filter(
+      (x) => (x.productId === productId || (!x.productId && x.item === productName)) && x.date === day && isTrueLoss(x),
+    ),
+  );
+}
+
+/**
+ * Automatic opening stock for `dayKey`: everything made before today minus
+ * everything sold / recorded-expired before today. Walks back up to 7 days so
+ * a closed Sunday (or a missed log day) doesn't wipe Saturday's tray — the
+ * food is still there unless it was sold or logged expired.
+ */
+export function openingForDay(
+  products: Product[],
+  production: ProductionRegister[],
+  sales: Sale[],
+  wastage: WastageLog[],
+  dayKey: string,
+  lookbackDays = 7,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const p of products) {
+    if (p.isService) continue;
+    let open = 0;
+    for (let back = lookbackDays; back >= 1; back--) {
+      const d = dayKeyMinus(dayKey, back);
+      open = Math.max(0, open + madeOn(p.id, p.name, production, d) - soldOn(p.id, sales, d) - expiredOn(p.id, p.name, wastage, d));
+    }
+    if (open > 0) out.set(p.id, Math.round(open * 1000) / 1000);
+  }
+  return out;
+}
+
+/** Single-product opening lookup with a custom-name fallback. */
+export function openingQtyFor(
+  productId: string,
+  productName: string,
+  opening: Map<string, number> | Record<string, number>,
+  products?: Product[],
+): number {
+  const get = (k: string): number => {
+    if (opening instanceof Map) return opening.get(k) || 0;
+    return (opening as Record<string, number>)[k] || 0;
+  };
+  const direct = get(productId);
+  if (direct > 0) return direct;
+  if (products) {
+    const hit = products.find((p) => p.name === productName && (get(p.id) || 0) > 0);
+    if (hit) return get(hit.id);
+  }
+  return 0;
 }
 
 /**
  * Eatery / daily-make items sold today with zero production logged today.
  * Services and buy-resell stock are ignored (they don't need a morning log).
+ *
+ * Carry is automatic: yesterday's leftover (made − sold − expired, walked back
+ * up to 7 days so closed days don't wipe the tray) opens today. A sale covered
+ * by that opening is NOT missing production — only sales beyond
+ * opening + made − expired are flagged.
  * Returns one row per offending product so the till can ask "where did these
  * chapatis come from?" before completing the sale.
  */
@@ -247,7 +347,19 @@ export function findMissingProduction(
   wastage: WastageLog[],
   dayKey: string,
   dailyMakeCategories: string[] = ['Eatery'],
+  openingByProduct?: Map<string, number> | Record<string, number>,
+  salesForDay?: Sale[],
 ): MissingProduction[] {
+  // Auto-carry when the caller didn't precompute it (theft flags, old tests).
+  // Sales.tsx passes the live map + today's sales so the check sees the tray.
+  let opening = openingByProduct;
+  if (!opening) {
+    try {
+      opening = openingForDay(products, production, salesForDay || [], wastage, dayKey);
+    } catch {
+      opening = new Map();
+    }
+  }
   const out: MissingProduction[] = [];
   for (const line of items) {
     const prod = products.find((p) => p.id === line.productId);
@@ -264,9 +376,22 @@ export function findMissingProduction(
         : production
             .filter((x) => !x.productId && x.item === prod.name && x.date === dayKey)
             .reduce((s, x) => s + (x.qty || 0), 0);
+    if (madeByName > 0) continue;
     const lost = wastage
       .filter((x) => (x.productId === prod.id || (!x.productId && x.item === prod.name)) && x.date === dayKey && isTrueLoss(x))
       .reduce((s, x) => s + (x.qty || 0), 0);
+    const openQty = openingQtyFor(prod.id, prod.name, opening, products);
+    let soldSoFar = 0;
+    if (salesForDay) {
+      for (const s of salesForDay) {
+        if (s.refunded) continue;
+        if (localDayKey(s.timestamp) !== dayKey) continue;
+        for (const i of s.items) if (i.productId === prod.id) soldSoFar += i.qty || 0;
+      }
+    }
+    // Automatic tray: opening − already sold today − expired today covers it.
+    const available = openQty - soldSoFar - lost;
+    if (line.qty > 0 && line.qty <= available) continue;
     if (madeByName <= 0 && line.qty > 0) {
       out.push({
         productId: prod.id,
@@ -340,7 +465,10 @@ export function detectRecipeDrift(
   return out;
 }
 
-// ---- Leftover carry-forward: yesterday made − sold − lost ----
+// ---- Leftover carry-forward: automatic unless recorded expired ----
+// Anything not sold and not logged 'expired' stays on the tray and opens the
+// next day. No manual "carry" tap needed — the 'remaining' log is now just an
+// optional tray-count audit (expected vs counted), never a requirement.
 
 export interface LeftoverRow {
   productId: string;
@@ -350,9 +478,10 @@ export interface LeftoverRow {
   lost: number;
   carried: number;
   leftover: number;
-  // Expected open (made − sold − expired) minus the tray count the cashier
-  // actually logged. >0 = pieces vanished, <0 = over-counted, 0 = agreement.
-  // Only meaningful when carried > 0 (no log = no claim, not theft).
+  // Expected open (opening + made − sold − expired) minus the tray count the
+  // cashier actually logged. >0 = pieces vanished, <0 = over-counted,
+  // 0 = agreement. Only meaningful when carried > 0 (no log = auto-carry,
+  // not theft).
   gap: number;
 }
 
@@ -364,6 +493,14 @@ export function leftoverFor(
   yesterdayKey: string,
 ): LeftoverRow[] {
   const daySales = sales.filter((s) => !s.refunded && localDayKey(s.timestamp) === yesterdayKey);
+  // Opening at the START of yesterday (auto-carried from earlier days) so a
+  // two-day-old tray still counts — yesterday's sales may have eaten it.
+  let openingYesterday: Map<string, number>;
+  try {
+    openingYesterday = openingForDay(products, production, sales, wastage, yesterdayKey);
+  } catch {
+    openingYesterday = new Map();
+  }
   const out: LeftoverRow[] = [];
   for (const p of products) {
     if (p.isService) continue;
@@ -371,7 +508,8 @@ export function leftoverFor(
       production
         .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey)
         .reduce((s, x) => s + (x.qty || 0), 0);
-    if (made <= 0) continue;
+    const opening = openingYesterday.get(p.id) || 0;
+    if (made <= 0 && opening <= 0) continue;
     const sold = daySales
       .flatMap((s) => s.items)
       .filter((i) => i.productId === p.id)
@@ -382,7 +520,7 @@ export function leftoverFor(
     const carried = wastage
       .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey && x.reason === 'remaining')
       .reduce((s, x) => s + (x.qty || 0), 0);
-    const leftover = Math.max(0, made - sold - lost);
+    const leftover = Math.max(0, opening + made - sold - lost);
     const gap = Math.round((leftover - carried) * 1000) / 1000;
     out.push({ productId: p.id, productName: p.name, made, sold, lost, carried, leftover, gap });
   }
@@ -533,10 +671,16 @@ export function buildTheftFlags(args: {
       });
     }
   }
-  // Sold without morning production (daily-make only).
+  // Sold without morning production and without automatic leftover cover.
   const daySales = args.sales.filter((s) => !s.refunded && localDayKey(s.timestamp) === args.dayKey);
   const lines = daySales.flatMap((s) => s.items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })));
-  const missing = findMissingProduction(lines, args.products, args.production, args.wastage, args.dayKey);
+  let opening: Map<string, number> | undefined;
+  try {
+    opening = openingForDay(args.products, args.production, args.sales, args.wastage, args.dayKey);
+  } catch {
+    opening = undefined;
+  }
+  const missing = findMissingProduction(lines, args.products, args.production, args.wastage, args.dayKey, ['Eatery'], opening, args.sales);
   for (const m of missing.slice(0, 5)) {
     flags.push({
       kind: 'no-production',

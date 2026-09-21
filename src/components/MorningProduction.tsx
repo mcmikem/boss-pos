@@ -43,7 +43,8 @@ export default function MorningProduction({
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
 
 
-  // Yesterday's leftovers carry as today's opening — kitchen makes less.
+  // Yesterday's leftovers auto-carry as today's opening — kitchen makes less.
+  // Only food logged 'expired' is a loss; everything else stays on the tray.
   const yesterdayKey = prevDayKey(today);
 
   // Same again: yesterday's batches one tap away (same menu most mornings).
@@ -135,7 +136,7 @@ export default function MorningProduction({
       {carryable.length > 0 && (
         <div className="bg-cyan-950/25 border border-cyan-800/40 rounded-xl p-3 space-y-2">
           <p className="text-[10px] font-black text-cyan-300 uppercase tracking-widest">
-            Yesterday's leftover → today's opening
+            Auto-carried → today's opening (unless logged expired)
           </p>
           {carryable.map(r => (
               <div key={r.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
@@ -165,7 +166,7 @@ export default function MorningProduction({
               </button>
             </div>
           ))}
-          <p className="text-[10px] text-zinc-500 font-bold uppercase">Tap Use to prefill — make less today, sell leftover first.</p>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase">Auto-carried — tap Use to prefill and make less today, sell leftover first.</p>
         </div>
       )}
 

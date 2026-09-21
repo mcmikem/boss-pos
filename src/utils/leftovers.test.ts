@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { leftoverFor, findMissingProduction } from './cashflow';
+import { leftoverFor, findMissingProduction, openingForDay } from './cashflow';
 import { localDayKey, todayLocalKey } from './dates';
 import { prevDayKey } from './cashflow';
 import type { Product, ProductionRegister, Sale, SaleItem, WastageLog } from '../types';
@@ -86,5 +86,72 @@ describe('findMissingProduction', () => {
     );
     expect(missing).toHaveLength(1);
     expect(missing[0].lostToday).toBe(3);
+  });
+});
+
+describe('automatic leftover carry', () => {
+  const T = todayLocalKey();
+  it('auto-carries yesterday tray unless recorded expired', () => {
+    const opening = openingForDay(
+      [prod()],
+      [batch({ date: Y })],
+      [saleOn(Y, 70)],
+      [waste({ id: 'w-2', date: Y, qty: 10, reason: 'expired', lossAmount: 4000 })],
+      T,
+    );
+    // 100 made − 70 sold − 10 expired = 20 opens today, no manual tap needed
+    expect(opening.get('p-chapati')).toBe(20);
+  });
+
+  it('does not flag sales covered by automatic leftover', () => {
+    const opening = openingForDay(
+      [prod()],
+      [batch({ date: Y })],
+      [saleOn(Y, 70)],
+      [waste({ id: 'w-2', date: Y, qty: 10, reason: 'expired', lossAmount: 4000 })],
+      T,
+    );
+    const ok = findMissingProduction(
+      [{ productId: 'p-chapati', productName: 'Chapati', qty: 5 }],
+      [prod()], [], [], T, ['Eatery'], opening, [],
+    );
+    expect(ok).toHaveLength(0);
+    const over = findMissingProduction(
+      [{ productId: 'p-chapati', productName: 'Chapati', qty: 25 }],
+      [prod()], [], [], T, ['Eatery'], opening, [],
+    );
+    expect(over).toHaveLength(1);
+  });
+
+  it('expired wipes the tray — nothing auto-carries', () => {
+    const opening = openingForDay(
+      [prod()],
+      [batch({ date: Y })],
+      [saleOn(Y, 70)],
+      [
+        waste({ id: 'w-2', date: Y, qty: 10, reason: 'expired', lossAmount: 4000 }),
+        waste({ id: 'w-3', date: Y, qty: 20, reason: 'expired', lossAmount: 8000 }),
+      ],
+      T,
+    );
+    expect(opening.get('p-chapati') || 0).toBe(0);
+    const missing = findMissingProduction(
+      [{ productId: 'p-chapati', productName: 'Chapati', qty: 5 }],
+      [prod()], [], [], T, ['Eatery'], opening, [],
+    );
+    expect(missing).toHaveLength(1);
+  });
+
+  it('survives a closed day with no logs', () => {
+    const twoAgo = prevDayKey(Y);
+    const opening = openingForDay(
+      [prod()],
+      [batch({ date: twoAgo })],
+      [saleOn(twoAgo, 70)],
+      [],
+      T,
+    );
+    // 100 − 70 two days ago still opens today even though yesterday was empty
+    expect(opening.get('p-chapati')).toBe(30);
   });
 });

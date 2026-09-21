@@ -26,7 +26,7 @@ import Fuse from 'fuse.js';
 import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
-import { findMissingProduction } from '../utils/cashflow';
+import { findMissingProduction, openingForDay } from '../utils/cashflow';
 import { todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
@@ -123,6 +123,7 @@ interface SalesProps {
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
   simple?: boolean;
+  hideGuide?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
   customers?: CustomerProfile[];
   onSaveCustomer?: (c: CustomerProfile) => void;
@@ -180,7 +181,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false, onRequirePin,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -250,7 +251,7 @@ export default function Sales({
     setParked(unparkCart(id));
     triggerToast(changed ? `Recalled ${entry.name}'s sale — prices updated to today's` : `Recalled ${entry.name}'s sale`, 'info');
   };
-  const renderParkedRows = () => parked.length > 0 ? (
+  const renderParkedRows = () => (parked.length > 0 && !simpleTill) ? (
     <div className="space-y-1.5">
       <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Parked ({parked.length})</p>
       {parked.map(p => (
@@ -368,6 +369,16 @@ export default function Sales({
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [showMoreActions, setShowMoreActions] = useState(false);
+  // Simple till: attendant mode hides discounts, quotes and parking so the
+  // sell flow is tap → charge. Per device; toggled in Settings → Display.
+  const [simpleTill, setSimpleTill] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_simple_till') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    const h = () => { try { setSimpleTill(localStorage.getItem('boss_pos_simple_till') === '1'); } catch {} };
+    window.addEventListener('boss_pos_simple_till', h);
+    return () => window.removeEventListener('boss_pos_simple_till', h);
+  }, []);
   const [discount, setDiscount] = useState<string>('');
   const [customCashReceived, setCustomCashReceived] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
@@ -726,7 +737,7 @@ export default function Sales({
   };
 
   // Money strip removed: the briefing card already shows today's takings.
-  const showGuide = !guideDismissed && !demoMode && (salesHistory || []).length === 0;
+  const showGuide = !hideGuide && !guideDismissed && !demoMode && (salesHistory || []).length === 0;
 
   const handleCompleteSale = async () => {
     // Playable demo (#2): run the full checkout thrill, but save nothing —
@@ -788,22 +799,32 @@ export default function Sales({
       triggerToast(`Stock shortage — selling available only: ${oversold.join(', ')}`, 'error');
     }
 
-    // Smart guard: can't sell morning-make items (e.g. chapatis) that were
-    // never logged as made today. Ask for clarity instead of silently
-    // allowing invented sales — the classic theft hole.
+    // Smart guard: morning-make items (e.g. chapatis) need either today's batch
+    // or automatic leftover cover (yesterday's tray minus sold/expired). Only
+    // sales beyond opening + made − expired ask for clarity — the classic
+    // theft hole stays shut without nagging honest leftover sales.
     try {
+      const dayKey = todayLocalKey();
+      let opening: Map<string, number> | undefined;
+      try {
+        opening = openingForDay(products, productionRegisters, salesHistory, wastageLogs, dayKey);
+      } catch {
+        opening = undefined;
+      }
       const missing = findMissingProduction(
         itemsToSell.map(i => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
         products,
         productionRegisters,
-        [],
-        todayLocalKey(),
+        wastageLogs,
+        dayKey,
         ['Eatery'],
+        opening,
+        salesHistory,
       );
       if (missing.length > 0) {
         const names = missing.map(m => `${m.productName} ×${m.qtySold}`).join(', ');
         const ok = window.confirm(
-          `No production logged today for: ${names}.\n\nWhere did these come from — yesterday's leftover or an unlogged batch?\n\nOK = sell anyway (flagged for the boss) • Cancel = go log production first.`,
+          `Not covered by today's batch or automatic leftover: ${names}.\n\nLeftover carries automatically unless logged expired — so this is more than the tray holds, or an unlogged batch.\n\nOK = sell anyway (flagged for the boss) • Cancel = go log production first.`,
         );
         if (!ok) {
           triggerToast('Sale paused — log Morning Production first', 'info');
@@ -812,8 +833,8 @@ export default function Sales({
         try {
           pushNotice(
             'no-production',
-            `Sold without production: ${names}`,
-            `Seller ${staffName || 'unknown'} sold ${names} with zero batch logged today. Confirm leftover or log the batch.`,
+            `Sold beyond batch + leftover: ${names}`,
+            `Seller ${staffName || 'unknown'} sold ${names} beyond today's batch and automatic leftover. Confirm the batch or check the tray.`,
             `noprod:${todayLocalKey()}:${missing.map(m => m.productId).join(',').slice(0, 80)}`,
           );
         } catch {}
@@ -1003,9 +1024,11 @@ export default function Sales({
             </button>
           )}
           <div className="flex items-center gap-1.5">
+            {!simpleTill && (
             <button onClick={() => handleLineDiscount(item.productId, item.variantId)}
               title="Discount off this line only" aria-label={`Discount off ${item.productName}`}
               className={`touch-target rounded-lg flex items-center justify-center transition-all cursor-pointer text-xs font-black ${(item.lineDiscount || 0) > 0 ? 'bg-purple-950/40 text-purple-300 border border-purple-600/40' : 'bg-zinc-900 text-zinc-500 hover:text-purple-300'}`}>%</button>
+            )}
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
               aria-label={`Decrease quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center transition-all cursor-pointer"><Minus className="w-4 h-4" /></button>
@@ -1066,9 +1089,11 @@ export default function Sales({
           </div>
         ) : (
           <div className="flex items-center gap-1.5 shrink-0">
+            {!simpleTill && (
             <button onClick={() => handleLineDiscount(item.productId, item.variantId)}
               title="Discount off this line only" aria-label={`Discount off ${item.productName}`}
               className={`touch-target rounded-xl flex items-center justify-center text-xs font-black cursor-pointer ${((item.lineDiscount || 0) > 0) ? 'bg-purple-950/40 text-purple-300 border border-purple-600/40' : 'bg-zinc-900 text-zinc-500'}`}>%</button>
+            )}
             <button onClick={() => handleAdjustQty(item.productId, item.variantId, -1)}
               aria-label={`Decrease quantity of ${item.productName}`}
               className="touch-target bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl flex items-center justify-center text-lg font-bold cursor-pointer">-</button>
@@ -1190,11 +1215,13 @@ export default function Sales({
                     className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
                     <Barcode className="w-4 h-4 text-gold-brand" /> Scan barcode
                   </button>
+                  {!simpleTill && (
                   <button onClick={() => { setShowMoreActions(false); setShowQuotes(true); }}
                     id="open-quotes-btn"
                     className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
                     <FileText className="w-4 h-4 text-zinc-400" /> Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}
                   </button>
+                  )}
                   <button onClick={() => { const n = !streetMode; setStreetMode(n); try { localStorage.setItem('boss_pos_street_mode', n ? '1' : '0'); } catch {} setShowMoreActions(false); }}
                     id="street-mode-btn"
                     className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
@@ -1590,10 +1617,12 @@ export default function Sales({
             </div>
             {cart.length > 0 && (
               <div className="flex items-center gap-1">
+              {!simpleTill && (
               <button onClick={parkCurrent}
                 className="text-xs text-zinc-500 hover:text-gold-brand uppercase font-bold flex items-center gap-1.5 transition-colors touch-target cursor-pointer">
                 Park
               </button>
+              )}
               <button onClick={() => setShowClearConfirm(true)}
                 className="text-xs text-zinc-500 hover:text-rose-400 uppercase font-bold flex items-center gap-1.5 transition-colors touch-target cursor-pointer">
                 <Trash2 className="w-4 h-4" /> Clear
@@ -1671,6 +1700,8 @@ export default function Sales({
                 ))}
               </div>
 
+              {!simpleTill && (
+              <>
               {/* Discount field */}
               <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
                 <div className="flex items-center justify-between">
@@ -1711,6 +1742,8 @@ export default function Sales({
                   </button>
                 </div>
               </div>
+              </>
+              )}
 
               {paymentMethod === 'Cash' && (
                 <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
@@ -1782,7 +1815,7 @@ export default function Sales({
             {isDisabled && disabledReason && (
               <p className="text-[11px] text-rose-400/90 font-medium text-center -mt-2">{disabledReason}</p>
             )}
-            {cart.length > 0 && (
+            {!simpleTill && cart.length > 0 && (
               <button onClick={saveQuote}
                 className="w-full h-11 rounded-2xl text-xs font-black uppercase tracking-wider border border-white/10 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5">
                 <FileText className="w-4 h-4" /> Save as quote
@@ -1812,7 +1845,7 @@ export default function Sales({
               <ShoppingCart className="w-4 h-4 text-gold-brand" /> {t(lang, 'checkout')}
             </h3>
             <div className="flex items-center gap-3">
-              {cart.length > 0 && (
+              {!simpleTill && cart.length > 0 && (
                 <button onClick={parkCurrent} className="text-xs text-zinc-400 font-semibold hover:text-gold-brand cursor-pointer touch-target">Park</button>
               )}
               <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">{t(lang, 'closeBtn')}</button>
@@ -1922,7 +1955,7 @@ export default function Sales({
             {isDisabled && disabledReason && (
               <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>
             )}
-            {cart.length > 0 && (
+            {!simpleTill && cart.length > 0 && (
               <button onClick={saveQuote}
                 className="w-full h-11 rounded-2xl text-xs font-black uppercase tracking-wider border border-white/10 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5">
                 <FileText className="w-4 h-4" /> Save as quote

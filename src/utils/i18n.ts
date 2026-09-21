@@ -19,7 +19,14 @@ export type SellKey =
   | 'money' | 'more' | 'settings' | 'save' | 'delete' | 'sure' | 'keep' | 'done' | 'back'
   | 'expenses' | 'logExpense' | 'totalSpent' | 'topExpense' | 'history' | 'tapRowDetails'
   | 'todaysSummary' | 'youKept' | 'youLost' | 'closeDayCta'
-  | 'addProduct' | 'outOfStock';
+  | 'addProduct' | 'outOfStock'
+  | 'drawerMath' | 'soldToday' | 'collectedToday' | 'movedOut' | 'capital'
+  | 'opening' | 'unexplained' | 'balancedMsg' | 'outstanding' | 'losses' | 'moneyOut'
+  | 'saveCredit' | 'recordPayment' | 'logLoss'
+  | 'madeK' | 'soldK' | 'lostK' | 'carriedK' | 'itemK' | 'checkK'
+  | 'shouldBe' | 'countedDrawer' | 'extraK' | 'shortK' | 'inDrawers'
+  | 'floatK' | 'ownerK' | 'bankK' | 'remainingK' | 'expiredK' | 'closeBalance'
+  | 'addCreditK' | 'dateK' | 'itemTakenK' | 'qtyK' | 'unitPriceK';
 
 const EN: Record<SellKey, string> = {
   sell: 'Sell',
@@ -77,6 +84,42 @@ const EN: Record<SellKey, string> = {
   closeDayCta: 'Close the day',
   addProduct: 'Add product',
   outOfStock: 'Out of stock',
+  drawerMath: 'Drawer math',
+  soldToday: 'Sold today',
+  collectedToday: 'Collected today',
+  movedOut: 'Moved out',
+  capital: 'Capital',
+  opening: 'Opening',
+  unexplained: 'Still unexplained',
+  balancedMsg: 'Every shilling accounted for.',
+  outstanding: 'Outstanding',
+  losses: 'Losses',
+  moneyOut: 'Money out',
+  saveCredit: 'Save credit',
+  recordPayment: 'Record payment',
+  logLoss: 'Log loss',
+  madeK: 'Made',
+  soldK: 'Sold',
+  lostK: 'Lost',
+  carriedK: 'Carried',
+  itemK: 'Item',
+  checkK: 'Check',
+  shouldBe: 'Should be',
+  countedDrawer: 'Counted in drawer',
+  extraK: 'extra',
+  shortK: 'short',
+  inDrawers: 'In drawers',
+  floatK: 'Float',
+  ownerK: 'Owner',
+  bankK: 'Bank',
+  remainingK: 'Remaining',
+  expiredK: 'Expired',
+  closeBalance: 'Daily Balance & Close-Out',
+  addCreditK: 'Add credit',
+  dateK: 'Date',
+  itemTakenK: 'Item taken',
+  qtyK: 'Number taken',
+  unitPriceK: 'Unit price',
 };
 
 // Everyday Luganda as spoken in shops (loanwords kept where shops genuinely
@@ -137,6 +180,42 @@ const LU: Record<SellKey, string> = {
   closeDayCta: 'Ggalawo leero',
   addProduct: 'Yongera ekintu',
   outOfStock: 'Biweddewo',
+  drawerMath: 'Ebya dulaawa',
+  soldToday: 'Otunze leero',
+  collectedToday: 'Ebiyingidde leero',
+  movedOut: 'Ebifulumidde',
+  capital: 'Kapito',
+  opening: 'Entandikwa',
+  unexplained: 'Ezinatannyonnyolwa',
+  balancedMsg: 'Buli ssente etegekeddwa.',
+  outstanding: 'Amabanja',
+  losses: 'Okufiirwa',
+  moneyOut: 'Ssente ezafuluma',
+  saveCredit: 'Tereka edeni',
+  recordPayment: 'Wandiika okusasula',
+  logLoss: 'Wandiika okufiirwa',
+  madeK: 'Ezakolebwa',
+  soldK: 'Ezatundiddwa',
+  lostK: 'Ezafiiriddwa',
+  carriedK: 'Ezitwaliddwa',
+  itemK: 'Ekintu',
+  checkK: 'Kebera',
+  shouldBe: 'Zirina okuba',
+  countedDrawer: 'Ebibaliddwa mu dulaawa',
+  extraK: 'ekisukkiridde',
+  shortK: 'ekibulako',
+  inDrawers: 'Mu dulaawa',
+  floatK: 'Float',
+  ownerK: 'Nannyini',
+  bankK: 'Banka',
+  remainingK: 'Ebikyaliko',
+  expiredK: 'Ebivuddeko',
+  closeBalance: 'Bbalansi ya leero',
+  addCreditK: "Yongera edeni",
+  dateK: 'Olunaku',
+  itemTakenK: 'Ekintu kyatutte',
+  qtyK: 'Obungi',
+  unitPriceK: 'Omutengo',
 };
 
 export function normalizeLang(v: unknown): SellLang {

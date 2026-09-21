@@ -14,7 +14,7 @@ import { isOn, type FeatureKey } from '../utils/features';
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
-  prevDayKey,
+  prevDayKey, openingForDay,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
 
@@ -201,14 +201,22 @@ export default function CategoryRegister({
   const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
   const allBankOut = allMoneyOutToday.filter(t => t.to === 'bank').reduce((s, t) => s + t.amount, 0);
 
-  // Daily close-out: for each dish, produced - sold - expired - carried.
+  // Daily close-out: opening (auto-carried) + produced − sold − expired.
   // Eats are NEVER stocked — no on-hand column (live stockQty is polluted by
-  // placeholder figures and misleads). A positive remainder is food still on
-  // the tray: the seller carries it to tomorrow (tomorrow's opening) or logs
-  // it lost. Negative means sales were covered from earlier production.
+  // placeholder figures and misleads). A positive remainder auto-carries to
+  // tomorrow unless logged expired — no manual carry tap needed. The optional
+  // 'remaining' log below is just a tray-count audit (expected vs counted).
+  // Negative means sales ate into earlier stock (covered from the tray).
   const balanceRows = useMemo(() => {
     const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === balanceDate);
+    let openingMap: Map<string, number>;
+    try {
+      openingMap = openingForDay(products, productionRegisters, sales, wastageLogs, balanceDate);
+    } catch {
+      openingMap = new Map();
+    }
     return catProducts.map(p => {
+      const opening = openingMap.get(p.id) || 0;
       const made = catProduction.filter(x => x.productId === p.id && x.date === balanceDate)
         .reduce((s, x) => s + (x.qty || 0), 0);
       const lost = catWastage.filter(x => x.productId === p.id && x.date === balanceDate && x.reason !== 'remaining')
@@ -218,15 +226,14 @@ export default function CategoryRegister({
       const sold = daySales.flatMap(s => s.items)
         .filter(i => i.productId === p.id)
         .reduce((s, i) => s + (i.qty || 0), 0);
-      return { product: p, made, sold, lost, carried, recon: made - sold - lost - carried };
-    }).filter(r => r.made + r.sold + r.lost + r.carried > 0);
-  }, [catProducts, catProduction, catWastage, sales, balanceDate]);
+      return { product: p, opening, made, sold, lost, carried, recon: opening + made - sold - lost };
+    }).filter(r => r.opening + r.made + r.sold + r.lost + r.carried > 0);
+  }, [catProducts, catProduction, catWastage, sales, balanceDate, products, productionRegisters, wastageLogs]);
 
-  const totalShrinkage = useMemo(() => balanceRows.reduce((s, r) => s + Math.max(0, r.recon), 0), [balanceRows]);
+  const totalAutoCarry = useMemo(() => balanceRows.reduce((s, r) => s + Math.max(0, r.recon), 0), [balanceRows]);
 
-  // Carry the tray remainder to tomorrow: logs a 'remaining' wastage row on
-  // this date, which becomes tomorrow's opening (see leftoverFor). The
-  // banner below forces the confirm before close-out.
+  // Optional tray-count audit: logs a 'remaining' row confirming the counted
+  // tray. Not required — leftover auto-carries anyway (see openingForDay).
   const carryRow = (row: { product: Product; recon: number }) => {
     const qty = Math.round(row.recon);
     if (qty <= 0) return;
@@ -244,9 +251,9 @@ export default function CategoryRegister({
     triggerToast(`${qty} × ${row.product.name} → tomorrow's opening`, 'success');
   };
   const carryAll = () => {
-    const rows = balanceRows.filter(r => r.recon > 0);
+    const rows = balanceRows.filter(r => r.recon > 0 && r.carried <= 0);
     if (rows.length === 0) return;
-    if (!window.confirm(`Carry ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s) to tomorrow's opening?`)) return;
+    if (!window.confirm(`Confirm tray count for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? (Optional — they auto-carry anyway.)`)) return;
     rows.forEach(carryRow);
   };
 
@@ -536,10 +543,10 @@ export default function CategoryRegister({
       {/* Smart drawer card: opening (carried) → collected → expenses → moved → capital → unaccounted */}
       <section className={`boss-card p-4 rounded-2xl border ${smartCash.status === 'missing' ? 'border-rose-600/50' : smartCash.status === 'balanced' ? 'border-emerald-800/40' : 'border-white/5'}`}>
         <h3 className="text-xs font-black text-white uppercase tracking-widest mb-1">
-          Drawer math — {selected} today
+          {t(lang, 'drawerMath')} — {selected} today
         </h3>
         <p className="text-[10px] text-zinc-500 font-bold uppercase mb-3">
-          Opening {formatCurrency(smartCash.openingCapital)} (yesterday's capital) + Sold {formatCurrency(smartCash.collected)}
+          {t(lang, 'opening')} {formatCurrency(smartCash.openingCapital)} (yesterday's capital) + {t(lang, 'soldK')} {formatCurrency(smartCash.collected)}
           {smartCash.drawerExpenses > 0 && <> − Expenses {formatCurrency(smartCash.drawerExpenses)}</>} − Moved {formatCurrency(smartCash.movedOut)} − Capital {formatCurrency(smartCash.closingCapital)}
         </p>
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -554,22 +561,22 @@ export default function CategoryRegister({
             }}
             title="Tap to recount yesterday's closing (today's opening)"
             className="bg-black/30 rounded-xl p-2.5 cursor-pointer hover:border hover:border-gold-brand/40 border border-transparent transition-all text-center">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Opening ✎</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'opening')} ✎</p>
             <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(smartCash.openingCapital)}</p>
           </button>
           <div className="bg-black/30 rounded-xl p-2.5">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Sold today</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'soldToday')}</p>
             <p className="text-sm font-black text-cyan-300">{formatCurrency(smartCash.collected)}</p>
           </div>
           <div className="bg-black/30 rounded-xl p-2.5">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Still unexplained</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'unexplained')}</p>
             <p className={`text-sm font-black ${smartCash.status === 'balanced' ? 'text-emerald-400' : smartCash.status === 'missing' ? 'text-rose-400' : 'text-amber-300'}`}>
               {formatCurrency(Math.abs(smartCash.unaccounted))}
             </p>
           </div>
         </div>
         <p className={`text-[11px] font-bold uppercase mt-2.5 ${smartCash.status === 'balanced' ? 'text-emerald-300' : smartCash.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}>
-          {smartCash.status === 'balanced' ? '✓ Every shilling accounted for.' : smartCash.message}
+          {smartCash.status === 'balanced' ? `✓ ${t(lang, 'balancedMsg')}` : smartCash.message}
         </p>
         {/* Physical count: type what is actually in the drawer. Expected =
             kept capital + unexplained remainder. Variance ≠ 0 means miscount,
@@ -585,7 +592,7 @@ export default function CategoryRegister({
           return (
             <div className="mt-3 bg-black/30 rounded-xl p-3 flex items-center gap-3">
               <div className="flex-1 min-w-0">
-                <p className="text-[9px] font-bold text-zinc-500 uppercase">Counted in drawer</p>
+                <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'countedDrawer')}</p>
                 <input type="number" min="0" defaultValue={counted} key={countKey}
                   placeholder="Type counted cash"
                   onChange={(e) => { try { localStorage.setItem(countKey, e.target.value); } catch {} }}
@@ -597,7 +604,7 @@ export default function CategoryRegister({
                   className="mt-1 w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-lg h-10 px-3 text-sm font-black tabular-nums focus:border-gold-brand outline-none" />
               </div>
               <div className="text-right shrink-0">
-                <p className="text-[9px] font-bold text-zinc-500 uppercase">Should be</p>
+                <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'shouldBe')}</p>
                 <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(expected)}</p>
                 {hasCount && (
                   <p className={`text-xs font-black tabular-nums mt-0.5 ${variance === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -613,7 +620,7 @@ export default function CategoryRegister({
       {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
       {isOn(features, 'closeWizard' as FeatureKey) && (() => {
         const steps = [
-          { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalShrinkage} unmatched`, target: 'close-balance' },
+          { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalAutoCarry} auto-carry`, target: 'close-balance' },
           { key: 'losses', label: 'Log today\u2019s leftovers & losses', hint: `${todayLossCount} logged \u2022 lost ${formatCurrency(todayWastage)}${todayCarried > 0 ? ` \u2022 carried ${formatCurrency(todayCarried)}` : ''}`, target: 'close-losses' },
           { key: 'money', label: 'Move today\u2019s money', hint: `${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`, target: 'close-money' },
         ];
@@ -685,26 +692,26 @@ export default function CategoryRegister({
       <section className="grid grid-cols-3 gap-2">
         {showProduction && (
         <div className="boss-card p-3 border-l-4 border-l-amber-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Made today</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'madeK')} • today</p>
           <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayProdCost)}</p>
         </div>
         )}
         <div className="boss-card p-3 border-l-4 border-l-rose-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Lost today</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'losses')} • today</p>
           <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
           {todayCarried > 0 && (
             <p className="text-[10px] text-amber-300 font-bold uppercase mt-0.5">+ {formatCurrency(todayCarried)} carried → tomorrow</p>
           )}
         </div>
         <div className="boss-card p-3 border-l-4 border-l-emerald-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Outstanding</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'outstanding')}</p>
           <p className="text-lg font-black text-emerald-400 font-display mt-1">{formatCurrency(outstanding)}</p>
         </div>
         <div className="boss-card p-3 border-l-4 border-l-cyan-500 col-span-3 sm:col-span-1">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Collected today</p>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'collectedToday')}</p>
           <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
           <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-            Float: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
+            {t(lang, 'floatK')}: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
             {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
             {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
             {' · '}Bank: <span className="text-sky-300 font-black">{formatCurrency(bankOutToday)}</span>
@@ -719,23 +726,23 @@ export default function CategoryRegister({
         </h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Sold today</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'soldToday')}</p>
             <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Float (on MoMo)</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'floatK')}</p>
             <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allFloatOut)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash (kept)</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash</p>
             <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allCashOut)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To Owner (Mike)</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'ownerK')}</p>
             <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Banked</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'bankK')}</p>
             <p className="text-base font-black text-sky-300 font-display">{formatCurrency(allBankOut)}</p>
           </div>
         </div>
@@ -784,7 +791,7 @@ export default function CategoryRegister({
       <section id="close-balance" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-gold-brand" /> Daily Balance & Close-Out
+            <CalendarDays className="w-4 h-4 text-gold-brand" /> {t(lang, 'closeBalance')}
           </h3>
           <div className="flex items-center gap-2">
             <input type="date" value={balanceDate} max={todayStr()} onChange={e => setBalanceDate(e.target.value || todayStr())}
@@ -799,39 +806,46 @@ export default function CategoryRegister({
           </div>
         ) : (
           <>
-            {totalShrinkage > 0 && (
-              <div className="mb-3 bg-amber-950/30 border border-amber-600/30 rounded-xl px-3 py-2.5">
+            {totalAutoCarry > 0 && (
+              <div className="mb-3 bg-emerald-950/25 border border-emerald-600/30 rounded-xl px-3 py-2.5">
                 <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                  <p className="text-[11px] font-bold text-amber-300 uppercase flex-1">
-                    Confirm before you close: {totalShrinkage} item{totalShrinkage !== 1 ? 's' : ''} still on the tray
+                  <AlertTriangle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <p className="text-[11px] font-bold text-emerald-300 uppercase flex-1">
+                    {totalAutoCarry} item{totalAutoCarry !== 1 ? 's' : ''} auto-carry → tomorrow (unless logged expired)
                   </p>
                 </div>
-                <button onClick={carryAll}
-                  className="mt-2 w-full h-10 bg-amber-500/20 border border-amber-500/40 text-amber-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-amber-500/30 active:scale-[0.99] transition-all cursor-pointer">
-                  Carry all to tomorrow's opening
-                </button>
-                <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">…or log them as lost below — carried food opens tomorrow's day</p>
+                {balanceRows.some(r => r.recon > 0 && r.carried <= 0) && (
+                  <>
+                    <button onClick={carryAll}
+                      className="mt-2 w-full h-10 bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-emerald-500/20 active:scale-[0.99] transition-all cursor-pointer">
+                      Confirm tray count (optional)
+                    </button>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">…or log spoiled food as expired below — only expired is a loss</p>
+                  </>
+                )}
               </div>
             )}
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-[9px] uppercase tracking-widest text-zinc-500">
-                    <th className="text-left py-1.5 pr-2 font-bold">Item</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">Made</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-emerald-400">Sold</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-rose-400">Lost</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">Carried</th>
-                    <th className="text-right py-1.5 pl-2 font-bold">Check</th>
+                    <th className="text-left py-1.5 pr-2 font-bold">{t(lang, 'itemK')}</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">{t(lang, 'madeK')}</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-emerald-400">{t(lang, 'soldK')}</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-rose-400">{t(lang, 'lostK')}</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">{t(lang, 'carriedK')}</th>
+                    <th className="text-right py-1.5 pl-2 font-bold">{t(lang, 'checkK')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {balanceRows.map(({ product, made, sold, lost, carried, recon }) => {
+                  {balanceRows.map(({ product, opening, made, sold, lost, carried, recon }) => {
                     const status = recon > 0 ? 'tray' : recon < 0 ? 'fromStock' : 'ok';
                     return (
                       <tr key={product.id} className="border-t border-white/5">
-                        <td className="py-2 pr-2 font-bold text-white truncate max-w-[120px]">{product.name}</td>
+                        <td className="py-2 pr-2 font-bold text-white truncate max-w-[120px]">
+                          {product.name}
+                          {opening > 0 && <span className="block text-[9px] text-zinc-500 font-bold uppercase">open {opening}</span>}
+                        </td>
                         <td className="py-2 px-2 text-right font-mono text-amber-400">{made || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-emerald-400">{sold || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-rose-400">{lost || '—'}</td>
@@ -840,11 +854,16 @@ export default function CategoryRegister({
                           {status === 'ok' ? (
                             <span className="text-emerald-400 font-black">✓</span>
                           ) : status === 'tray' ? (
-                            <button onClick={() => carryRow({ product, recon })}
-                              title={`Carry ${recon} to tomorrow's opening`}
-                              className="text-amber-400 font-black bg-amber-950/40 border border-amber-600/40 rounded-lg px-2 py-1 hover:bg-amber-950/60 active:scale-95 transition-all cursor-pointer tabular-nums">+{recon}</button>
+                            <span className="inline-flex items-center gap-1">
+                              <span className="text-emerald-300 font-black tabular-nums" title="Auto-carries to tomorrow unless logged expired">→{recon}</span>
+                              {carried <= 0 && (
+                                <button onClick={() => carryRow({ product, recon })}
+                                  title={`Confirm tray count ${recon} (optional — auto-carries anyway)`}
+                                  className="text-[10px] text-zinc-500 font-black border border-white/10 rounded-lg px-1.5 py-0.5 hover:border-emerald-500/40 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer tabular-nums">✓</button>
+                              )}
+                            </span>
                           ) : (
-                            <span className="text-zinc-500 font-bold" title="Sold more than made — covered from earlier stock">−{Math.abs(recon)}</span>
+                            <span className="text-zinc-500 font-bold" title="Sold more than opening + made — covered from earlier stock">−{Math.abs(recon)}</span>
                           )}
                         </td>
                       </tr>
@@ -866,7 +885,7 @@ export default function CategoryRegister({
           </h3>
           <button onClick={() => setShowCreditForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showCreditForm ? 'Close' : 'Add Credit'}
+            <Plus className="w-3.5 h-3.5" /> {showCreditForm ? t(lang, 'closeBtn') : t(lang, 'addCreditK')}
           </button>
         </div>
 
@@ -874,7 +893,7 @@ export default function CategoryRegister({
           <div className="bg-zinc-950/60 border border-emerald-600/20 rounded-xl p-4 space-y-3 mb-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Customer Name</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'customerName')}</label>
                 <input type="text" value={creditName} onChange={e => setCreditName(e.target.value)}
                   placeholder="e.g. Nakato Sarah" autoFocus
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
@@ -898,12 +917,12 @@ export default function CategoryRegister({
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Date</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'dateK')}</label>
                 <input type="date" value={creditDate} onChange={e => setCreditDate(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
               </div>
               <div className="sm:col-span-2">
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Taken</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'itemTakenK')}</label>
                 <select value={creditItem} onChange={e => selectOnChange(e.target.value, setCreditCustomItem, setCreditItem, setCreditPrice, () => {})}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
                   <option value="">Select item...</option>
@@ -917,12 +936,12 @@ export default function CategoryRegister({
                 )}
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Number Taken</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'qtyK')}</label>
                 <input type="number" min="1" value={creditQty} onChange={e => setCreditQty(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Unit Price</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'unitPriceK')}</label>
                 <input type="number" min="0" value={creditPrice} onChange={e => setCreditPrice(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-emerald-500" />
               </div>
@@ -935,7 +954,7 @@ export default function CategoryRegister({
               </p>
               <button onClick={handleSubmitCredit}
                 className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> Save Credit
+                <Check className="w-4 h-4" /> {t(lang, 'saveCredit')}
               </button>
             </div>
           </div>
@@ -968,7 +987,7 @@ export default function CategoryRegister({
                 <div className="flex gap-2 mt-2">
                 <button onClick={() => { setPayId(c.id); setPayAmount(String(c.total - c.paidAmount)); }}
                   className="flex-1 h-9 bg-emerald-600/15 text-emerald-400 border border-emerald-600/30 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/25 cursor-pointer">
-                  Record Payment
+                  {t(lang, 'recordPayment')}
                 </button>
                 <button onClick={() => setStatementFor(c.customerName)} title={`Print ${c.customerName}'s statement`}
                   className="h-9 px-3 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-widest hover:border-gold-brand/40 hover:text-gold-brand cursor-pointer flex items-center gap-1">
@@ -1001,11 +1020,11 @@ export default function CategoryRegister({
       <section id="close-losses" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <PackageX className="w-4 h-4 text-rose-400" /> Remaining / Expired (Losses)
+            <PackageX className="w-4 h-4 text-rose-400" /> {t(lang, 'remainingK')} / {t(lang, 'expiredK')} ({t(lang, 'losses')})
           </h3>
           <button onClick={() => setShowWasteForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-rose-600/20 text-rose-400 border border-rose-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showWasteForm ? 'Close' : 'Log Loss'}
+            <Plus className="w-3.5 h-3.5" /> {showWasteForm ? t(lang, 'closeBtn') : t(lang, 'logLoss')}
           </button>
         </div>
 
@@ -1027,7 +1046,7 @@ export default function CategoryRegister({
                 )}
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Date</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">{t(lang, 'dateK')}</label>
                 <input type="date" value={wasteDate} onChange={e => setWasteDate(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-rose-500" />
               </div>
@@ -1109,7 +1128,7 @@ export default function CategoryRegister({
       <section id="close-money" className="boss-card p-5 rounded-2xl scroll-mt-20">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-            <Smartphone className="w-4 h-4 text-cyan-400" /> Money Out (who took it & where)
+            <Smartphone className="w-4 h-4 text-cyan-400" /> {t(lang, 'moneyOut')} (who took it & where)
           </h3>
           <button onClick={() => setShowMomoForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
@@ -1274,7 +1293,7 @@ export default function CategoryRegister({
           <div className="bg-[#141414] border border-white/10 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
             <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
               <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
-                <Wallet className="w-4 h-4 text-emerald-400" /> Record Payment
+                <Wallet className="w-4 h-4 text-emerald-400" /> {t(lang, 'recordPayment')}
               </h3>
               <button onClick={() => { setPayId(null); setPayAmount(''); }} className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer">
                 <X className="w-5 h-5" />
