@@ -263,6 +263,36 @@ html {
   animation: fab-pop 0.25s ease-out;
 }
 
+/* Tour tip card: soft rise-in on every step change (keyed by step, so the
+   animation replays as the pointer moves to the next target). */
+@keyframes tour-card-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-tour-card-in {
+  animation: tour-card-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+/* Hand-drawn tour circle: the ellipse draws itself (dashoffset sweep) the
+   moment the pointer lands on a new target — the Clicky "it draws" move. */
+.tour-draw {
+  stroke-dasharray: var(--tour-c);
+  animation: tour-draw-sweep 0.55s ease-out forwards;
+}
+@keyframes tour-draw-sweep {
+  from { stroke-dashoffset: var(--tour-c); }
+  to { stroke-dashoffset: 0; }
+}
+
+/* First-sale celebration: warm glow pulse behind the buddy card. */
+@keyframes tour-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.45); }
+  50% { box-shadow: 0 0 32px 4px rgba(212, 175, 55, 0.35); }
+}
+.animate-tour-glow {
+  animation: tour-glow 1.6s ease-in-out infinite;
+}
+
 /* ============ OLD-ANDROID OVERLAY SAFETY (Android 5-9 WebViews) ============
    The build pipeline (vite legacy + lightningcss targets) already downlevels
    CSS *features*, but three *runtime* behaviors still break tall forms on old

@@ -2111,7 +2111,7 @@ export default function Sales({
                 <span className="text-[13px] font-semibold text-zinc-300">Total</span>
                 <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
               </div>
-              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
+              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled} id="tour-complete-sale"
                 title={isDisabled && disabledReason ? disabledReason : undefined}
                 className="w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                 {`${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
