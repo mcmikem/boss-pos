@@ -1,5 +1,6 @@
 import { useState, useEffect, Suspense, useRef, useMemo, useCallback } from 'react';
 import { lazyRetry } from './utils/lazyRetry';
+import FirstSaleTour, { isTourDone } from './components/FirstSaleTour';
 import { 
   ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
 } from 'lucide-react';
@@ -239,6 +240,21 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [chargeSound, setChargeSound] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_charge_sound') !== '0'; } catch { return true; }
   });
+  // Simple till: attendant mode hides discounts, quotes and parking.
+  // Per device (manager flips it on the attendant's phone).
+  const [simpleTill, setSimpleTill] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_simple_till') === '1'; } catch { return false; }
+  });
+  const toggleSimpleTill = () => {
+    setSimpleTill(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('boss_pos_simple_till', next ? '1' : '0');
+        window.dispatchEvent(new Event('boss_pos_simple_till'));
+      } catch {}
+      return next;
+    });
+  };
   const toggleChargeSound = () => {
     setChargeSound(prev => {
       const next = !prev;
@@ -969,6 +985,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (readyRef.current) setSettings(prev => ({ ...prev, expenseCategories }));
   }, [expenseCategories]);
 
+  // Guided tour state: presale steps while the till has no sales, closing
+  // step after the first one lands. Hidden once finished or dismissed.
+  const [tourDone, setTourDone] = useState<boolean>(() => isTourDone());
+  const [tourStep, setTourStep] = useState(0);
+  useEffect(() => {
+    if (tourDone) return;
+    if (sales.length === 0 && tourStep > 2) setTourStep(0);
+    if (sales.length > 0 && tourStep < 3) setTourStep(3);
+  }, [sales.length, tourDone, tourStep]);
+  const tourVisible = !tourDone && activeTab === 'sales';
+  const replayTour = () => {
+    try { localStorage.removeItem('boss_pos_tour_done'); } catch {}
+    setTourDone(false);
+    setTourStep(0);
+    setIsSettingsOpen(false);
+    setActiveTab('sales');
+  };
   // Cashier attribution: the asking only happens ONCE per device. The name is
   // saved in localStorage, so each phone remembers its seller between logins.
   useEffect(() => {
@@ -2125,6 +2158,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
+            hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}
             customers={customers}
             onSaveCustomer={handleSaveCustomer}
@@ -2263,6 +2297,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             simple={isSimpleNav}
+            hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}
             customers={customers}
             onSaveCustomer={handleSaveCustomer}
@@ -2592,6 +2627,14 @@ Count the drawer now (UGX)? Empty = skip.`, '');
         </div>
       )}
 
+      {tourVisible && (
+        <FirstSaleTour step={tourStep} setStep={setTourStep}
+          onDone={() => setTourDone(true)}
+          onNavigate={(t) => setActiveTab(t)}
+          cartCount={cart.reduce((s, i) => s + i.qty, 0)}
+          hasProducts={products.length > 0} />
+      )}
+
       {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}
 
       {showStaffSwitcher && staffConfigured && (
@@ -2668,6 +2711,11 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     }}
                       className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-gold-brand/40 transition-all cursor-pointer">
                       {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
+                    </button>
+                    <button onClick={toggleSimpleTill}
+                      title="Attendant mode: hides discounts, quotes and parking on this phone"
+                      className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${simpleTill ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                      {simpleTill ? 'Simple: On' : 'Simple: Off'}
                     </button>
                     <button onClick={() => setSettings(prev => ({ ...prev, largeText: !prev.largeText }))}
                       title="Bigger text and buttons for sunlight and tired eyes"
@@ -3190,6 +3238,16 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   title="Simple shows Sell, Money and More. Full shows all five tabs."
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
                   {isSimpleNav ? 'Menu: Simple (Sell · Money · More)' : 'Menu: Full (5 tabs)'}
+                </button>
+                <button onClick={replayTour}
+                  title="Walk through the first sale again"
+                  className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                  Replay first-sale tour
+                </button>
+                <button onClick={toggleSimpleTill}
+                  title="Attendant mode: hides discounts, quotes and parking on this phone"
+                  className={`w-full h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${simpleTill ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-gold-brand/40'}`}>
+                  {simpleTill ? 'Simple till: On' : 'Simple till: Off'}
                 </button>
               {isManager && (
                 <div className="border-t border-white/5 pt-3 space-y-2">
