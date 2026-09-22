@@ -739,7 +739,7 @@ export default function Inventory({
             <span className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(stockValue)}>{formatCurrency(stockValue)}</span>
           </div>
         </div>
-        <div className="boss-card p-3 border-l-4 border-l-rose-500 flex flex-col justify-between">
+        <div className="boss-card p-3 border-l-4 border-l-rose-500 flex flex-col justify-between" id="tour-stock-alert">
           <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">Low Stock</p>
           <div className="flex items-center gap-2 mt-2">
             <span className={`text-2xl font-black font-display ${lowStockProducts.length > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-500'}`}>

@@ -750,7 +750,7 @@ export default function CategoryRegister({
               <div className="flex-1 min-w-0">
                 <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'countedDrawer')}</p>
                 <input type="number" min="0" defaultValue={counted} key={countKey}
-                  placeholder="Type counted cash"
+                  placeholder="Type counted cash" id="tour-counted-drawer"
                   onChange={(e) => { try { localStorage.setItem(countKey, e.target.value); } catch {} }}
                   onBlur={(e) => {
                     // Re-render so the variance line updates after typing.
@@ -1044,7 +1044,7 @@ export default function CategoryRegister({
         hint={`${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`}
         open={secOpen.money} onToggle={() => toggleSec('money')}
         action={
-          <button onClick={() => setShowMomoForm(v => !v)}
+          <button onClick={() => setShowMomoForm(v => !v)} id="tour-record-money"
             className="flex items-center gap-1 text-[10px] bg-cyan-600/20 text-cyan-400 border border-cyan-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
             <Plus className="w-3.5 h-3.5" /> {showMomoForm ? 'Close' : 'Record Money Out'}
           </button>
@@ -1081,7 +1081,7 @@ export default function CategoryRegister({
               Capital chain — {selected} (opening {formatCurrency(smartCash.openingCapital)} → closing for tomorrow)
             </label>
             <div className="flex items-center gap-2">
-              <input type="number" min="0" step="1000" inputMode="numeric"
+              <input type="number" min="0" step="1000" inputMode="numeric" id="tour-capital-input"
                 value={capForSelected || ''}
                 onChange={(e) => {
                   const v = Math.max(0, parseInt(e.target.value || '0', 10) || 0);

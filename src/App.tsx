@@ -1054,20 +1054,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (readyRef.current) setSettings(prev => ({ ...prev, expenseCategories }));
   }, [expenseCategories]);
 
-  // Guided tour state: presale steps while the till has no sales, closing
-  // step after the first one lands. Hidden once finished or dismissed.
+  // Guided tour: the guide owns its own chapter/step state and watches live
+  // signals (cart, sales, tab). Replay always restarts at chapter one —
+  // the session key remounts it fresh, independent of sales history.
   const [tourDone, setTourDone] = useState<boolean>(() => isTourDone());
-  const [tourStep, setTourStep] = useState(0);
-  useEffect(() => {
-    if (tourDone) return;
-    if (sales.length === 0 && tourStep > 2) setTourStep(0);
-    if (sales.length > 0 && tourStep < 3) setTourStep(3);
-  }, [sales.length, tourDone, tourStep]);
-  const tourVisible = !tourDone && (activeTab === 'sales' || activeTab === 'inventory' || activeTab === 'registers');
+  const [tourSession, setTourSession] = useState(0);
+  const tourVisible = !tourDone;
   const replayTour = () => {
     try { localStorage.removeItem('boss_pos_tour_done'); } catch {}
     setTourDone(false);
-    setTourStep(0);
+    setTourSession(s => s + 1);
     setIsSettingsOpen(false);
     setActiveTab('sales');
   };
@@ -2706,12 +2702,15 @@ Count the drawer now (UGX)? Empty = skip.`, '');
       )}
 
       {tourVisible && (
-        <FirstSaleTour step={tourStep} setStep={setTourStep}
+        <FirstSaleTour key={tourSession}
           onDone={() => setTourDone(true)}
           onNavigate={(t) => setActiveTab(t)}
-          cartCount={cart.reduce((s, i) => s + i.qty, 0)}
-          hasProducts={products.length > 0}
-          activeTab={activeTab} />
+          signals={{
+            cartCount: cart.reduce((s, i) => s + i.qty, 0),
+            hasProducts: products.length > 0,
+            salesCount: sales.length,
+            activeTab,
+          }} />
       )}
 
       {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}

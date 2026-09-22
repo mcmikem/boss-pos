@@ -1,27 +1,57 @@
-import { useState, useEffect, useCallback } from 'react';
-import { MousePointerClick, Volume2, VolumeX, RotateCcw } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { MousePointerClick, Volume2, VolumeX } from 'lucide-react';
 import { speak, stopSpeaking, isNarrationOn, setNarrationOn } from '../utils/narration';
 
-// Guided first sale: a spotlight + animated tap pointer that walks a brand-new
-// till from empty shelf to first close-out. The overlay NEVER eats taps —
-// everything except the tip card is pointer-events-none, so the seller really
-// taps the product, the cart and the nav buttons themselves. The pointer
-// follows the real UI state (cart closed → cart open → confirm), a warm voice
-// narrates each move, and the whole thing auto-advances on real progress.
-// Skippable anywhere, never shows again once finished or dismissed.
+// "Show me around": a silent-first guided tour in four short chapters (Sell,
+// Money, Stock, Reports). No character, no scribbles, no robot monologue —
+// a spotlight cutout, one pulsing dot on the real control, and a small card
+// with one instruction. Accuracy rules keep it honest:
+//   - the dot appears only after the target holds still across two checks;
+//   - it never points at a fallback: a missing target means an honest
+//     instruction card, and the step auto-advances the instant the real
+//     control appears (or the real action happens);
+//   - the overlay never eats taps — everything but the card passes through;
+//   - voice narrates each step, and when the browser blocks autoplay a
+//     "Tap for sound" pill appears instead of silence.
 const TOUR_KEY = 'boss_pos_tour_done';
 export const isTourDone = () => {
   try { return localStorage.getItem(TOUR_KEY) === '1'; } catch { return false; }
 };
 
-interface TourProps {
-  step: number;
-  setStep: (n: number) => void;
-  onDone: () => void;
-  onNavigate: (tab: 'sales' | 'inventory' | 'registers') => void;
+type TourTab = 'sales' | 'inventory' | 'registers' | 'analytics';
+
+interface Signals {
   cartCount: number;
   hasProducts: boolean;
+  salesCount: number;
   activeTab: string;
+}
+
+interface TourProps {
+  onDone: () => void;
+  onNavigate: (tab: TourTab) => void;
+  signals: Signals;
+}
+
+interface Step {
+  id: string;
+  tab: TourTab;
+  tabLabel: string;
+  target: () => string | null;
+  title: string;
+  body: string;
+  voice: string;
+  primaryLabel: string;
+  primaryRun: 'next' | 'navigate' | 'finish';
+  advance?: 'cart' | 'sale' | 'products' | 'tab';
+  goTo?: { chapter: number; step: number };
+  showIf?: () => boolean;
+}
+
+interface Chapter {
+  id: string;
+  title: string;
+  steps: Step[];
 }
 
 function rectOf(sel: string): DOMRect | null {
@@ -29,9 +59,8 @@ function rectOf(sel: string): DOMRect | null {
     const el = document.querySelector(sel);
     if (!el) return null;
     const r = el.getBoundingClientRect();
-    // Zero-area = hidden (duplicate id in a hidden nav, closed sheet…) — not
-    // a real target. This also fixes duplicate-id fallbacks picking the
-    // invisible twin and leaving the tour as a "just message" popup.
+    // Zero-area = hidden (duplicate id in a hidden nav, closed card…) — never
+    // a target. This kills the "pointer in the corner at nothing" class of bug.
     if (r.width < 2 || r.height < 2) return null;
     return r;
   } catch {
@@ -48,57 +77,63 @@ const firstVisible = (...sels: (string | null)[]): string | null => {
   return null;
 };
 
-// Budi, the till buddy: one friendly face for the whole tour. Idle dots for
-// eyes while guiding, happy arcs + big smile once the first sale lands.
-function BuddyFace({ mood }: { mood: 'idle' | 'happy' }) {
-  return (
-    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border border-black/20 ${mood === 'happy' ? 'bg-gold-brand' : 'bg-zinc-800'}`}>
-      <svg viewBox="0 0 36 36" className="w-7 h-7" aria-hidden="true">
-        {mood === 'happy' ? (
-          <g stroke="#000" strokeWidth={2.6} strokeLinecap="round" fill="none">
-            <path d="M9 15 l3.5 -3.5 l3.5 3.5" />
-            <path d="M20 15 l3.5 -3.5 l3.5 3.5" />
-            <path d="M10 21 q8 9 16 0" />
-          </g>
-        ) : (
-          <g fill={ '#d4af37' }>
-            <circle cx="13" cy="14" r="2.6" />
-            <circle cx="23" cy="14" r="2.6" />
-            <path d="M12 22 q6 5 12 0" stroke="#d4af37" strokeWidth={2.4} strokeLinecap="round" fill="none" />
-          </g>
-        )}
-      </svg>
-    </div>
-  );
-}
+const NAV_SEL: Record<TourTab, string> = {
+  sales: '#sales-nav-btn',
+  inventory: '#inventory-nav-btn',
+  registers: '#registers-nav-btn',
+  analytics: '#analytics-nav-btn',
+};
 
 function useTarget(selector: string | null) {
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [stable, setStable] = useState(false);
+  const prev = useRef<{ l: number; t: number; w: number; h: number } | null>(null);
+  const runCount = useRef(0);
   useEffect(() => {
+    prev.current = null;
+    runCount.current = 0;
+    setStable(false);
     if (!selector) { setRect(null); return; }
-    const update = () => setRect(rectOf(selector));
-    update();
-    // Bring the target on screen once per step so the pointer is visible.
+    const snap = () => {
+      const r = rectOf(selector);
+      if (!r) {
+        prev.current = null;
+        runCount.current = 0;
+        setRect(null);
+        setStable(false);
+        return;
+      }
+      const p = prev.current;
+      const same = !!p && Math.abs(p.l - r.left) < 4 && Math.abs(p.t - r.top) < 4 && Math.abs(p.w - r.width) < 4 && Math.abs(p.h - r.height) < 4;
+      runCount.current = same ? runCount.current + 1 : 1;
+      prev.current = { l: r.left, t: r.top, w: r.width, h: r.height };
+      setRect(r);
+      setStable(runCount.current >= 2);
+    };
+    snap();
     try { document.querySelector(selector)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {}
-    const t = setTimeout(update, 400);
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
-    const iv = setInterval(update, 800);
-    return () => { clearTimeout(t); clearInterval(iv); window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
+    const t = setTimeout(snap, 450);
+    const iv = setInterval(snap, 800);
+    window.addEventListener('scroll', snap, true);
+    window.addEventListener('resize', snap);
+    return () => { clearTimeout(t); clearInterval(iv); window.removeEventListener('scroll', snap, true); window.removeEventListener('resize', snap); };
   }, [selector]);
-  return rect;
+  return { rect, stable };
 }
 
-export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartCount, hasProducts, activeTab }: TourProps) {
+export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps) {
+  const { cartCount, hasProducts, salesCount, activeTab } = signals;
+  const [chapterIdx, setChapterIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
   const [voiceOn, setVoiceOn] = useState<boolean>(() => isNarrationOn());
+  const [needTap, setNeedTap] = useState(false);
+  const prevSales = useRef(salesCount);
+  const vibrated = useRef('');
 
-  // Step 1 completes itself the moment something lands in the cart.
-  useEffect(() => {
-    if (step === 1 && hasProducts && cartCount > 0) {
-      const t = setTimeout(() => setStep(2), 600);
-      return () => clearTimeout(t);
-    }
-  }, [step, hasProducts, cartCount, setStep]);
+  const goTo = useCallback((chapter: number, step: number) => {
+    setChapterIdx(chapter);
+    setStepIdx(step);
+  }, []);
 
   const finish = useCallback(() => {
     stopSpeaking();
@@ -111,242 +146,333 @@ export default function FirstSaleTour({ step, setStep, onDone, onNavigate, cartC
     const next = !voiceOn;
     setVoiceOn(next);
     setNarrationOn(next);
+    if (!next) setNeedTap(false);
   };
 
-  // Step targets: best-effort selectors, first VISIBLE match wins. Missing
-  // target = bottom sheet tip, never a crash.
-  const onSalesTab = activeTab === 'sales';
-  const onInventoryTab = activeTab === 'inventory';
-  const prodTarget = onSalesTab ? firstVisible('#catalog-scroll-container .grid > *:first-child') : firstVisible('#sales-nav-btn', '#more-nav-btn');
+  // ---- live DOM reads (recomputed every render, so the guide tracks reality)
+  const catalogTarget = firstVisible('#catalog-scroll-container .grid > *:first-child');
   const completeTarget = firstVisible('.tour-complete-sale');
   const confirmTarget = firstVisible('#tour-confirm-btn');
-  const cartTarget = onSalesTab ? firstVisible('#mobile-cart-fab', '#desktop-cart') : firstVisible('#sales-nav-btn', '#more-nav-btn');
-  const stockTarget = firstVisible('#inventory-nav-btn', '#more-nav-btn');
-  const closeTarget = firstVisible('#registers-nav-btn', '#more-nav-btn');
-  const addTarget = firstVisible('#tour-add-product');
-  const emptyTarget = onInventoryTab ? (addTarget || stockTarget) : stockTarget;
-
-  // Cash picked? The selected payment carries a gold background class. When a
-  // previous session left MoMo/Credit picked, Complete sale may sit disabled —
-  // so the tour points at Cash FIRST instead of a dead button (the "stuck"
-  // tap). Checked live in the DOM because payment state lives in Sales.
-  const cashBtn = firstVisible('.tour-cash-btn');
+  const cartTarget = firstVisible('#mobile-cart-fab', '#desktop-cart');
+  const cashVisible = firstVisible('.tour-cash-btn');
   let cashPicked = true;
   try {
-    const el = cashBtn ? document.querySelector(cashBtn) : null;
+    const el = cashVisible ? document.querySelector(cashVisible) : null;
     cashPicked = !el || /bg-gold-brand\/1[05]/.test(el.className);
-  } catch {
-    cashPicked = true;
-  }
-  const needCash = onSalesTab && cashBtn && !cashPicked;
+  } catch { cashPicked = true; }
+  const countedTarget = firstVisible('#tour-counted-drawer');
+  const recordTarget = firstVisible('#tour-record-money');
+  const capitalTarget = firstVisible('#tour-capital-input');
 
-  // Step 2 follows the cart and can never strand the seller: confirm dialog
-  // open → point at Confirm; Cash unpicked → point at Cash; Complete sale on
-  // screen → point at it; otherwise point at the cart opener.
-  const confirmOpen = onSalesTab ? confirmTarget : firstVisible('#sales-nav-btn', '#more-nav-btn');
-  const chargeTarget = confirmOpen || (needCash ? cashBtn : completeTarget) || cartTarget;
+  // Charge phase inside the sell flow: confirm > cash > complete > open cart.
+  // Null means the cart is closed — an honest instruction, never a wrong pointer.
   const chargePhase: 'confirm' | 'cash' | 'complete' | 'open' =
-    confirmOpen ? (onSalesTab ? 'confirm' : 'open')
-    : needCash ? 'cash'
+    confirmTarget ? 'confirm'
+    : cashVisible && !cashPicked ? 'cash'
     : completeTarget ? 'complete' : 'open';
+  const chargeTarget =
+    chargePhase === 'confirm' ? confirmTarget
+    : chargePhase === 'cash' ? cashVisible
+    : chargePhase === 'complete' ? completeTarget
+    : cartTarget;
 
-  const VOICE: Record<string, string> = {
-    welcome: 'Hi! I am Budi, your till buddy. First sale in three quick taps. Watch my pointer, and tap where I draw. Let us go.',
-    tapProduct: 'Tap the product I circled. It drops straight into the cart.',
-    openStock: 'Your shelf is empty. Tap the Stock button I circled, and add one thing you sell.',
-    addProduct: 'Tap the gold plus. Type the name, the price, and how many, then save.',
-    openCart: 'Nice! Now tap the gold cart button to open your cart.',
-    pickCash: 'Tap Cash first, so the till knows how they paid.',
-    completeSale: 'Cash is picked. Hit the big Complete sale button.',
-    confirmSale: 'Last one — check the receipt, then hit Confirm.',
-    backToSell: 'Head back to Sell first, then tap the flashing cart.',
-    closeDay: 'Beautiful! First sale done. Tonight, tap Close day and count your drawer. That is the whole job. Good luck selling!',
-  };
-
-  const CHARGE_COPY: Record<typeof chargePhase, { title: string; body: string; voice: string }> = {
-    open: {
-      title: '2 · Open your cart',
-      body: onSalesTab ? 'Tap the gold Cart button to open your cart.' : 'Head back to Sell first — then tap the flashing cart.',
-      voice: onSalesTab ? VOICE.openCart : VOICE.backToSell,
-    },
-    cash: {
-      title: '2 · Pick Cash',
-      body: 'Tap Cash so the till knows how they paid — then the big button wakes up.',
-      voice: VOICE.pickCash,
-    },
-    complete: {
-      title: '2 · Hit Complete sale',
-      body: 'Cash is picked — hit the big Complete sale button inside the gold ring.',
-      voice: VOICE.completeSale,
-    },
-    confirm: {
-      title: '2 · Confirm it',
-      body: onSalesTab ? 'Check the receipt, then hit Confirm — money in the drawer.' : 'Head back to Sell to finish the sale.',
-      voice: VOICE.confirmSale,
-    },
-  };
-
-  const steps = [
+  const chapters: Chapter[] = [
     {
-      title: 'Sell your first item in 3 taps',
-      body: 'Watch the flashing pointer — it shows exactly where to tap, and I will talk you through it. Your taps go straight through to the till.',
-      voice: VOICE.welcome,
-      target: null as string | null,
-      actions: [
-        { label: 'Start', primary: true, run: () => { speak(VOICE.welcome); setStep(1); } },
-        { label: 'Skip', primary: false, run: finish },
+      id: 'sell', title: 'Sell',
+      steps: [
+        ...(!hasProducts ? [{
+          id: 's-stock', tab: 'sales' as TourTab, tabLabel: 'Sell',
+          target: () => (activeTab === 'inventory' ? firstVisible('#tour-add-product') : firstVisible('#inventory-nav-btn', '#more-nav-btn')),
+          title: 'Stock the shelf first',
+          body: activeTab === 'inventory' ? 'Tap the gold + button, save one product — I will wait here.' : 'Your shelf is empty. Open Stock and add one thing you sell.',
+          voice: 'Your shelf is empty. Open Stock and add one thing you sell.',
+          primaryLabel: activeTab === 'inventory' ? 'Back to Sell' : 'Go to Stock',
+          primaryRun: 'navigate' as const,
+          advance: 'products' as const,
+        }] : []),
+        ...(hasProducts ? [{
+          id: 's-tap', tab: 'sales' as TourTab, tabLabel: 'Sell',
+          target: () => catalogTarget,
+          title: 'Tap the product',
+          body: catalogTarget ? 'Tap the circled product — it drops into the cart.' : 'Back on the Sell screen, tap a product to drop it in the cart.',
+          voice: 'Tap the circled product. It drops straight into the cart.',
+          primaryLabel: cartCount > 0 ? 'Next' : 'I tapped it',
+          primaryRun: 'next' as const,
+          advance: 'cart' as const,
+        }] : []),
+        ...(hasProducts ? [{
+          id: 's-charge', tab: 'sales' as TourTab, tabLabel: 'Sell',
+          target: () => chargeTarget,
+          title: chargePhase === 'confirm' ? 'Confirm it' : chargePhase === 'cash' ? 'Pick Cash' : chargePhase === 'complete' ? 'Hit Complete sale' : 'Open your cart',
+          body: chargePhase === 'confirm' ? 'Check the receipt, then hit Confirm.'
+            : chargePhase === 'cash' ? 'Tap Cash, so the till knows how they paid.'
+            : chargePhase === 'complete' ? 'Cash is picked — hit the big Complete sale button.'
+            : 'Tap the gold Cart button to open your cart.',
+          voice: chargePhase === 'confirm' ? 'Last tap. Check the receipt, then Confirm.'
+            : chargePhase === 'cash' ? 'Tap Cash, so the till knows how they paid.'
+            : chargePhase === 'complete' ? 'Cash is picked. Hit the big Complete sale button.'
+            : 'Tap the gold cart button to open your cart.',
+          primaryLabel: 'Next',
+          primaryRun: 'next' as const,
+          advance: 'sale' as const,
+          goTo: { chapter: 1, step: 1 },
+        }] : []),
       ],
     },
-    hasProducts
-      ? {
-          title: '1 · Tap the flashing product',
-          body: 'Tap the product inside the gold ring — it drops straight into the cart.',
-          voice: VOICE.tapProduct,
-          target: prodTarget,
-          actions: [
-            { label: cartCount > 0 ? 'Next' : 'I tapped it', primary: true, run: () => setStep(2) },
-            { label: 'Skip', primary: false, run: finish },
-          ],
-        }
-      : {
-          title: onInventoryTab ? '1 · Tap the gold + button' : '1 · Open Stock first',
-          body: onInventoryTab
-            ? 'Tap the gold + button, fill name + price + how many, hit Save — then head back to Sell.'
-            : 'The shelf is empty. Tap the flashing Stock button and add one thing you sell.',
-          voice: onInventoryTab ? VOICE.addProduct : VOICE.openStock,
-          target: emptyTarget,
-          actions: [
-            { label: onInventoryTab ? 'Back to Sell' : 'Go to Stock', primary: true, run: () => onNavigate(onInventoryTab ? 'sales' : 'inventory') },
-            { label: 'Skip', primary: false, run: finish },
-          ],
+    {
+      id: 'money', title: 'Money',
+      steps: [
+        {
+          id: 'm-open', tab: 'registers' as TourTab, tabLabel: 'Close day',
+          target: () => null,
+          title: 'Sale done — now the money',
+          body: 'Every evening: count the drawer, move the money, keep tomorrow’s opening. Open Close day.',
+          voice: 'Sale done. Now the money. Open Close day.',
+          primaryLabel: 'Open Close day',
+          primaryRun: 'navigate' as const,
+          advance: 'tab' as const,
         },
-    {
-      title: CHARGE_COPY[chargePhase].title,
-      body: CHARGE_COPY[chargePhase].body,
-      voice: CHARGE_COPY[chargePhase].voice,
-      target: chargeTarget,
-      actions: [
-        ...(!onSalesTab && chargePhase === 'open' ? [{ label: 'Back to Sell', primary: true, run: () => onNavigate('sales') }] : []),
-        { label: 'Next', primary: true, run: () => setStep(3) },
-        { label: 'Skip', primary: false, run: finish },
+        {
+          id: 'm-count', tab: 'registers' as TourTab, tabLabel: 'Close day',
+          target: () => countedTarget,
+          title: 'Count the drawer',
+          body: countedTarget ? 'Type what you physically counted — the till shows what it expects.' : 'Find the drawer math card and type what you counted.',
+          voice: 'Type what you physically counted in the drawer.',
+          primaryLabel: 'Next',
+          primaryRun: 'next' as const,
+        },
+        {
+          id: 'm-move', tab: 'registers' as TourTab, tabLabel: 'Close day',
+          target: () => recordTarget || firstVisible('#close-money button'),
+          title: 'Move the money',
+          body: recordTarget ? 'Record where every shilling went — float, cash, owner, bank.' : 'Tap Money out and capital to unfold it, then record where it went.',
+          voice: 'Record where every shilling went. Float, cash, owner, or bank.',
+          primaryLabel: 'Next',
+          primaryRun: 'next' as const,
+        },
+        {
+          id: 'm-capital', tab: 'registers' as TourTab, tabLabel: 'Close day',
+          target: () => capitalTarget,
+          title: 'Keep tomorrow’s opening',
+          body: capitalTarget ? 'Type what stays in the drawer — tomorrow opens with it.' : 'The keep-aside box sets tomorrow’s opening.',
+          voice: 'Keep tomorrow’s opening here. It carries to the next day.',
+          primaryLabel: 'Next: Stock',
+          primaryRun: 'next' as const,
+        },
       ],
     },
     {
-      title: '3 · Close the day tonight',
-      body: 'Tap the flashing Close day button: count the drawer against what the till expected. Two minutes, then you know the day.',
-      voice: VOICE.closeDay,
-      target: closeTarget,
-      actions: [
-        { label: 'Open Close day', primary: true, run: () => { onNavigate('registers'); finish(); } },
-        { label: 'Later', primary: false, run: finish },
+      id: 'stock', title: 'Stock',
+      steps: [
+        {
+          id: 'k-open', tab: 'inventory' as TourTab, tabLabel: 'Stock',
+          target: () => null,
+          title: 'Where stock lives',
+          body: 'Everything you sell lives in Stock. Open it.',
+          voice: 'Stock lives here. Open it.',
+          primaryLabel: 'Open Stock',
+          primaryRun: 'navigate' as const,
+          advance: 'tab' as const,
+        },
+        {
+          id: 'k-add', tab: 'inventory' as TourTab, tabLabel: 'Stock',
+          target: () => firstVisible('#tour-add-product'),
+          title: 'The gold + adds products',
+          body: 'Name, price, how many — that is the whole form.',
+          voice: 'The gold plus adds a product. Name, price, how many.',
+          primaryLabel: 'Next',
+          primaryRun: 'next' as const,
+        },
+        {
+          id: 'k-low', tab: 'inventory' as TourTab, tabLabel: 'Stock',
+          target: () => firstVisible('#tour-stock-alert'),
+          title: 'Low stock warns you here',
+          body: 'This counter glows red — tap a row to restock before the shelf empties.',
+          voice: 'Low stock warns you here, before the shelf empties.',
+          primaryLabel: 'Next: Reports',
+          primaryRun: 'next' as const,
+        },
+      ],
+    },
+    {
+      id: 'reports', title: 'Reports',
+      steps: [
+        {
+          id: 'r-open', tab: 'analytics' as TourTab, tabLabel: 'Reports',
+          target: () => null,
+          title: 'Did we make money?',
+          body: 'Reports answers that plus who owes you. Open it.',
+          voice: 'Reports answers: did we make money? Open it.',
+          primaryLabel: 'Open Reports',
+          primaryRun: 'navigate' as const,
+          advance: 'tab' as const,
+        },
+        {
+          id: 'r-profit', tab: 'analytics' as TourTab, tabLabel: 'Reports',
+          target: () => firstVisible('#tour-stats-grid'),
+          title: 'Your three answers',
+          body: 'Top seller, money in, profit kept — plus the How breakdown under profit.',
+          voice: 'Top seller, money in, profit kept. Your three answers.',
+          primaryLabel: 'Finish',
+          primaryRun: 'finish' as const,
+        },
       ],
     },
   ];
-  const s = steps[Math.min(step, steps.length - 1)];
 
-  // Narrate every step (welcome is spoken by the Start tap itself).
+  // Visible steps only (empty-shelf branch swaps automatically).
+  const visible: { chapter: number; step: number; s: Step }[] = [];
+  chapters.forEach((ch, ci) => ch.steps.forEach((s, si) => {
+    if (s.id === 's-stock' || s.id === 's-tap' || s.id === 's-charge') {
+      if (s.id === 's-stock' && hasProducts) return;
+      if ((s.id === 's-tap' || s.id === 's-charge') && !hasProducts) return;
+    }
+    visible.push({ chapter: ci, step: si, s });
+  }));
+  const pos = Math.max(0, visible.findIndex(v => v.chapter === chapterIdx && v.step === stepIdx));
+  const cur = visible[Math.min(pos < 0 ? 0 : pos, visible.length - 1)];
+
+  const goNext = useCallback(() => {
+    const i = visible.findIndex(v => v.chapter === chapterIdx && v.step === stepIdx);
+    const nxt = visible[i < 0 ? 0 : i + 1];
+    if (!nxt) finish();
+    else goTo(nxt.chapter, nxt.step);
+  }, [visible, chapterIdx, stepIdx, goTo, finish]);
+
+  // Auto-advance on the real world: cart fills, sale lands, stock appears,
+  // tab opens. Never on a timer, never on a guess.
+  const firstRender = useRef(true);
   useEffect(() => {
-    if (step > 0) speak(s.voice);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, chargePhase, onSalesTab, onInventoryTab, hasProducts]);
+    if (firstRender.current) { firstRender.current = false; prevSales.current = salesCount; return; }
+    const adv = cur?.s.advance;
+    if (!adv) { prevSales.current = salesCount; return; }
+    let fire = false;
+    if (adv === 'cart' && cartCount > 0) fire = true;
+    else if (adv === 'sale' && salesCount > prevSales.current) fire = true;
+    else if (adv === 'products' && hasProducts) fire = true;
+    else if (adv === 'tab' && activeTab === cur.s.tab) fire = true;
+    prevSales.current = salesCount;
+    if (!fire) return;
+    const t = setTimeout(() => {
+      if (cur.s.goTo) goTo(cur.s.goTo.chapter, cur.s.goTo.step);
+      else goNext();
+    }, 600);
+    return () => clearTimeout(t);
+  }, [cartCount, salesCount, hasProducts, activeTab, cur, goNext, goTo]);
 
-  const rect = useTarget(s.target);
+  // Wrong tab: point at the tab button with an honest instruction instead of
+  // a fallback control. Taps pass through, so the seller just goes there.
+  const onTab = activeTab === cur.s.tab;
+  const navSel = firstVisible(NAV_SEL[cur.s.tab]);
+  const rawSel = cur.s.target();
+  const selector = onTab ? rawSel : navSel;
+  const { rect, stable } = useTarget(selector);
+  const stepKey = `${cur.chapter}:${cur.step}:${selector || 'none'}`;
+
+  // Voice per step. Blocked autoplay (no gesture yet) surfaces a
+  // "Tap for sound" pill instead of silence.
+  useEffect(() => {
+    setNeedTap(false);
+    speak(cur.s.voice, { onStart: () => setNeedTap(false), onBlocked: () => setNeedTap(true) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepKey]);
+
+  // Tiny haptic tick the first time the dot locks on (Android feel, free).
+  useEffect(() => {
+    if (stable && selector && vibrated.current !== stepKey) {
+      vibrated.current = stepKey;
+      try { navigator.vibrate?.(15); } catch {}
+    }
+  }, [stable, selector, stepKey]);
+
+  const ch = chapters[cur.chapter];
+  const inCh = ch.steps.filter(s => {
+    if (s.id === 's-stock') return !hasProducts;
+    if (s.id === 's-tap' || s.id === 's-charge') return hasProducts;
+    return true;
+  });
+  const inPos = inCh.findIndex(s => s.id === cur.s.id);
+
+  const runPrimary = () => {
+    const p = cur.s.primaryRun;
+    if (p === 'finish') finish();
+    else if (p === 'navigate') onNavigate(cur.s.tab);
+    else goNext();
+  };
+
   const cx = rect ? rect.left + rect.width / 2 : 0;
   const cy = rect ? rect.top + rect.height / 2 : 0;
-  // Card sits above the target when there is room, otherwise below the tap
-  // pointer so the two never overlap. Above the confirm modal (z-100) and
-  // the cart sheet (z-70), below toasts.
   const placeAbove = !!rect && rect.top > 330;
   const cardStyle: React.CSSProperties = !rect
     ? { left: 16, right: 16, bottom: 'calc(5.5rem + env(safe-area-inset-bottom))' }
     : placeAbove
       ? { left: 16, right: 16, bottom: Math.max(8, window.innerHeight - rect.top + 16) }
-      : { left: 16, right: 16, top: rect.bottom + 88 };
+      : { left: 16, right: 16, top: rect.bottom + 72 };
+
+  const shownBody = !onTab
+    ? `Open ${cur.s.tabLabel} first — tap the marked tab below, I will continue there.`
+    : cur.s.body;
 
   return (
-    <div className="fixed inset-0 z-[110] pointer-events-none" role="dialog" aria-label="First sale tour">
+    <div className="fixed inset-0 z-[110] pointer-events-none" role="dialog" aria-label="Guided tour">
       {rect ? (
         <>
           <div className="absolute inset-x-0 top-0 bg-black/70" style={{ height: Math.max(0, rect.top - 8) }} />
           <div className="absolute inset-x-0 bottom-0 bg-black/70" style={{ top: rect.bottom + 8 }} />
           <div className="absolute top-0 bottom-0 bg-black/70" style={{ left: 0, width: Math.max(0, rect.left - 8), top: rect.top - 8, height: rect.height + 16 }} />
           <div className="absolute top-0 bottom-0 bg-black/70" style={{ right: 0, width: Math.max(0, window.innerWidth - rect.right - 8), top: rect.top - 8, height: rect.height + 16 }} />
-          {/* Hand-drawn scribble: a wobbly pen circle that sketches itself
-              around the target the moment the pointer lands — arrow, circle,
-              exact spot. Seeded per target so it never jitters between polls
-              and never looks like a perfect oval. */}
-          {(() => {
-            let seed = Math.floor(cx * 13 + cy * 71) || 7;
-            const rnd = () => {
-              seed = (seed * 9301 + 49297) % 233280;
-              return seed / 233280 - 0.5;
-            };
-            const rx = rect.width / 2 + 16;
-            const ry = rect.height / 2 + 16;
-            const N = 30;
-            const pts: string[] = [];
-            for (let i = 0; i <= N; i++) {
-              // Overshoot past the start like a real pen circling back over itself.
-              const a = (i / N) * Math.PI * 2 + (i === N ? 0.45 : 0);
-              const wob = 1 + rnd() * 0.13;
-              pts.push(`${(cx + Math.cos(a) * rx * wob).toFixed(1)},${(cy + Math.sin(a) * ry * wob).toFixed(1)}`);
-            }
-            const d = `M${pts.join(' L')}`;
-            return (
-              <svg key={`${s.target}:${step}:${chargePhase}`} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true">
-                <path d={d} fill="none" stroke="#d4af37" strokeOpacity={0.35} strokeWidth={8} strokeLinecap="round"
-                  transform="translate(2.5,3)" pathLength={100} className="tour-draw" />
-                <path d={d} fill="none" stroke="#e8c33a" strokeWidth={3.5} strokeLinecap="round" pathLength={100} className="tour-draw" />
-              </svg>
-            );
-          })()}
-          {/* Animated tap pointer: ripple + bouncing cursor + TAP tag, fixed
-              on the target's center so the seller sees exactly where to hit. */}
-          <div className="absolute" style={{ left: cx, top: cy }}>
-            <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-              <span className="absolute top-1 inline-flex h-12 w-12 rounded-full bg-gold-brand/60 animate-ping" />
-              <MousePointerClick className="relative w-8 h-8 text-gold-brand animate-bounce drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]" />
-              <span className="relative mt-1 text-[10px] font-black uppercase tracking-widest text-black bg-gold-brand rounded-md px-2 py-0.5">Tap</span>
+          {stable && (
+            <div className="absolute" style={{ left: cx, top: cy }}>
+              <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+                <span className="absolute top-1 inline-flex h-12 w-12 rounded-full bg-gold-brand/60 animate-ping" />
+                <MousePointerClick className="relative w-8 h-8 text-gold-brand animate-bounce drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]" />
+                <span className="relative mt-1 text-[10px] font-black uppercase tracking-widest text-black bg-gold-brand rounded-md px-2 py-0.5">Tap</span>
+              </div>
             </div>
-          </div>
+          )}
         </>
       ) : (
         <div className="absolute inset-0 bg-black/70" />
       )}
-      <div key={step} className="absolute max-w-md mx-auto pointer-events-auto animate-tour-card-in" style={cardStyle}>
-        <div className={`bg-[#141414] border border-gold-brand/40 rounded-3xl p-5 shadow-2xl ${step >= 3 ? 'animate-tour-glow' : ''}`}>
-          <div className="flex items-center gap-1.5 mb-3">
+      <div key={stepKey} className="absolute max-w-md mx-auto pointer-events-auto animate-tour-card-in" style={cardStyle}>
+        <div className="bg-[#141414] border border-gold-brand/40 rounded-3xl p-5 shadow-2xl">
+          <div className="flex items-center gap-1.5 mb-2">
             <div className="flex items-center gap-1.5 flex-1">
-              {steps.map((_, i) => (
-                <span key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= step ? 'bg-gold-brand' : 'bg-zinc-800'}`} />
+              {chapters.map((c, i) => (
+                <span key={c.id} title={c.title}
+                  className={`h-1.5 flex-1 rounded-full transition-colors ${i < cur.chapter ? 'bg-gold-brand' : i === cur.chapter ? 'bg-gold-brand/60' : 'bg-zinc-800'}`} />
               ))}
             </div>
-            <button onClick={() => speak(s.voice)} title="Hear it again"
-              className="p-1.5 -m-1 text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer" aria-label="Replay voice">
-              <RotateCcw className="w-4 h-4" />
-            </button>
-            <button onClick={toggleVoice} title={voiceOn ? 'Mute voice' : 'Unmute voice'}
-              className="p-1.5 -m-1 text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer" aria-label="Toggle voice">
-              {voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            </button>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <BuddyFace mood={step >= 3 ? 'happy' : 'idle'} />
-            <div className="min-w-0">
-              <h3 className="text-sm font-black text-white uppercase tracking-wider leading-tight">{s.title}</h3>
-              <p className="text-[10px] text-gold-brand font-bold uppercase tracking-widest">Budi · till buddy</p>
-            </div>
-          </div>
-          <p className="text-xs text-zinc-300 font-bold mt-2 leading-relaxed">{s.body}</p>
-          <div className="flex gap-2 mt-4">
-            {s.actions.map(a => (
-              <button key={a.label} onClick={a.run}
-                className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                  a.primary ? 'bg-gold-brand text-black' : 'border border-zinc-700 text-zinc-400'
-                }`}>
-                {a.label}
+            {needTap ? (
+              <button onClick={() => speak(cur.s.voice, { onStart: () => setNeedTap(false), onBlocked: () => setNeedTap(true) })}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-gold-brand text-black text-[10px] font-black uppercase tracking-wider animate-pulse cursor-pointer" aria-label="Play sound">
+                <Volume2 className="w-4 h-4" /> Tap for sound
               </button>
-            ))}
+            ) : (
+              <>
+                <button onClick={() => speak(cur.s.voice, { onStart: () => setNeedTap(false), onBlocked: () => setNeedTap(true) })} title="Hear it again"
+                  className="p-1.5 -m-1 text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer" aria-label="Replay voice">
+                  <Volume2 className="w-4 h-4" />
+                </button>
+                <button onClick={toggleVoice} title={voiceOn ? 'Mute voice' : 'Unmute voice'}
+                  className="p-1.5 -m-1 text-zinc-500 hover:text-gold-brand transition-colors cursor-pointer" aria-label="Toggle voice">
+                  {voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                </button>
+              </>
+            )}
+          </div>
+          <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest">{ch.title} • {inPos + 1} of {inCh.length}</p>
+          <h3 className="text-sm font-black text-white uppercase tracking-wider mt-0.5">{!onTab ? `Open ${cur.s.tabLabel}` : cur.s.title}</h3>
+          <p className="text-xs text-zinc-300 font-bold mt-1 leading-relaxed">{shownBody}</p>
+          <div className="flex gap-2 mt-4">
+            <button onClick={runPrimary}
+              className="flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer bg-gold-brand text-black">
+              {!onTab ? `Open ${cur.s.tabLabel}` : cur.s.primaryRun === 'finish' ? 'Finish' : cur.s.primaryLabel}
+            </button>
+            <button onClick={finish}
+              className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer border border-zinc-700 text-zinc-400">
+              Skip
+            </button>
           </div>
         </div>
       </div>

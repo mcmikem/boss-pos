@@ -38,9 +38,9 @@ try {
   }
 } catch {}
 
-export function speak(text: string): void {
+export function speak(text: string, opts?: { onStart?: () => void; onBlocked?: () => void }): void {
   try {
-    if (!isNarrationOn() || !('speechSynthesis' in window)) return;
+    if (!isNarrationOn() || !('speechSynthesis' in window)) { opts?.onBlocked?.(); return; }
     const synth = window.speechSynthesis;
     synth.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -49,8 +49,15 @@ export function speak(text: string): void {
     u.rate = 0.98;
     u.pitch = 1.05;
     u.volume = 1;
+    let started = false;
+    u.onstart = () => { started = true; opts?.onStart?.(); };
+    const done = () => { if (!started) opts?.onBlocked?.(); };
+    u.onend = done;
+    u.onerror = done;
     synth.speak(u);
-  } catch {}
+  } catch {
+    opts?.onBlocked?.();
+  }
 }
 
 export function stopSpeaking(): void {
