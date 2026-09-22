@@ -477,9 +477,24 @@ export default function CategoryRegister({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [todayKey, theftFlags.length]);
 
+  // Per-department view of today's money, for the reconciliation table.
+  const todayMoneyOutByCat = useMemo(() => {
+    const map: { [cat: string]: { float: number; cash: number; owner: number; bank: number } } = {};
+    momoTransfers.forEach(t => {
+      if (localDayKey(t.createdAt) !== todayStr()) return;
+      const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, bank: 0 });
+      if (t.to === 'cash') d.cash += t.amount;
+      else if (t.to === 'owner') d.owner += t.amount;
+      else if (t.to === 'bank') d.bank += t.amount;
+      else d.float += t.amount;
+    });
+    return map;
+  }, [momoTransfers]);
+
   // Tender + phone-money buckets: cash sales live in the drawer (plus
   // yesterday's kept capital), MTN/Airtel sales + float moves live on the
-  // phone (sente zesimu) minus MoMo-paid expenses.
+  // phone (sente zesimu) minus MoMo-paid expenses. Sits below the memos it
+  // reads — calling it earlier is a TDZ crash (seen live on the Close page).
   const tenderToday = useMemo(() => tenderByCategory(sales, products, todayStrKey), [sales, products, todayStrKey]);
   const momoExpToday = useMemo(() => momoExpensesByCategory(expenses, todayStrKey), [expenses, todayStrKey]);
   const bucketFor = (cat: string): { drawer: number; phone: number } => {
@@ -495,20 +510,6 @@ export default function CategoryRegister({
   };
   const allDrawer = segments.reduce((s, cat) => s + bucketFor(cat).drawer, 0);
   const allPhone = segments.reduce((s, cat) => s + bucketFor(cat).phone, 0);
-
-  // Per-department view of today's money, for the reconciliation table.
-  const todayMoneyOutByCat = useMemo(() => {
-    const map: { [cat: string]: { float: number; cash: number; owner: number; bank: number } } = {};
-    momoTransfers.forEach(t => {
-      if (localDayKey(t.createdAt) !== todayStr()) return;
-      const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, bank: 0 });
-      if (t.to === 'cash') d.cash += t.amount;
-      else if (t.to === 'owner') d.owner += t.amount;
-      else if (t.to === 'bank') d.bank += t.amount;
-      else d.float += t.amount;
-    });
-    return map;
-  }, [momoTransfers]);
 
   const MONEY_DEST = [
     { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
