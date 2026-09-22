@@ -18,12 +18,12 @@ export function isDailyMakeCategory(cat: string): boolean {
 // Where the real workflow lives for non-daily categories. Shown as a hint
 // in Registers so each section matches how that business actually runs.
 export const CATEGORY_WORKFLOW_HINT: Record<string, string> = {
-  Tailoring: 'Make-to-order: deposits & pickups live in Sell → Tailoring → Manage Tailor Orders.',
-  Graphics: 'Make-to-order: job pipeline lives in Sell → Graphics → Manage Design & Print Orders.',
-  Printing: 'Make-to-order: job pipeline lives in Sell → Graphics → Manage Design & Print Orders.',
-  Electronics: 'Buy-resell: top up stock in Stock; log breakages as losses below.',
-  Stationery: 'Buy-resell: top up stock in Stock; log damages as losses below.',
-  Library: 'Buy-resell: top up stock in Stock; log damages as losses below.',
-  Sports: 'Buy-resell: top up stock in Stock; log damages as losses below.',
-  Drinks: 'Sodas (Coca-Cola, Mirinda, Rock Boom…) are buy-resell: top up stock in Stock. Only fresh juices (Obutunda, Omunanansi) are made each morning — log those above.',
+  Tailoring: 'Orders and customer payments are tracked here.',
+  Graphics: 'Track jobs, payments and work still pending here.',
+  Printing: 'Track jobs, payments and work still pending here.',
+  Electronics: 'Track products, stock and money here.',
+  Stationery: 'Track products, stock and money here.',
+  Library: 'Track products, stock and money here.',
+  Sports: 'Track products, stock and money here.',
+  Drinks: 'Track products, stock and money here.',
 };

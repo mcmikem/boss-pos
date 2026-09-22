@@ -10,11 +10,11 @@ import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, 
 import { localDayKey, localMonthKey, todayLocalKey, middayStamp } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
 import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
-import { isOn, type FeatureKey } from '../utils/features';
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
   prevDayKey, openingForDay, tenderByCategory, momoExpensesByCategory,
+  type TheftFlag,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
 
@@ -46,6 +46,11 @@ interface CategoryRegisterProps {
   features?: Record<string, boolean>;
   // Close-time gating: unaccounted/momo flags wait for the shop's close.
   pastClose?: boolean;
+  // Blind cashier close: the seller counts, moves and logs but never sees
+  // totals (manager gets them on WhatsApp). Masks every money figure.
+  blind?: boolean;
+  // Prompt a WhatsApp close summary to the owner after finishing (default on).
+  notifyOwner?: boolean;
 }
 
 type TimeFilter = 'today' | 'week' | 'month' | 'all';
@@ -70,6 +75,23 @@ function formatDay(iso: string): string {
 function compactUGX(v: number): string {
   const n = Math.round(v || 0);
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+// One accountability flag card. Cash flags render inside Money, production
+// flags inside Balance — each where it gets fixed. Shop-level ones stay up top.
+function FlagCard({ f }: { f: TheftFlag }) {
+  const crit = f.severity === 'critical';
+  return (
+    <div className={`rounded-2xl border p-4 flex items-start gap-3 ${crit ? 'bg-rose-950/30 border-rose-600/40' : 'bg-amber-950/25 border-amber-600/30'}`}>
+      <AlertTriangle className={`w-5 h-5 shrink-0 mt-0.5 ${crit ? 'text-rose-400' : 'text-amber-400'}`} />
+      <div className="min-w-0">
+        <p className={`text-xs font-black uppercase tracking-wider ${crit ? 'text-rose-300' : 'text-amber-300'}`}>
+          {crit ? 'Flag — ' : 'Check — '}{f.title}
+        </p>
+        <p className="text-[11px] text-zinc-300 font-bold mt-1 leading-relaxed">{f.detail}</p>
+      </div>
+    </div>
+  );
 }
 
 // Collapsible close-out section: the page used to render everything at once
@@ -111,8 +133,11 @@ export default function CategoryRegister({
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
-  onPrintClose, onSendClose, features, pastClose = true,
+  onPrintClose, onSendClose, pastClose = true, blind = false, notifyOwner = true,
 }: CategoryRegisterProps) {
+  // Masked money: blind closers see ••• everywhere except the inputs they
+  // operate and the credit rows they must collect.
+  const fmt = (v: number): string => (blind ? '•••' : formatCurrency(v));
   const [selected, setSelected] = useState<string>(() =>
     segments.includes('Eatery') ? 'Eatery' : (segments[0] || 'Eatery')
   );
@@ -138,19 +163,11 @@ export default function CategoryRegister({
 
   // Close-the-day ritual ticks, kept per day + department so a refresh or a
   // shared till never loses the evening's progress.
-  const closeDayKey = `${todayStr()}::${selected}`;
-  const [closeTicks, setCloseTicks] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    try { setCloseTicks(JSON.parse(localStorage.getItem(`boss_pos_close_${closeDayKey}`) || '{}')); } catch { setCloseTicks({}); }
-  }, [closeDayKey]);
-  const toggleTick = (k: string) => setCloseTicks(prev => {
-    const next = { ...prev, [k]: !prev[k] };
-    try { localStorage.setItem(`boss_pos_close_${closeDayKey}`, JSON.stringify(next)); } catch {}
-    return next;
-  });
+  const [, setBump] = useState(0);
+  const bump = () => setBump(b => b + 1);
   const scrollToSection = (id: string) => {
-    // Wizard jumps also unfold the target — a closed card would look dead.
-    const key = id === 'close-balance' ? 'balance' : id === 'close-losses' ? 'losses' : id === 'close-money' ? 'money' : null;
+    // Checklist jumps also unfold the target — a closed card would look dead.
+    const key = id === 'close-balance' ? 'balance' : id === 'close-losses' ? 'losses' : id === 'close-money' ? 'money' : id === 'close-glance' ? 'glance' : null;
     if (key) {
       setSecOpen(prev => {
         if (prev[key]) return prev;
@@ -260,16 +277,8 @@ export default function CategoryRegister({
     return map;
   }, [sales, products]);
 
-  // Today's money movement across ALL departments — so the boss can see where
-  // every coin is without tapping through each category.
-  const allCollectedToday = useMemo(() =>
-    Object.values(todayCollectedByCategory).reduce((a, b) => a + b, 0), [todayCollectedByCategory]);
+  // Today's date key shared by the money memos below.
   const todayStrKey = todayLocalKey();
-  const allMoneyOutToday = momoTransfers.filter(t => localDayKey(t.createdAt) === todayStrKey);
-  const allFloatOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'float').reduce((s, t) => s + t.amount, 0);
-  const allCashOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'cash').reduce((s, t) => s + t.amount, 0);
-  const allOwnerOut = allMoneyOutToday.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + t.amount, 0);
-  const allBankOut = allMoneyOutToday.filter(t => t.to === 'bank').reduce((s, t) => s + t.amount, 0);
 
   // Daily close-out: opening (auto-carried) + produced − sold − expired.
   // Eats are NEVER stocked — no on-hand column (live stockQty is polluted by
@@ -307,6 +316,13 @@ export default function CategoryRegister({
   const carryRow = (row: { product: Product; recon: number }) => {
     const qty = Math.round(row.recon);
     if (qty <= 0) return;
+    // Recount replaces the old tray count — otherwise two "remaining" rows
+    // stack and the gap math reads double.
+    try {
+      catWastage
+        .filter(x => x.productId === row.product.id && x.date === balanceDate && x.reason === 'remaining')
+        .forEach(x => onDeleteWastage(x.id));
+    } catch {}
     onAddWastage({
       id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: balanceDate,
@@ -321,9 +337,9 @@ export default function CategoryRegister({
     triggerToast(`${qty} × ${row.product.name} → tomorrow's opening`, 'success');
   };
   const carryAll = () => {
-    const rows = balanceRows.filter(r => r.recon > 0 && r.carried <= 0);
+    const rows = balanceRows.filter(r => r.recon > 0);
     if (rows.length === 0) return;
-    if (!window.confirm(`Confirm tray count for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? (Optional — they auto-carry anyway.)`)) return;
+    if (!window.confirm(`Confirm tray counts for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? They auto-carry anyway.`)) return;
     rows.forEach(carryRow);
   };
 
@@ -347,6 +363,41 @@ export default function CategoryRegister({
   const openCredits = catCreditEats.filter(e => !e.paid);
   const outstanding = openCredits.reduce((s, e) => s + (e.total - e.paidAmount), 0);
 
+  // Close ticks: the genuine closing sequence — business, leftovers, money,
+  // cash count. Persisted per day + department. Tapping a row jumps there.
+  const [closeTicks, setCloseTicks] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try { setCloseTicks(JSON.parse(localStorage.getItem(`boss_pos_closeticks_${todayStr()}::${selected}`) || '{}')); } catch { setCloseTicks({}); }
+  }, [selected]);
+  const toggleTick = (k: string) => setCloseTicks(prev => {
+    const next = { ...prev, [k]: !prev[k] };
+    try { localStorage.setItem(`boss_pos_closeticks_${todayStr()}::${selected}`, JSON.stringify(next)); } catch {}
+    return next;
+  });
+
+  // Day-closed record: tonight's books snapshotted as the closing record.
+  // Re-openable — a mistaken close never strands the shop.
+  const closedStoreKey = `boss_pos_dayclosed_${todayStr()}::${selected}`;
+  const [dayClosedAt, setDayClosedAt] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(closedStoreKey) || 'null');
+      setDayClosedAt(raw?.at || null);
+    } catch { setDayClosedAt(null); }
+  }, [closedStoreKey]);
+  const finishCloseDay = () => {
+    const rec = { at: new Date().toISOString(), by: staffName || '', collected: collectedToday, moved: sentToday };
+    try { localStorage.setItem(closedStoreKey, JSON.stringify(rec)); } catch {}
+    setDayClosedAt(rec.at);
+    triggerToast(`Day closed — ${selected} finished`, 'success');
+  };
+  const reopenDay = () => {
+    try { localStorage.removeItem(closedStoreKey); } catch {}
+    setDayClosedAt(null);
+    triggerToast('Day reopened — closing record cleared', 'info');
+  };
+  const [showCloseHelp, setShowCloseHelp] = useState(false);
+
   const handleSubmitCredit = () => {
     const item = activeItem(catProducts.map(p => p.name), creditCustomItem, creditItem);
     const name = creditName.trim();
@@ -367,7 +418,7 @@ export default function CategoryRegister({
     const alreadyOwes = owesFor(name);
     if (cap > 0 && alreadyOwes + newTotal > cap) {
       const ok = window.confirm(
-        `${name} owes ${formatCurrency(alreadyOwes)} of a ${formatCurrency(cap)} cap. This adds ${formatCurrency(newTotal)} (total ${formatCurrency(alreadyOwes + newTotal)}).\n\nOK = lend anyway • Cancel = stop and collect first.`,
+        `${name} owes ${fmt(alreadyOwes)} of a ${fmt(cap)} cap. This adds ${fmt(newTotal)} (total ${fmt(alreadyOwes + newTotal)}).\n\nOK = lend anyway • Cancel = stop and collect first.`,
       );
       if (!ok) { triggerToast('Stopped — collect old debt first', 'info'); return; }
     }
@@ -395,18 +446,14 @@ export default function CategoryRegister({
     if (!rec) return;
     if (isNaN(amt) || amt <= 0) { triggerToast('Enter a valid amount', 'error'); return; }
     const remaining = rec.total - rec.paidAmount;
-    if (amt > remaining) { triggerToast(`Only ${formatCurrency(remaining)} is outstanding`, 'error'); return; }
+    if (amt > remaining) { triggerToast(`Only ${fmt(remaining)} is outstanding`, 'error'); return; }
     onPayCreditEat(payId, amt);
-    triggerToast(`Payment recorded: ${formatCurrency(amt)}`, 'success');
+    triggerToast(`Payment recorded: ${fmt(amt)}`, 'success');
     setPayId(null); setPayAmount('');
   };
 
-  // ---- Production (read-only here: morning log lives on Sell → Eatery) ----
-  const todayProdCost = catProduction.filter(p => p.date === todayStr()).reduce((s, p) => s + p.total, 0);
-
   // ---- Wastage: expired is a true loss; remaining carries to tomorrow ----
   const todayWastage = catWastage.filter(w => w.date === todayStr() && w.reason !== 'remaining').reduce((s, w) => s + w.lossAmount, 0);
-  const todayCarried = catWastage.filter(w => w.date === todayStr() && w.reason === 'remaining').reduce((s, w) => s + w.lossAmount, 0);
   const todayLossCount = catWastage.filter(w => w.date === todayStr()).length;
 
   // ---- Money Out (Mobile Money / Owner / Float for tomorrow) ----
@@ -458,6 +505,8 @@ export default function CategoryRegister({
   }), [todayKey, segments, todayCollectedByCategory, drawerExpensesToday, momoTransfers, eodCapital, sales, products, productionRegisters, wastageLogs, pastClose]);
 
   useEffect(() => {
+    // Blind tills never see flags — the manager gets them on WhatsApp.
+    if (blind) return;
     for (const f of theftFlags.slice(0, 4)) {
       try {
         pushNotice(
@@ -475,7 +524,7 @@ export default function CategoryRegister({
       } catch {}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayKey, theftFlags.length]);
+  }, [todayKey, theftFlags.length, blind]);
 
   // Per-department view of today's money, for the reconciliation table.
   const todayMoneyOutByCat = useMemo(() => {
@@ -510,6 +559,33 @@ export default function CategoryRegister({
   };
   const allDrawer = segments.reduce((s, cat) => s + bucketFor(cat).drawer, 0);
   const allPhone = segments.reduce((s, cat) => s + bucketFor(cat).phone, 0);
+  // Cumulative handoffs across loaded history: what the owner has received
+  // in total, and what sits banked. Totals, not today-flows.
+  const ownerTotal = useMemo(() => momoTransfers.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
+  const bankTotal = useMemo(() => momoTransfers.filter(t => t.to === 'bank').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
+  // Today strip figures: all sales incl. credit, plus the still-out remainder.
+  const stripStats = useMemo(() => {
+    const moves = moneyOutByCategory(momoTransfers, todayKey);
+    let soldAll = 0;
+    let out = 0;
+    for (const s of sales) {
+      if (s.refunded || localDayKey(s.timestamp) !== todayKey) continue;
+      soldAll += s.total || 0;
+    }
+    for (const cat of segments) {
+      const m = moves[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+      const r = computeDayCash({
+        category: cat, dayKey: todayKey,
+        openingCapital: getOpeningCapital(todayKey, cat, eodCapital),
+        closingCapital: getClosingCapital(todayKey, cat, eodCapital),
+        collected: todayCollectedByCategory[cat] || 0,
+        drawerExpenses: drawerExpensesToday[cat] || 0,
+        floatOut: m.float, cashOut: m.cash, ownerOut: m.owner, bankOut: m.bank || 0,
+      });
+      if (r.status === 'missing') out += r.unaccounted;
+    }
+    return { soldAll, out: Math.round(out) };
+  }, [sales, segments, momoTransfers, todayKey, todayCollectedByCategory, drawerExpensesToday, eodCapital]);
 
   const MONEY_DEST = [
     { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
@@ -584,17 +660,19 @@ export default function CategoryRegister({
         </div>
         <div>
           <h2 className="text-lg font-black text-white uppercase tracking-tight font-display">{t(lang, 'closeDayCta')}</h2>
-          <p className="text-xs text-zinc-500 font-bold">{showProduction ? 'Credit • Daily balance • Losses' : 'Credit • Losses • Money out'}</p>
+          <p className="text-xs text-zinc-500 font-bold">Check your money. Check your business. Finish today.</p>
         </div>
       </div>
       <BeginnerTip tipKey="close-day" text="Close day = count today's money and finish the books. Do it every evening." />
-      {onBack && (
-        /* Consistent back (#24): same Back button as every other sub-panel. */
-        <button onClick={onBack} aria-label="Back to reports"
-          className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
-          <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'back')}
-        </button>
-      )}
+      <div className="flex items-center gap-2">
+        {onBack && (
+          <button onClick={onBack} aria-label="Back to reports"
+            className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
+            <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'back')}
+          </button>
+        )}
+        <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Business areas</p>
+      </div>
 
       {/* Category segment chips — busiest department first, takings on the chip */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
@@ -622,7 +700,7 @@ export default function CategoryRegister({
           lives in the flags + cards below; this says balanced or how much. */}
       {(() => {
         const moves = moneyOutByCategory(momoTransfers, todayKey);
-        let collected = 0, moved = 0, out = 0;
+        let collected = 0, out = 0, accounted = 0;
         for (const cat of segments) {
           const m = moves[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
           const r = computeDayCash({
@@ -634,7 +712,7 @@ export default function CategoryRegister({
             floatOut: m.float, cashOut: m.cash, ownerOut: m.owner, bankOut: m.bank || 0,
           });
           collected += r.collected;
-          moved += r.movedOut;
+          accounted += r.movedOut + r.closingCapital + r.drawerExpenses;
           if (r.status === 'missing') out += r.unaccounted;
         }
         out = Math.round(out);
@@ -648,96 +726,65 @@ export default function CategoryRegister({
             : 'bg-emerald-950/25 border-emerald-600/30'}`}>
             <div className={`text-2xl font-black font-display tabular-nums shrink-0 ${
               tone === 'rose' ? 'text-rose-300' : tone === 'amber' ? 'text-amber-300' : 'text-emerald-300'}`}>
-              {out > 0 ? formatCurrency(out) : theftFlags.length > 0 ? '!' : '✓'}
+              {out > 0 ? fmt(out) : theftFlags.length > 0 ? '!' : '✓'}
             </div>
             <div className="flex-1 min-w-0">
               <p className={`text-xs font-black uppercase tracking-wider ${
                 tone === 'rose' ? 'text-rose-200' : tone === 'amber' ? 'text-amber-200' : 'text-emerald-200'}`}>
-                {out > 0 ? 'Still out — move it' : theftFlags.length > 0 ? 'Needs a look below' : 'Every shilling home'}
+                {out > 0 ? `${fmt(out)} still out` : theftFlags.length > 0 ? 'Needs a look below' : 'Every shilling accounted for'}
               </p>
               <p className="text-[10px] text-zinc-400 font-bold uppercase mt-0.5">
-                {formatCurrency(moved)} of {formatCurrency(collected)} moved{theftFlags.length > 0 ? ` • ${theftFlags.length} flag${theftFlags.length !== 1 ? 's' : ''} below` : ''}
+                {fmt(collected)} collected • {fmt(Math.round(accounted))} accounted for{theftFlags.length > 0 ? ` • ${theftFlags.length} below` : ''}
               </p>
             </div>
             {out > 0 && (
               <button onClick={() => scrollToSection('close-money')}
                 className="shrink-0 h-10 px-4 bg-gold-brand text-black rounded-xl text-[11px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                Move it
+                Move money
               </button>
             )}
           </section>
         );
       })()}
 
-      {/* Theft / accountability flags: unaccounted cash, no-production sales */}
-      {theftFlags.length > 0 && (
-        <section className="space-y-2">
-          {theftFlags.slice(0, 4).map((f, i) => (
-            <div
-              key={`${f.kind}-${i}`}
-              className={`rounded-2xl border p-4 flex items-start gap-3 ${
-                f.severity === 'critical'
-                  ? 'bg-rose-950/30 border-rose-600/40'
-                  : 'bg-amber-950/25 border-amber-600/30'
-              }`}
-            >
-              <AlertTriangle className={`w-5 h-5 shrink-0 mt-0.5 ${f.severity === 'critical' ? 'text-rose-400' : 'text-amber-400'}`} />
-              <div className="min-w-0">
-                <p className={`text-xs font-black uppercase tracking-wider ${f.severity === 'critical' ? 'text-rose-300' : 'text-amber-300'}`}>
-                  {f.severity === 'critical' ? 'Flag — ' : 'Check — '}{f.title}
-                </p>
-                <p className="text-[11px] text-zinc-300 font-bold mt-1 leading-relaxed">{f.detail}</p>
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {/* Smart drawer card: opening (carried) → collected → expenses → moved → capital → unaccounted */}
-      <section className={`boss-card p-4 rounded-2xl border ${smartCash.status === 'missing' ? 'border-rose-600/50' : smartCash.status === 'balanced' ? 'border-emerald-800/40' : 'border-white/5'}`}>
-        <h3 className="text-xs font-black text-white uppercase tracking-widest mb-1">
-          {t(lang, 'drawerMath')} — {selected} today
-        </h3>
-        <p className="text-[10px] text-zinc-500 font-bold uppercase mb-3">
-          {t(lang, 'opening')} {formatCurrency(smartCash.openingCapital)} (yesterday's capital) + {t(lang, 'soldK')} {formatCurrency(smartCash.collected)}
-          {(() => {
-            const t = tenderToday[selected] || { cash: 0, momo: 0 };
-            return (t.cash > 0 || t.momo > 0) ? ` (cash ${formatCurrency(t.cash)} • phone ${formatCurrency(t.momo)})` : '';
-          })()}
-          {smartCash.drawerExpenses > 0 && <> − Expenses {formatCurrency(smartCash.drawerExpenses)}</>} − Moved {formatCurrency(smartCash.movedOut)} − Capital {formatCurrency(smartCash.closingCapital)}
-        </p>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <button onClick={() => {
-              const raw = window.prompt(`Recount opening cash for ${selected} (yesterday's capital)?`, String(smartCash.openingCapital));
-              if (raw === null) return;
-              const v = Math.max(0, Math.round(parseFloat(raw) || 0));
-              try { setClosingCapital(prevDayKey(todayKey), selected, v); } catch {}
-              try { localStorage.setItem(`boss_pos_counted_${todayKey}_${selected}`, ''); } catch {}
-              setCloseTicks(prev => ({ ...prev }));
-              triggerToast(`Opening recounted: ${formatCurrency(v)}`, 'success');
-            }}
-            title="Tap to recount yesterday's closing (today's opening)"
-            className="bg-black/30 rounded-xl p-2.5 cursor-pointer hover:border hover:border-gold-brand/40 border border-transparent transition-all text-center">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'opening')} ✎</p>
-            <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(smartCash.openingCapital)}</p>
-          </button>
-          <div className="bg-black/30 rounded-xl p-2.5">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'soldToday')}</p>
-            <p className="text-sm font-black text-cyan-300">{formatCurrency(smartCash.collected)}</p>
-          </div>
-          <div className="bg-black/30 rounded-xl p-2.5">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'unexplained')}</p>
-            <p className={`text-sm font-black ${smartCash.status === 'balanced' ? 'text-emerald-400' : smartCash.status === 'missing' ? 'text-rose-400' : 'text-amber-300'}`}>
-              {formatCurrency(Math.abs(smartCash.unaccounted))}
-            </p>
-          </div>
+      {/* Today: the overview in five figures — details live below. */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-2" aria-label="Today overview">
+        <div className="boss-card p-3 border-l-4 border-l-cyan-500">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Sold</p>
+          <p className="text-lg font-black text-white font-display mt-1">{fmt(stripStats.soldAll)}</p>
         </div>
-        <p className={`text-[11px] font-bold uppercase mt-2.5 ${smartCash.status === 'balanced' ? 'text-emerald-300' : smartCash.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}>
-          {smartCash.status === 'balanced' ? `✓ ${t(lang, 'balancedMsg')}` : smartCash.message}
-        </p>
-        {/* Physical count: type what is actually in the drawer. Expected =
-            kept capital + unexplained remainder. Variance ≠ 0 means miscount,
-            pocketed cash, or a missed Money-Out. Saved per day + department. */}
+        <div className={`boss-card p-3 border-l-4 ${stripStats.out > 0 ? 'border-l-rose-500' : 'border-l-emerald-500'}`}>
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Still out</p>
+          <p className={`text-lg font-black font-display mt-1 ${stripStats.out > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{stripStats.out > 0 ? fmt(stripStats.out) : '✓'}</p>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-gold-brand">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Drawer</p>
+          <p className="text-lg font-black text-gold-brand font-display mt-1">{fmt(allDrawer)}</p>
+        </div>
+        <div className="boss-card p-3 border-l-4 border-l-emerald-500">
+          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Phone</p>
+          <p className="text-lg font-black text-emerald-300 font-display mt-1">{fmt(allPhone)}</p>
+        </div>
+      </section>
+
+      {/* Flags live beneath their sections now (cash → Money, production →
+          Balance); shop-level ones stay here. Managers only. */}
+      {(() => {
+        const top = theftFlags.filter(f => f.kind !== 'unaccounted' && f.kind !== 'no-production' && f.kind !== 'momo').slice(0, 4);
+        if (top.length === 0 || blind) return null;
+        return (
+          <section className="space-y-2">
+            {top.map((f, i) => <FlagCard key={`${f.kind}-${i}`} f={f} />)}
+          </section>
+        );
+      })()}
+
+      {/* Cash check: what should be in the drawer, what is, the difference.
+          The full equation hides in an expander until someone needs it. */}
+      <section id="close-count" className={`boss-card p-4 rounded-2xl border ${smartCash.status === 'missing' ? 'border-rose-600/50' : smartCash.status === 'balanced' ? 'border-emerald-800/40' : 'border-white/5'}`}>
+        <h3 className="text-xs font-black text-white uppercase tracking-widest mb-3">
+          Cash check — {selected} today
+        </h3>
         {(() => {
           const countKey = `boss_pos_counted_${todayKey}_${selected}`;
           let counted = '';
@@ -746,47 +793,85 @@ export default function CategoryRegister({
           const countedNum = parseFloat(counted);
           const hasCount = counted.trim() !== '' && !isNaN(countedNum);
           const variance = hasCount ? Math.round(countedNum - expected) : 0;
+          const tender = tenderToday[selected] || { cash: 0, momo: 0 };
           return (
-            <div className="mt-3 bg-black/30 rounded-xl p-3 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'countedDrawer')}</p>
-                <input type="number" min="0" defaultValue={counted} key={countKey}
-                  placeholder="Type counted cash" id="tour-counted-drawer"
-                  onChange={(e) => { try { localStorage.setItem(countKey, e.target.value); } catch {} }}
-                  onBlur={(e) => {
-                    // Re-render so the variance line updates after typing.
-                    try { localStorage.setItem(countKey, e.target.value); } catch {}
-                    setCloseTicks(prev => ({ ...prev }));
+            <>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-black/30 rounded-xl p-2.5">
+                  <p className="text-[9px] font-bold text-zinc-500 uppercase">Expected in drawer</p>
+                  <p className="text-base font-black text-white tabular-nums mt-0.5">{fmt(expected)}</p>
+                </div>
+                <div className="bg-black/30 rounded-xl p-2.5">
+                  <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'countedDrawer')}</p>
+                  <input type="number" min="0" defaultValue={counted} key={countKey}
+                    placeholder="—" id="tour-counted-drawer"
+                    onChange={(e) => { try { localStorage.setItem(countKey, e.target.value); } catch {} }}
+                    onBlur={(e) => {
+                      try { localStorage.setItem(countKey, e.target.value); } catch {}
+                      bump();
+                    }}
+                    className="mt-1 w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-lg h-9 px-2 text-sm font-black tabular-nums focus:border-gold-brand outline-none text-center" />
+                </div>
+                <div className="bg-black/30 rounded-xl p-2.5">
+                  <p className="text-[9px] font-bold text-zinc-500 uppercase">Difference</p>
+                  {!hasCount ? (
+                    <p className="text-base font-black text-zinc-600 tabular-nums mt-0.5">—</p>
+                  ) : (
+                    <p className={`text-base font-black tabular-nums mt-0.5 ${variance === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {variance === 0 ? '✓ 0' : `${variance > 0 ? '+' : '−'}${fmt(Math.abs(variance))}`}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <p className={`text-[11px] font-bold uppercase mt-2 ${blind ? 'text-zinc-500' : smartCash.status === 'balanced' ? 'text-emerald-300' : smartCash.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}>
+                {blind ? 'Noted — the manager sees the rest.' : smartCash.status === 'balanced' ? `✓ ${t(lang, 'balancedMsg')}` : smartCash.message}
+              </p>
+              <details className="mt-2 bg-black/20 rounded-xl px-3 py-2">
+                <summary className="text-[10px] font-black text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-300">How BOSS calculated this</summary>
+                <div className="mt-1.5 space-y-0.5 text-[11px] font-bold tabular-nums">
+                  <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Opening (yesterday kept)</span><span className="text-zinc-200">{fmt(smartCash.openingCapital)}</span></div>
+                  <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Sold today</span><span className="text-zinc-200">{fmt(smartCash.collected)}{(tender.cash > 0 || tender.momo > 0) ? ` (cash ${fmt(tender.cash)} • phone ${fmt(tender.momo)})` : ''}</span></div>
+                  {smartCash.drawerExpenses > 0 && (
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Drawer expenses</span><span className="text-zinc-200">−{fmt(smartCash.drawerExpenses)}</span></div>
+                  )}
+                  <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Moved out</span><span className="text-zinc-200">−{fmt(smartCash.movedOut)}</span></div>
+                  <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Kept as capital</span><span className="text-zinc-200">−{fmt(smartCash.closingCapital)}</span></div>
+                  <div className="flex justify-between gap-2 pt-0.5 border-t border-white/5"><span className="text-zinc-400 uppercase">Expected</span><span className="text-white font-black">{fmt(expected)}</span></div>
+                </div>
+                <button onClick={() => {
+                    const raw = window.prompt(`Recount opening cash for ${selected} (yesterday's capital)?`, String(blind ? '' : smartCash.openingCapital));
+                    if (raw === null) return;
+                    const v = Math.max(0, Math.round(parseFloat(raw) || 0));
+                    try { setClosingCapital(prevDayKey(todayKey), selected, v); } catch {}
+                    try { localStorage.setItem(`boss_pos_counted_${todayKey}_${selected}`, ''); } catch {}
+                    bump();
+                    triggerToast(`Opening recounted: ${formatCurrency(v)}`, 'success');
                   }}
-                  className="mt-1 w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-lg h-10 px-3 text-sm font-black tabular-nums focus:border-gold-brand outline-none" />
-              </div>
-              <div className="text-right shrink-0">
-                <p className="text-[9px] font-bold text-zinc-500 uppercase">{t(lang, 'shouldBe')}</p>
-                <p className="text-sm font-black text-zinc-200 tabular-nums">{formatCurrency(expected)}</p>
-                {hasCount && (
-                  <p className={`text-xs font-black tabular-nums mt-0.5 ${variance === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {variance === 0 ? '✓ exact' : `${variance > 0 ? '+' : '−'}${formatCurrency(Math.abs(variance))} ${variance > 0 ? 'extra' : 'short'}`}
-                  </p>
-                )}
-              </div>
-            </div>
+                  title="Tap to recount yesterday's closing (today's opening)"
+                  className="mt-1.5 text-[10px] font-black text-zinc-500 uppercase tracking-wider hover:text-gold-brand cursor-pointer">
+                  {t(lang, 'opening')} ✎ recount
+                </button>
+              </details>
+            </>
           );
         })()}
       </section>
 
-      {/* Close-the-day ritual: work the steps top to bottom, tick each off. */}
-      {isOn(features, 'closeWizard' as FeatureKey) && (() => {
+      {/* Close the day: the genuine closing sequence — check, count, finish.
+          Ticks persist; tapping a row jumps to its section. */}
+      {(() => {
         const steps = [
-          { key: 'balance', label: 'Review today\u2019s balance', hint: `${balanceRows.length} lines \u2022 ${totalAutoCarry} auto-carry`, target: 'close-balance' },
-          { key: 'losses', label: 'Log today\u2019s leftovers & losses', hint: `${todayLossCount} logged \u2022 lost ${formatCurrency(todayWastage)}${todayCarried > 0 ? ` \u2022 carried ${formatCurrency(todayCarried)}` : ''}`, target: 'close-losses' },
-          { key: 'money', label: 'Move today\u2019s money', hint: `${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`, target: 'close-money' },
+          { key: 'business', label: 'Check today\u2019s business', hint: `${fmt(collectedToday)} sold \u2022 ${openCredits.length} debt${openCredits.length !== 1 ? 's' : ''} open`, target: 'close-glance' },
+          ...(showProduction ? [{ key: 'leftovers', label: 'Check leftovers & losses', hint: `${balanceRows.length} lines \u2022 ${totalAutoCarry} auto-carry`, target: 'close-balance' }] : []),
+          { key: 'money', label: 'Check money moved', hint: `${fmt(sentToday)} of ${fmt(collectedToday)} moved out`, target: 'close-money' },
+          { key: 'cash', label: 'Count cash', hint: 'Drawer count typed', target: 'close-count' },
         ];
         const done = steps.filter(s => closeTicks[s.key]).length;
         return (
-          <section className="boss-card p-4 rounded-2xl border border-gold-brand/20">
+          <section id="close-steps" className="boss-card p-4 rounded-2xl border border-gold-brand/20 scroll-mt-20">
             <div className="flex items-center justify-between mb-1.5">
               <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Close the day — {selected}</h3>
-              <span className="text-[11px] font-black text-gold-brand tabular-nums">{done}/3</span>
+              <span className="text-[11px] font-black text-gold-brand tabular-nums">{done}/{steps.length}</span>
             </div>
             <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
               <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((done / steps.length) * 100)}%` }} />
@@ -803,27 +888,45 @@ export default function CategoryRegister({
                   <button onClick={() => scrollToSection(s.target)}
                     className="flex-1 min-w-0 text-left bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-xl px-3 py-2 transition-all cursor-pointer">
                     <span className="text-xs font-black text-zinc-100 uppercase tracking-wider">{i + 1}. {s.label}</span>
-                    <span className="block text-[10px] text-zinc-500 font-bold mt-0.5">{s.hint} \u2014 tap to jump</span>
+                    <span className="block text-[10px] text-zinc-500 font-bold mt-0.5">{s.hint} — tap to jump</span>
                   </button>
                 </div>
               ))}
             </div>
-            {(onPrintClose || onSendClose) && (
-              <div className="flex gap-2 mt-3">
-                {onPrintClose && (
-                  <button onClick={onPrintClose}
-                    className="flex-1 h-11 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-xl text-xs font-black uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
-                    Print close (PDF)
+            <div className="mt-3">
+              {dayClosedAt ? (
+                <div className="rounded-xl border border-emerald-600/40 bg-emerald-950/25 px-3 py-2.5">
+                  <p className="text-xs font-black text-emerald-300 uppercase tracking-wider">
+                    Day closed ✓ {new Date(dayClosedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — tonight's records are locked as the closing record.
+                  </p>
+                  <button onClick={reopenDay}
+                    className="mt-1.5 text-[10px] font-black text-zinc-500 uppercase tracking-wider hover:text-zinc-300 cursor-pointer">
+                    Reopen day
                   </button>
-                )}
-                {onSendClose && (
-                  <button onClick={onSendClose}
-                    className="flex-1 h-11 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60 transition-all cursor-pointer">
-                    WhatsApp owner
+                </div>
+              ) : (
+                <>
+                  <button onClick={finishCloseDay}
+                    className="w-full h-12 bg-gold-brand text-black rounded-xl text-sm font-black uppercase tracking-widest hover:opacity-90 active:scale-[0.99] transition-all cursor-pointer font-display">
+                    Close day
                   </button>
-                )}
-              </div>
-            )}
+                  <div className="flex gap-2 mt-2">
+                    {onPrintClose && (
+                      <button onClick={onPrintClose}
+                        className="flex-1 h-11 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-xl text-xs font-black uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                        Print close (PDF)
+                      </button>
+                    )}
+                    {notifyOwner && onSendClose && (
+                      <button onClick={onSendClose}
+                        className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 hover:bg-emerald-950/60 ${collectedToday > sentToday ? 'animate-pulse' : ''}`}>
+                        WhatsApp owner
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </section>
         );
       })()}
@@ -838,6 +941,9 @@ export default function CategoryRegister({
           <input type="date" value={balanceDate} max={todayStr()} onChange={e => setBalanceDate(e.target.value || todayStr())}
             className="bg-zinc-900 border border-zinc-800 text-white rounded-lg h-9 px-2 text-xs outline-none focus:border-gold-brand" />
         }>
+        {!blind && theftFlags.filter(f => f.kind === 'no-production').slice(0, 3).map((f, i) => (
+          <div key={`b-${i}`} className="mb-2"><FlagCard f={f} /></div>
+        ))}
         {balanceRows.length === 0 ? (
           <div className="text-center py-6">
             <CalendarDays className="w-9 h-9 text-gold-brand/40 mx-auto mb-2" />
@@ -853,7 +959,7 @@ export default function CategoryRegister({
                     {totalAutoCarry} item{totalAutoCarry !== 1 ? 's' : ''} auto-carry → tomorrow (unless logged expired)
                   </p>
                 </div>
-                {balanceRows.some(r => r.recon > 0 && r.carried <= 0) && (
+                {balanceRows.some(r => r.recon > 0 && (r.carried <= 0 || Math.round((r.recon - r.carried) * 1000) / 1000 !== 0)) && (
                   <>
                     <button onClick={carryAll}
                       className="mt-2 w-full h-10 bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-emerald-500/20 active:scale-[0.99] transition-all cursor-pointer">
@@ -872,13 +978,14 @@ export default function CategoryRegister({
                     <th className="text-right py-1.5 px-2 font-bold text-amber-400">{t(lang, 'madeK')}</th>
                     <th className="text-right py-1.5 px-2 font-bold text-emerald-400">{t(lang, 'soldK')}</th>
                     <th className="text-right py-1.5 px-2 font-bold text-rose-400">{t(lang, 'lostK')}</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-amber-400">{t(lang, 'carriedK')}</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-emerald-300">Left</th>
                     <th className="text-right py-1.5 pl-2 font-bold">{t(lang, 'checkK')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {balanceRows.map(({ product, opening, made, sold, lost, carried, recon }) => {
                     const status = recon > 0 ? 'tray' : recon < 0 ? 'fromStock' : 'ok';
+                    const gap = Math.round((recon - carried) * 1000) / 1000;
                     return (
                       <tr key={product.id} className="border-t border-white/5">
                         <td className="py-2 pr-2 font-bold text-white truncate max-w-[120px]">
@@ -888,19 +995,19 @@ export default function CategoryRegister({
                         <td className="py-2 px-2 text-right font-mono text-amber-400">{made || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-emerald-400">{sold || '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-rose-400">{lost || '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-amber-300">{carried || '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-emerald-300"
+                          title={recon > 0 ? `${recon} left — carries to tomorrow unless logged expired` : undefined}>
+                          {recon > 0 ? `→${recon}` : recon < 0 ? `−${Math.abs(recon)}` : '—'}
+                        </td>
                         <td className="py-2 pl-2 text-right">
-                          {status === 'ok' ? (
-                            <span className="text-emerald-400 font-black">✓</span>
+                          {status === 'ok' || (status === 'tray' && carried > 0 && gap === 0) ? (
+                            <span className="text-emerald-400 font-black" title={status === 'tray' ? 'Tray count confirmed' : undefined}>✓</span>
                           ) : status === 'tray' ? (
-                            <span className="inline-flex items-center gap-1">
-                              <span className="text-emerald-300 font-black tabular-nums" title="Auto-carries to tomorrow unless logged expired">→{recon}</span>
-                              {carried <= 0 && (
-                                <button onClick={() => carryRow({ product, recon })}
-                                  title={`Log tray count ${recon} (optional — auto-carries anyway)`}
-                                  className="text-[10px] font-black uppercase tracking-wider text-zinc-500 border border-white/10 rounded-lg px-1.5 py-0.5 hover:border-emerald-500/40 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer tabular-nums">log</button>
-                              )}
-                            </span>
+                            <button onClick={() => carryRow({ product, recon })}
+                              title={`${recon} left according to BOSS — tap to confirm the actual count`}
+                              className="text-[10px] font-black uppercase tracking-wider text-zinc-300 border border-white/10 rounded-lg px-1.5 py-0.5 hover:border-emerald-500/40 hover:text-emerald-300 active:scale-95 transition-all cursor-pointer tabular-nums">
+                              {carried > 0 ? 'Recount' : 'Confirm actual count'}
+                            </button>
                           ) : (
                             <span className="text-zinc-500 font-bold" title="Sold more than opening + made — covered from earlier stock">−{Math.abs(recon)}</span>
                           )}
@@ -918,13 +1025,13 @@ export default function CategoryRegister({
 
 
       {/* ============ 2. REMAINING / EXPIRED (LOSES) ============ */}
-      <CloseSection id="close-losses" icon={PackageX} title={`${t(lang, 'remainingK')} / ${t(lang, 'expiredK')} (${t(lang, 'losses')})`}
-        hint={`${todayLossCount} logged • lost ${formatCurrency(todayWastage)}`}
+      <CloseSection id="close-losses" icon={PackageX} title="Leftovers & losses"
+        hint={`${todayLossCount} logged • lost ${fmt(todayWastage)}`}
         open={secOpen.losses} onToggle={() => toggleSec('losses')}
         action={
           <button onClick={() => setShowWasteForm(v => !v)}
             className="flex items-center gap-1 text-[10px] bg-rose-600/20 text-rose-400 border border-rose-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
-            <Plus className="w-3.5 h-3.5" /> {showWasteForm ? t(lang, 'closeBtn') : t(lang, 'logLoss')}
+            <Plus className="w-3.5 h-3.5" /> {showWasteForm ? t(lang, 'closeBtn') : '+ Add entry'}
           </button>
         }>
         {/* History range lives here now — it filters the loss list below. */}
@@ -952,7 +1059,7 @@ export default function CategoryRegister({
                 <select value={wasteItem} onChange={e => selectOnChange(e.target.value, setWasteCustomItem, setWasteItem, setWasteCost, setWasteProductId)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold" autoFocus>
                   <option value="">Select item...</option>
-                  {catProducts.map(p => <option key={p.id} value={p.name}>{p.name} — cost {formatCurrency(p.cost)}</option>)}
+                  {catProducts.map(p => <option key={p.id} value={p.name}>{blind ? p.name : `${p.name} — cost ${fmt(p.cost)}`}</option>)}
                   <option value="__custom">Other / custom item...</option>
                 </select>
                 {wasteItem === '__custom' && (
@@ -977,11 +1084,11 @@ export default function CategoryRegister({
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-rose-500" />
               </div>
               <div>
-                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Reason</label>
+                <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">What happened?</label>
                 <div className="flex gap-2">
                   <button onClick={() => setWasteReason('remaining')}
                     className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider border cursor-pointer transition-all ${wasteReason === 'remaining' ? 'bg-amber-600/20 border-amber-500/50 text-amber-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}>
-                    Remaining
+                    Left over
                   </button>
                   <button onClick={() => setWasteReason('expired')}
                     className={`flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider border cursor-pointer transition-all ${wasteReason === 'expired' ? 'bg-rose-600/20 border-rose-500/50 text-rose-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}>
@@ -992,8 +1099,8 @@ export default function CategoryRegister({
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold text-zinc-400 uppercase">
-                {wasteReason === 'remaining' ? 'Carried value: ' : 'Loss value: '}
-                <span className={`${wasteReason === 'remaining' ? 'text-amber-300' : 'text-rose-400'} font-black text-base`}>{formatCurrency((parseInt(wasteQty, 10) || 0) * (parseFloat(wasteCost) || 0))}</span>
+                {wasteReason === 'remaining' ? 'Left-over value: ' : 'Loss value: '}
+                <span className={`${wasteReason === 'remaining' ? 'text-amber-300' : 'text-rose-400'} font-black text-base`}>{fmt((parseInt(wasteQty, 10) || 0) * (parseFloat(wasteCost) || 0))}</span>
               </p>
               <button onClick={handleSubmitWastage}
                 className="h-11 px-5 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
@@ -1020,14 +1127,14 @@ export default function CategoryRegister({
                     <p className="text-sm font-black text-white truncate">{w.item}
                       <span className={`ml-2 text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${w.reason === 'expired' ? 'bg-rose-600/20 text-rose-400' : 'bg-amber-600/20 text-amber-400'}`}>{w.reason}</span>
                     </p>
-                    <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(w.date)} • {w.qty} × {formatCurrency(w.costEach)}</p>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatDay(w.date)} • {w.qty} × {fmt(w.costEach)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {w.reason === 'remaining' ? (
-                    <p className="text-sm font-black text-amber-300 font-display" title="Carried to tomorrow — not a loss">{formatCurrency(w.lossAmount)} →</p>
+                    <p className="text-sm font-black text-amber-300 font-display" title="Carried to tomorrow — not a loss">{fmt(w.lossAmount)} →</p>
                   ) : (
-                    <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(w.lossAmount)}</p>
+                    <p className="text-sm font-black text-rose-400 font-display">-{fmt(w.lossAmount)}</p>
                   )}
                   <button onClick={() => { onDeleteWastage(w.id); triggerToast('Entry deleted', 'info'); }}
                     className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
@@ -1041,8 +1148,8 @@ export default function CategoryRegister({
       </CloseSection>
 
       {/* ============ 3. MONEY OUT — mobile money / owner / float ============ */}
-      <CloseSection id="close-money" icon={Smartphone} title={`${t(lang, 'moneyOut')} (who took it & where)`}
-        hint={`${formatCurrency(sentToday)} of ${formatCurrency(collectedToday)} moved out`}
+      <CloseSection id="close-money" icon={Smartphone} title="Money moved"
+        hint="Where today's money went"
         open={secOpen.money} onToggle={() => toggleSec('money')}
         action={
           <button onClick={() => setShowMomoForm(v => !v)} id="tour-record-money"
@@ -1051,37 +1158,41 @@ export default function CategoryRegister({
           </button>
         }>
 
+        <p className="text-[11px] text-zinc-400 font-bold uppercase mb-3">Where did the money go?</p>
+        {!blind && theftFlags.filter(f => f.kind === 'unaccounted' || f.kind === 'momo').slice(0, 3).map((f, i) => (
+          <div key={`m-${i}`} className="mb-2"><FlagCard f={f} /></div>
+        ))}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Collected today</p>
-            <p className="text-base font-black text-cyan-400 font-display">{formatCurrency(collectedToday)}</p>
+            <p className="text-base font-black text-cyan-400 font-display">{fmt(collectedToday)}</p>
           </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Moved out today</p>
-            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(sentToday)}</p>
+          <div className={`rounded-xl p-3 border ${collectedToday - sentToday > 0 ? 'bg-amber-950/30 border-amber-600/40' : 'bg-zinc-950/60 border-white/5'}`}>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Left to move</p>
+            <p className={`text-base font-black font-display ${collectedToday - sentToday > 0 ? 'text-amber-300' : 'text-emerald-400'}`}>{collectedToday - sentToday > 0 ? fmt(collectedToday - sentToday) : '✓'}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Float (on MoMo)</p>
-            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(floatOutToday)}</p>
+            <p className="text-base font-black text-emerald-400 font-display">{fmt(floatOutToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Cash / Owner</p>
-            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(cashOutToday + ownerOutToday)}</p>
+            <p className="text-base font-black text-amber-400 font-display">{fmt(cashOutToday + ownerOutToday)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Banked</p>
-            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(bankOutToday)}</p>
+            <p className="text-base font-black text-sky-300 font-display">{fmt(bankOutToday)}</p>
           </div>
         </div>
 
-        {/* Daily capital: yesterday's closing auto-carries as today's opening.
-            Set tonight's keep-aside — tomorrow opens with it. */}
+        {/* Tomorrow's opening: tonight's keep-aside is what the drawer opens with. */}
         {onSetEodCapital && (
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3 mb-3">
             <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
-              Capital chain — {selected} (opening {formatCurrency(smartCash.openingCapital)} → closing for tomorrow)
+              Tomorrow's opening — {selected}
             </label>
             <div className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-500 font-bold uppercase shrink-0">Keep in business</span>
               <input type="number" min="0" step="1000" inputMode="numeric" id="tour-capital-input"
                 value={capForSelected || ''}
                 onChange={(e) => {
@@ -1089,20 +1200,20 @@ export default function CategoryRegister({
                   try { setClosingCapital(todayKey, selected, v); } catch {}
                   onSetEodCapital(selected, v);
                 }}
-                placeholder="e.g. 10000 kept in drawer"
+                placeholder="e.g. 10000"
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-10 px-3 text-sm outline-none focus:border-gold-brand font-bold" />
             </div>
             <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">
-              Yesterday left {formatCurrency(smartCash.openingCapital)} → today opens with it. Buy ingredients from it and the drawer math above tracks where it went.
+              Tomorrow starts with {fmt(capForSelected)}.
             </p>
             {collectedToday > 0 && capForSelected > 0 && (
               <p className="text-[10px] text-gold-brand font-bold uppercase mt-1.5">
-                Keep {formatCurrency(capForSelected)} as capital → send profit of approx {formatCurrency(profitToSend)}
+                Keep {fmt(capForSelected)} → send profit of approx {fmt(profitToSend)}
               </p>
             )}
             {collectedToday > 0 && capForSelected === 0 && (
               <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">
-                No capital set — the full {formatCurrency(collectedToday)} is treated as sendable profit.
+                No capital set — the full {fmt(collectedToday)} is treated as sendable profit.
               </p>
             )}
           </div>
@@ -1137,7 +1248,7 @@ export default function CategoryRegister({
               {collectedToday > 0 && (
                 <button onClick={() => setMomoAmount(String(collectedToday))}
                   className="mt-1 text-[10px] text-cyan-400 font-bold uppercase tracking-wider cursor-pointer">
-                  Use collected total {formatCurrency(collectedToday)}
+                  Use collected total {fmt(collectedToday)}
                 </button>
               )}
             </div>
@@ -1177,7 +1288,7 @@ export default function CategoryRegister({
               return (
                 <div key={t.id} className="bg-zinc-900/50 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-sm font-black text-emerald-400 font-display">{formatCurrency(t.amount)}
+                    <p className="text-sm font-black text-emerald-400 font-display">{fmt(t.amount)}
                       <span className="ml-2 text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{d?.icon} {d?.label}</span>
                     </p>
                     <p className="text-[10px] text-zinc-500 font-bold uppercase">
@@ -1198,7 +1309,7 @@ export default function CategoryRegister({
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
       <CloseSection icon={Users} title="Ababanjibwa Sente"
-        hint={openCredits.length > 0 ? `${formatCurrency(outstanding)} outstanding` : 'books clear'}
+        hint={openCredits.length > 0 ? (blind ? `${openCredits.length} to collect` : `${formatCurrency(outstanding)} outstanding`) : 'Customers who still owe you — books clear'}
         open={secOpen.credit} onToggle={() => toggleSec('credit')}
         action={
           <button onClick={() => setShowCreditForm(v => !v)}
@@ -1333,81 +1444,22 @@ export default function CategoryRegister({
         )}
       </CloseSection>
 
-      {/* Today at a glance: summary tiles + where the money sits */}
-      <CloseSection icon={LayoutGrid} title="Today at a glance"
-        hint={`${formatCurrency(allCollectedToday)} sold • ${formatCurrency(allFloatOut + allCashOut + allOwnerOut + allBankOut)} moved`}
+      {/* Money across all departments: the reconciliation detail. */}
+      <CloseSection id="close-glance" icon={LayoutGrid} title="Money across all departments"
+        hint="per-department reconciliation"
         open={secOpen.glance} onToggle={() => toggleSec('glance')}>
-      {/* Today summary */}
-      <section className="grid grid-cols-3 gap-2">
-        {showProduction && (
-        <div className="boss-card p-3 border-l-4 border-l-amber-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'madeK')} • today</p>
-          <p className="text-lg font-black text-white font-display mt-1">{formatCurrency(todayProdCost)}</p>
-        </div>
-        )}
-        <div className="boss-card p-3 border-l-4 border-l-rose-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'losses')} • today</p>
-          <p className="text-lg font-black text-rose-400 font-display mt-1">{formatCurrency(todayWastage)}</p>
-          {todayCarried > 0 && (
-            <p className="text-[10px] text-amber-300 font-bold uppercase mt-0.5">+ {formatCurrency(todayCarried)} carried → tomorrow</p>
-          )}
-        </div>
-        <div className="boss-card p-3 border-l-4 border-l-emerald-500">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'outstanding')}</p>
-          <p className="text-lg font-black text-emerald-400 font-display mt-1">{formatCurrency(outstanding)}</p>
-        </div>
-        <div className="boss-card p-3 border-l-4 border-l-cyan-500 col-span-3 sm:col-span-1">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'collectedToday')}</p>
-          <p className="text-lg font-black text-cyan-400 font-display mt-1">{formatCurrency(collectedToday)}</p>
-          <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
-            {t(lang, 'floatK')}: <span className="text-emerald-400 font-black">{formatCurrency(floatOutToday)}</span>
-            {' · '}Cash: <span className="text-zinc-300 font-black">{formatCurrency(cashOutToday)}</span>
-            {' · '}Owner: <span className="text-amber-400 font-black">{formatCurrency(ownerOutToday)}</span>
-            {' · '}Bank: <span className="text-sky-300 font-black">{formatCurrency(bankOutToday)}</span>
-          </p>
-        </div>
-      </section>
-
       {/* Where the money is today — across ALL departments */}
       <section className="boss-card p-4 rounded-2xl border border-cyan-900/40 bg-cyan-950/10">
-        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-          <Wallet className="w-3.5 h-3.5 text-cyan-400" /> Where the money is today (all departments)
-        </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'soldToday')}</p>
-            <p className="text-base font-black text-white font-display">{formatCurrency(allCollectedToday)}</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To owner (total)</p>
+            <p className="text-base font-black text-amber-400 font-display">{fmt(ownerTotal)}</p>
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'floatK')}</p>
-            <p className="text-base font-black text-emerald-400 font-display">{formatCurrency(allFloatOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash</p>
-            <p className="text-base font-black text-zinc-300 font-display">{formatCurrency(allCashOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'ownerK')}</p>
-            <p className="text-base font-black text-amber-400 font-display">{formatCurrency(allOwnerOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{t(lang, 'bankK')}</p>
-            <p className="text-base font-black text-sky-300 font-display">{formatCurrency(allBankOut)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-gold-brand/30 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Cash in drawers</p>
-            <p className="text-base font-black text-gold-brand font-display">{formatCurrency(allDrawer)}</p>
-          </div>
-          <div className="bg-zinc-950/60 border border-emerald-600/30 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Sente zesimu (phone)</p>
-            <p className="text-base font-black text-emerald-300 font-display">{formatCurrency(allPhone)}</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Banked (total)</p>
+            <p className="text-base font-black text-sky-300 font-display">{fmt(bankTotal)}</p>
           </div>
         </div>
-        <p className="text-[10px] text-zinc-600 mt-2">
-          Still held: <span className="text-gold-brand font-black">{formatCurrency(allDrawer)}</span> drawer
-          {' · '}<span className="text-emerald-300 font-black">{formatCurrency(allPhone)}</span> phone —
-          capital kept stays in the drawer and opens tomorrow.
-        </p>
 
         {/* Reconciliation: opening capital + tender buckets per dept — where
             it should still be, drawer cash vs phone money */}
@@ -1433,13 +1485,13 @@ export default function CategoryRegister({
                 return (
                   <tr key={cat} className={`border-t border-white/5 ${cat === selected ? 'text-white' : 'text-zinc-400'}`}>
                     <td className="py-1.5 pr-2">{cat}</td>
-                    <td className="text-right px-2">{formatCurrency(sold)}</td>
-                    <td className="text-right px-2 text-emerald-400">{formatCurrency(m.float)}</td>
-                    <td className="text-right px-2 text-zinc-300">{formatCurrency(m.cash)}</td>
-                    <td className="text-right px-2 text-amber-400">{formatCurrency(m.owner)}</td>
-                    <td className="text-right px-2 text-sky-300">{formatCurrency(m.bank)}</td>
-                    <td className="text-right px-2 font-black text-gold-brand">{formatCurrency(b.drawer)}</td>
-                    <td className="text-right pl-2 font-black text-emerald-300">{formatCurrency(b.phone)}</td>
+                    <td className="text-right px-2">{fmt(sold)}</td>
+                    <td className="text-right px-2 text-emerald-400">{fmt(m.float)}</td>
+                    <td className="text-right px-2 text-zinc-300">{fmt(m.cash)}</td>
+                    <td className="text-right px-2 text-amber-400">{fmt(m.owner)}</td>
+                    <td className="text-right px-2 text-sky-300">{fmt(m.bank)}</td>
+                    <td className="text-right px-2 font-black text-gold-brand">{fmt(b.drawer)}</td>
+                    <td className="text-right pl-2 font-black text-emerald-300">{fmt(b.phone)}</td>
                   </tr>
                 );
               })}
@@ -1448,6 +1500,32 @@ export default function CategoryRegister({
         </div>
       </section>
       </CloseSection>
+
+      {/* Need help? Corner coach for new closers — the 30-second how-to. */}
+      <button onClick={() => setShowCloseHelp(true)} title="How do I close the day?"
+        aria-label="How to close the day"
+        className="fixed bottom-24 right-4 z-[70] w-12 h-12 rounded-full bg-gold-brand text-black font-black text-lg shadow-2xl active:scale-90 transition-transform cursor-pointer flex items-center justify-center border border-black/20">
+        ?
+      </button>
+      {showCloseHelp && (
+        <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-4" role="dialog" aria-label="How to close the day">
+          <div className="absolute inset-0 bg-black/70" onClick={() => setShowCloseHelp(false)} />
+          <div className="relative bg-[#141414] border border-gold-brand/40 rounded-3xl p-5 max-w-md w-full shadow-2xl animate-tour-card-in">
+            <h3 className="text-sm font-black text-white uppercase tracking-wider">Closing in 5 moves</h3>
+            <ol className="mt-3 space-y-2 text-xs text-zinc-300 font-bold leading-relaxed">
+              <li><span className="text-gold-brand font-black">1 · Count.</span> Count the cash in the drawer, type it. Count blind — never type what the till expects.</li>
+              <li><span className="text-gold-brand font-black">2 · Food.</span> Leftover carries itself to tomorrow. Only spoiled food gets logged, as expired.</li>
+              <li><span className="text-gold-brand font-black">3 · Losses.</span> Log what was lost or carried, nothing else.</li>
+              <li><span className="text-gold-brand font-black">4 · Move.</span> Record every shilling: float, cash, owner, bank. Keep tomorrow's opening.</li>
+              <li><span className="text-gold-brand font-black">5 · Done.</span> Send tonight's books to the owner on WhatsApp.</li>
+            </ol>
+            <button onClick={() => setShowCloseHelp(false)}
+              className="mt-4 w-full h-11 bg-gold-brand text-black rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer active:scale-95 transition-all">
+              Got it — back to closing
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Payment modal */}
       {statementFor && (

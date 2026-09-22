@@ -21,7 +21,7 @@ import { downloadBlob } from './utils/download';
 import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
-import { localDayKey, todayLocalKey, isPastClose } from './utils/dates';
+import { isPastClose } from './utils/dates';
 import { readSyncReview, clearSyncReview, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
@@ -153,7 +153,7 @@ function removeDeletedExpense(id: string): void {
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
-  'openTime','closeTime','closedDays',
+  'openTime','closeTime','closedDays','blindClose','closeNotifyOwner',
 ]);
 function serializeSettings(s: StoreSettings): string {
   const filtered: Record<string, unknown> = {};
@@ -2088,41 +2088,12 @@ Count the drawer now (UGX)? Empty = skip.`, '');
       case 'sales':
         return (
           <ErrorBoundary key="sales">
-          {isManager && isOn(settings.features, 'briefing') && (
+          {isOn(settings.features, 'briefing') && (
             <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
-              dailyGoal={settings.dailyGoalNum} dailyGoalRevenue={settings.dailyGoalRevenue} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital} />
+              dailyGoal={settings.dailyGoalNum} dailyGoalRevenue={settings.dailyGoalRevenue} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital}
+              managerView={isManager || !staffConfigured} sellerName={activeStaff?.name || staffName} />
           )}
-          {!isManager && staffConfigured && activeStaff && (() => {
-            // Cashiers can't open Reports — this strip is their self check-in.
-            const today = todayLocalKey();
-            const mine = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === activeStaff.name);
-            const total = mine.reduce((a, s) => a + s.total, 0);
-            let handover: { at: string; from: string; to: string; amount: number } | null = null;
-            try {
-              const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
-              if (Array.isArray(log) && log[0]) handover = log[0];
-            } catch {}
-            if (mine.length === 0 && !handover) return null;
-            return (
-              <section className="boss-card px-4 py-3 rounded-2xl mb-4 space-y-1">
-                <div className="flex items-center gap-3">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
-                  <p className="text-[11px] font-black text-zinc-300 uppercase tracking-wider flex-1 min-w-0 truncate">
-                    {activeStaff.name} today
-                  </p>
-                  <p className="text-xs font-black text-gold-brand tabular-nums shrink-0">
-                    {mine.length} sale{mine.length !== 1 ? 's' : ''} • {formatCurrency(total)}
-                  </p>
-                </div>
-                {handover && (
-                  <p className="text-[10px] text-zinc-500 font-bold uppercase truncate pl-5">
-                    Handover {handover.from} → {handover.to}: {formatCurrency(handover.amount)}
-                  </p>
-                )}
-              </section>
-            );
-          })()}
           {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
               window.matchMedia('(display-mode: standalone)').matches ||
@@ -2312,6 +2283,8 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             }}
             features={settings.features}
             pastClose={isPastClose(settings)}
+            blind={!!settings.blindClose && !isManager}
+            notifyOwner={settings.closeNotifyOwner !== false}
           />
           </Suspense>
           </ErrorBoundary>
@@ -3105,6 +3078,20 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   <span className="text-[10px] text-gold-brand font-black uppercase">Switch</span>
                 </button>
                 <p className="text-[10px] text-zinc-600">Every sale is stamped with this name so Reports can show sales by seller.</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Close-out <SettingHelp label="Close-out" text="No manager at close? Cashiers do the evening close blind: they count, move and log, but never see totals. The manager gets it all on WhatsApp instead." /></label>
+                <button onClick={() => setSettings(prev => ({ ...prev, blindClose: !prev.blindClose }))}
+                  title="Cashiers close without seeing any totals"
+                  className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border ${settings.blindClose ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                  {settings.blindClose ? 'Blind close: On (cashiers never see totals)' : 'Blind close: Off'}
+                </button>
+                <button onClick={() => setSettings(prev => ({ ...prev, closeNotifyOwner: prev.closeNotifyOwner === false }))}
+                  title="After closing, prompt a WhatsApp summary to the owner number"
+                  className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border ${settings.closeNotifyOwner !== false ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                  {settings.closeNotifyOwner !== false ? 'WhatsApp owner after close: On' : 'WhatsApp owner after close: Off'}
+                </button>
+                <p className="text-[10px] text-zinc-600">Blind = count blind so figures can't be cooked to match. Needs the owner number below (Data section) for the WhatsApp handoff.</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">

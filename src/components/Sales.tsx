@@ -26,7 +26,7 @@ import Fuse from 'fuse.js';
 import { unitLabel, parseQty } from '../utils/units';
 import { t } from '../utils/i18n';
 import { isOn } from '../utils/features';
-import { findMissingProduction, openingForDay } from '../utils/cashflow';
+import { findMissingProduction, openingForDay, leftoverFor, prevDayKey } from '../utils/cashflow';
 import { todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
@@ -482,6 +482,22 @@ export default function Sales({
     }
     return res.map(r => r.item);
   }, [byCategory, fuse, searchQuery]);
+
+  // Area workspace: yesterday's carried tray for fresh-food areas — the
+  // kitchen makes less today and sells leftover first. Tap jumps to Production.
+  const trayStatus = useMemo(() => {
+    if (selectedCategory !== 'Eatery' && selectedCategory !== 'Drinks') return [];
+    try {
+      return leftoverFor(products, productionRegisters, salesHistory, wastageLogs, prevDayKey(todayLocalKey()))
+        .filter(r => r.leftover > 0)
+        .slice(0, 3);
+    } catch { return []; }
+  }, [selectedCategory, products, productionRegisters, salesHistory, wastageLogs]);
+  const areaLabel = selectedCategory === 'Eatery' ? 'Eatery workspace'
+    : selectedCategory === 'Drinks' ? 'Drinks workspace'
+    : selectedCategory === 'Tailoring' ? 'Tailoring workspace'
+    : selectedCategory === 'Graphics' ? 'Design workspace'
+    : 'Workspace';
 
   const handleAddToCart = (product: Product) => {
     if (product.stockQty <= 0 && !product.isService) {
@@ -1427,6 +1443,18 @@ export default function Sales({
           ((settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders) ||
           (settings?.showBookings && !showBookings) ||
           (settings?.showRepairs && !showRepairs) ? (
+          <div className="space-y-1.5" aria-label={`${areaLabel} tools`}>
+            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">{areaLabel}</p>
+            {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && trayStatus.length > 0 && onAddProduction && (
+              <button onClick={() => setShowProduction(true)}
+                title="Yesterday's tray — make less today"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-950/30 border border-cyan-800/40 text-cyan-200 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
+                <Sunrise className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] font-black uppercase tracking-wider truncate">
+                  Tray: {trayStatus.map(r => `${r.productName} ${r.leftover}`).join(' • ')} — make less
+                </span>
+              </button>
+            )}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" aria-label="Trade tools">
             {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
               <>
@@ -1472,6 +1500,7 @@ export default function Sales({
                 <Wrench className="w-4 h-4" /> Repairs
               </button>
             )}
+          </div>
           </div>
         ) : null}
 

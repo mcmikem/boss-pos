@@ -24,6 +24,11 @@ interface MorningBriefProps {
   expenses?: Expense[];
   momoTransfers?: MomoTransfer[];
   eodCapital?: Record<string, number>;
+  // Role split: managers get the full briefing (revenue, debts, drawer).
+  // Cashiers get their shift card (my sales, handover, sync) — never the
+  // boss's numbers. Solo shops (no staff logins) see the manager view.
+  managerView?: boolean;
+  sellerName?: string;
 }
 
 function greeting(): string {
@@ -33,7 +38,24 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, dailyGoalRevenue, expenses = [], momoTransfers = [], eodCapital }: MorningBriefProps) {
+export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, dailyGoalRevenue, expenses = [], momoTransfers = [], eodCapital, managerView = true, sellerName = '' }: MorningBriefProps) {
+  // Cashier shift card: greeting, MY sales today, handover, sync — the
+  // worker's own work, never revenue/debts/drawer (manager-only numbers).
+  const shift = useMemo(() => {
+    if (managerView) return null;
+    const today = todayLocalKey();
+    const name = (sellerName || '').trim();
+    const mine = name
+      ? sales.filter(s => !s.refunded && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === name)
+      : [];
+    let handover: { at: string; from: string; to: string; amount: number } | null = null;
+    try {
+      const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
+      if (Array.isArray(log) && log[0]) handover = log[0];
+    } catch {}
+    return { name, count: mine.length, total: mine.reduce((a, s) => a + (s.total || 0), 0), handover };
+  }, [managerView, sellerName, sales]);
+  const isShiftView = !managerView && !!shift;
   // Minimisable: cashiers short on space collapse it; choice sticks per device.
   // Today's chairs: salon bookings due today that aren't done/cancelled.
   const [todayBookings, setTodayBookings] = useState<Booking[]>([]);
@@ -195,7 +217,37 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
   }, [sales]);
 
   return (
-    <section className="boss-card p-4 rounded-2xl mb-4">
+    <>
+      {isShiftView && shift && (
+        <section className="boss-card px-4 py-3 rounded-2xl mb-4 space-y-1" aria-label="Your shift">
+          <div className="flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" aria-hidden="true" />
+            <p className="text-[11px] font-black text-zinc-300 uppercase tracking-wider flex-1 min-w-0 truncate">
+              {greeting()}{shift.name ? `, ${shift.name}` : ''} — your shift
+            </p>
+            <p className="text-xs font-black text-gold-brand tabular-nums shrink-0">
+              {shift.count} sale{shift.count !== 1 ? 's' : ''} • {formatCurrency(shift.total)}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 pl-5">
+            <button onClick={() => onNavigate('sales')}
+              className="text-[10px] font-black text-gold-brand uppercase tracking-wider hover:underline cursor-pointer shrink-0">
+              Sell
+            </button>
+            <button onClick={onSync}
+              className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 cursor-pointer truncate">
+              {pendingCount > 0 ? `${pendingCount} to sync — tap` : 'All synced'}
+            </button>
+            {shift.handover && (
+              <p className="text-[10px] text-zinc-500 font-bold uppercase truncate ml-auto">
+                Handover {shift.handover.from} → {shift.handover.to}: {formatCurrency(shift.handover.amount)}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+      {!isShiftView && (
+      <section className="boss-card p-4 rounded-2xl mb-4">
       {trialAgeDays <= 14 && (
         <div className={`rounded-xl border px-3 py-2.5 mb-3 flex items-center gap-2 ${trialAgeDays <= 3 ? 'bg-gold-brand/5 border-gold-brand/30' : 'bg-amber-950/25 border-amber-600/30'}`}>
           <span className="text-[10px] font-black uppercase tracking-wider flex-1">
@@ -308,5 +360,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       </>
       )}
     </section>
+      )}
+    </>
   );
 }
