@@ -11,6 +11,24 @@ interface State {
   error?: Error;
 }
 
+// Crash streak in this session: repeated crashes close together mean the
+// shell itself is stale (mixed old/new chunks after a deploy), not a
+// render flake — only a fresh load past the service worker fixes that.
+function crashStreak(): number {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem('boss_pos_crash_streak') || 'null');
+    if (raw && Date.now() - raw.at < 120000) return raw.n + 1;
+  } catch {}
+  return 1;
+}
+
+function noteCrash(): void {
+  try {
+    const n = crashStreak();
+    sessionStorage.setItem('boss_pos_crash_streak', JSON.stringify({ n, at: Date.now() }));
+  } catch {}
+}
+
 export default class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
@@ -23,31 +41,38 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('ErrorBoundary caught:', error, info.componentStack);
+    noteCrash();
   }
 
   handleRetry = () => {
     // A failed lazy-chunk fetch (404 after a deploy re-hashed the file, or a
     // stuck service worker serving a stale shell) can't be fixed by
-    // re-rendering. First tap: plain reload. If it fails AGAIN in the same
-    // session, the service worker itself is the stale part — unregister it
-    // so the next load fetches a completely fresh app from the network.
+    // re-rendering. Neither can a repeated crash: two failures close together
+    // mean mixed old/new chunks, so go straight past re-render to a clean load.
     const msg = this.state.error?.message || '';
-    if (isChunkError(msg)) {
+    let streak = 1;
+    try {
+      const raw = JSON.parse(sessionStorage.getItem('boss_pos_crash_streak') || 'null');
+      if (raw && Date.now() - raw.at < 120000) streak = raw.n;
+    } catch {}
+    const hardReload = async () => {
+      try { sessionStorage.removeItem('boss_pos_crash_streak'); } catch {}
+      try {
+        if ('serviceWorker' in navigator) {
+          const rs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(rs.map((r) => r.unregister()));
+        }
+      } catch {}
+      window.location.reload();
+    };
+    if (isChunkError(msg) || streak >= 2) {
       if (!chunkRetried()) {
         markChunkRetried();
         window.location.reload();
         return;
       }
       clearChunkRetried();
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker
-          .getRegistrations()
-          .then((rs) => Promise.all(rs.map((r) => r.unregister())))
-          .catch(() => {})
-          .finally(() => window.location.reload());
-        return;
-      }
-      window.location.reload();
+      hardReload();
       return;
     }
     this.setState({ hasError: false });

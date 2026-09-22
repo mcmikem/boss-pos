@@ -2702,7 +2702,10 @@ Count the drawer now (UGX)? Empty = skip.`, '');
       )}
 
       {tourVisible && (
-        <FirstSaleTour key={tourSession}
+        // The guide is non-critical: if it ever throws, it dies silently and
+        // the till keeps selling (the per-tab boundary would nuke the screen).
+        <ErrorBoundary key="tour" fallback={<></>}>
+          <FirstSaleTour key={tourSession}
           onDone={() => setTourDone(true)}
           onNavigate={(t) => setActiveTab(t)}
           signals={{
@@ -2711,6 +2714,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             salesCount: sales.length,
             activeTab,
           }} />
+        </ErrorBoundary>
       )}
 
       {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}
