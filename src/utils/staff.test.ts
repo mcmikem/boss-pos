@@ -19,7 +19,7 @@ describe('staff access', () => {
     expect(canAccessTab('expenses', 'cashier', true)).toBe(true);
     expect(canAccessTab('inventory', 'cashier', true)).toBe(false);
     expect(canAccessTab('analytics', 'cashier', true)).toBe(false);
-    expect(canAccessTab('registers', 'cashier', true)).toBe(false);
+    expect(canAccessTab('registers', 'cashier', true)).toBe(true);
     expect(canAccessTab('registers', 'manager', true)).toBe(true);
     expect(isManagerRole('cashier', true)).toBe(false);
     expect(isManagerRole('manager', true)).toBe(true);

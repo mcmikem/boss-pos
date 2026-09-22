@@ -2578,12 +2578,11 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'reports')}</span>
         </button>
         )}
-        {isManager && (
+        {/* Close day is open to cashiers too — blind mode hides the totals. */}
         <button onClick={() => setActiveTab('registers')} aria-label={t(settings.language, 'closeDay')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "registers" ? "page" : undefined} id="registers-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'closeDay')}</span>
         </button>
-        )}
       </nav>
       )}
 
@@ -2651,14 +2650,12 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <span className="block text-[11px] text-zinc-500 font-bold">Today's summary and past sales</span></span>
               </button>
               )}
-              {isManager && (
               <button onClick={() => { setActiveTab('registers'); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <LayoutGrid className="w-5 h-5 text-gold-brand shrink-0" />
                 <span><span className="block text-sm font-bold text-white">{t(settings.language, 'closeDay')}</span>
                 <span className="block text-[11px] text-zinc-500 font-bold">Count today's money, finish the books</span></span>
               </button>
-              )}
               <button onClick={() => { setIsSettingsOpen(true); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <Settings className="w-5 h-5 text-gold-brand shrink-0" />

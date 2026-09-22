@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags, tenderByCategory, momoExpensesByCategory } from './cashflow';
+import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags, tenderByCategory, momoExpensesByCategory, openingPhoneFor } from './cashflow';
 
 describe('computeDayCash', () => {
   it('flags money collected but never moved nor kept as capital', () => {
@@ -207,5 +207,54 @@ describe('tender buckets (drawer vs sente zesimu)', () => {
       ex('momo', 3000, 'Library'), ex('drawer', 5000, 'Library'), ex(undefined, 1000, 'Library'),
     ] as never, T);
     expect(r).toMatchObject({ Library: 3000 });
+  });
+});
+
+describe('openingPhoneFor (running sente zesimu)', () => {
+  const prods = () => ([
+    { id: 'p-scan', name: 'Doc Scan', category: 'Library', cost: 100, price: 500, stockQty: 10, lowStockThreshold: 2 },
+  ]);
+  const saleOn = (day: string, id: string, method: string, total: number) => ({
+    id, orderNumber: id, timestamp: `${day}T12:00:00.000`,
+    items: [{ productId: 'p-scan', productName: 'Doc Scan', qty: 1, unitPrice: total, unitCost: 100, lineTotal: total }],
+    subtotal: total, tax: 0, total, paymentMethod: method, refunded: false,
+  });
+  const moveOn = (day: string, id: string, to: string, amount: number) => ({
+    id, category: 'Library', amount, comment: '', createdAt: `${day}T18:00:00.000`, to,
+  });
+
+  it('carries phone money across a quiet day', () => {
+    const T = '2026-09-21';
+    const Y = '2026-09-20';
+    const opening = openingPhoneFor(
+      [saleOn(Y, 's-y', 'Airtel Money', 7000)] as never,
+      prods() as never,
+      [moveOn(Y, 'm-y', 'owner', 2000)] as never,
+      [],
+      T,
+    );
+    // owner moves leave the drawer, never the phone: 7000 carries whole
+    expect(opening.get('Library')).toBe(7000);
+  });
+
+  it('subtracts MoMo-paid expenses, ignores drawer ones', () => {
+    const T = '2026-09-21';
+    const Y = '2026-09-20';
+    const opening = openingPhoneFor(
+      [saleOn(Y, 's-y', 'MTN MoMo', 10000)] as never,
+      prods() as never,
+      [moveOn(Y, 'm-y', 'float', 4000)] as never,
+      [
+        { id: 'e1', timestamp: `${Y}T10:00:00.000`, description: 'airtime', amount: 3000, category: 'Library', source: 'momo' },
+        { id: 'e2', timestamp: `${Y}T11:00:00.000`, description: 'rent', amount: 5000, category: 'Library', source: 'drawer' },
+      ] as never,
+      T,
+    );
+    // 10000 phone sale + 4000 floated in − 3000 MoMo spend (drawer rent untouched)
+    expect(opening.get('Library')).toBe(11000);
+  });
+
+  it('opens at zero with no history', () => {
+    expect(openingPhoneFor([], prods() as never, [], [], '2026-09-21').get('Library') || 0).toBe(0);
   });
 });

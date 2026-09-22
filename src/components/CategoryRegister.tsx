@@ -13,7 +13,7 @@ import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake'
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
-  prevDayKey, openingForDay, tenderByCategory, momoExpensesByCategory,
+  prevDayKey, openingForDay, tenderByCategory, momoExpensesByCategory, openingPhoneFor,
   type TheftFlag,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
@@ -546,6 +546,10 @@ export default function CategoryRegister({
   // reads — calling it earlier is a TDZ crash (seen live on the Close page).
   const tenderToday = useMemo(() => tenderByCategory(sales, products, todayStrKey), [sales, products, todayStrKey]);
   const momoExpToday = useMemo(() => momoExpensesByCategory(expenses, todayStrKey), [expenses, todayStrKey]);
+  const phoneOpening = useMemo(
+    () => openingPhoneFor(sales, products, momoTransfers, expenses, todayKey),
+    [sales, products, momoTransfers, expenses, todayKey],
+  );
   const bucketFor = (cat: string): { drawer: number; phone: number } => {
     const opening = getOpeningCapital(todayKey, cat, eodCapital);
     const t = tenderToday[cat] || { cash: 0, momo: 0 };
@@ -554,7 +558,7 @@ export default function CategoryRegister({
     const moved = m.float + m.cash + m.owner + m.bank;
     return {
       drawer: opening + t.cash - drawerExp - moved,
-      phone: t.momo + m.float - (momoExpToday[cat] || 0),
+      phone: (phoneOpening.get(cat) || 0) + t.momo + m.float - (momoExpToday[cat] || 0),
     };
   };
   const allDrawer = segments.reduce((s, cat) => s + bucketFor(cat).drawer, 0);

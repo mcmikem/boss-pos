@@ -215,6 +215,41 @@ export function momoExpensesByCategory(expenses: Expense[], dayKey: string): Rec
   return map;
 }
 
+// Phone opening auto-carry: money on the phone stays on the phone unless it
+// is spent (MoMo expense) or floated in. Walks back up to 7 days so a quiet
+// Sunday doesn't wipe the float — same carry-chain idea as kept capital.
+// Owner/bank/cash moves are assumed out of the drawer (the drawer equation
+// already assumes that), so they never reduce this bucket.
+export function openingPhoneFor(
+  sales: Sale[],
+  products: Product[],
+  transfers: MomoTransfer[],
+  expenses: Expense[],
+  dayKey: string,
+  lookbackDays = 7,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const cats = new Set<string>();
+  for (const p of products) {
+    if (p.isService || !p.category) continue;
+    cats.add(p.category);
+  }
+  for (const cat of cats) {
+    let open = 0;
+    for (let back = lookbackDays; back >= 1; back--) {
+      const d = dayKeyMinus(dayKey, back);
+      const t = tenderByCategory(sales, products, d)[cat] || { cash: 0, momo: 0 };
+      const floatIn = transfers
+        .filter((x) => x.category === cat && localDayKey(x.createdAt) === d && (x.to || 'float') === 'float')
+        .reduce((s, x) => s + (x.amount || 0), 0);
+      const momoOut = momoExpensesByCategory(expenses, d)[cat] || 0;
+      open = Math.max(0, open + t.momo + floatIn - momoOut);
+    }
+    if (open > 0) out.set(cat, Math.round(open));
+  }
+  return out;
+}
+
 // Tender split per category: cash sales live in the drawer, MTN/Airtel sales
 // sit on the phone (sente zesimu). Split-tender legs are apportioned across
 // the sale's categories by line share; Credit / Book never counts as held.

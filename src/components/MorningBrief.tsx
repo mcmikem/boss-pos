@@ -6,7 +6,7 @@ import { bookingApi } from '../api';
 import type { Booking } from '../types';
 import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown, Wallet } from 'lucide-react';
 import type { Sale, CreditEat, Product, Expense, MomoTransfer } from '../types';
-import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory } from '../utils/cashflow';
+import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory, openingPhoneFor } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
 import { stockoutLosses } from '../utils/stockout';
@@ -111,6 +111,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     const moved = moneyOutByCategory(momoTransfers, today);
     const tender = tenderByCategory(sales, products, today);
     const momoExp = momoExpensesByCategory(expenses, today);
+    const phoneOpen = openingPhoneFor(sales, products, momoTransfers, expenses, today);
     let inDrawers = 0;
     let drawerCash = 0;
     let phoneCash = 0;
@@ -120,7 +121,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       const movedOut = m.float + m.cash + m.owner + (m.bank || 0);
       drawerCash += getOpeningCapital(today, cat, eodCapital) + t.cash
         - (drawerExp[cat] || 0) - movedOut;
-      phoneCash += t.momo + m.float - (momoExp[cat] || 0);
+      phoneCash += (phoneOpen.get(cat) || 0) + t.momo + m.float - (momoExp[cat] || 0);
     }
     inDrawers = drawerCash + phoneCash;
     // Rush hour: busiest sales hour today (5am–11pm sane range for display).
