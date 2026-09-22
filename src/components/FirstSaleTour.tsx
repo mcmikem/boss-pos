@@ -110,13 +110,15 @@ function useTarget(selector: string | null) {
       setRect(r);
       setStable(runCount.current >= 2);
     };
-    snap();
-    try { document.querySelector(selector)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {}
-    const t = setTimeout(snap, 450);
+    // Scroll the target to the middle first, measure only after it settles —
+    // measuring mid-scroll is how pointers land beside their button.
+    try { document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
+    const t0 = setTimeout(snap, 120);
+    const t1 = setTimeout(snap, 550);
     const iv = setInterval(snap, 800);
     window.addEventListener('scroll', snap, true);
     window.addEventListener('resize', snap);
-    return () => { clearTimeout(t); clearInterval(iv); window.removeEventListener('scroll', snap, true); window.removeEventListener('resize', snap); };
+    return () => { clearTimeout(t0); clearTimeout(t1); clearInterval(iv); window.removeEventListener('scroll', snap, true); window.removeEventListener('resize', snap); };
   }, [selector]);
   return { rect, stable };
 }
@@ -400,14 +402,21 @@ export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps
     else goNext();
   };
 
-  const cx = rect ? rect.left + rect.width / 2 : 0;
-  const cy = rect ? rect.top + rect.height / 2 : 0;
-  const placeAbove = !!rect && rect.top > 330;
+  // Rounded ints: sub-pixel style churn would re-trigger the glide nonstop.
+  const cx = rect ? Math.round(rect.left + rect.width / 2) : 0;
+  const cy = rect ? Math.round(rect.top + rect.height / 2) : 0;
+  // Card placement with viewport clamping: below the target when it fits,
+  // otherwise above. Never parked half off-screen on small phones.
+  const CARD_H = 300;
+  const GAP = 72;
+  const fitsBelow = !rect || (window.innerHeight - rect.bottom - GAP >= Math.min(CARD_H, window.innerHeight - 120));
+  const placeAbove = !!rect && !fitsBelow;
   const cardStyle: React.CSSProperties = !rect
     ? { left: 16, right: 16, bottom: 'calc(5.5rem + env(safe-area-inset-bottom))' }
     : placeAbove
       ? { left: 16, right: 16, bottom: Math.max(8, window.innerHeight - rect.top + 16) }
-      : { left: 16, right: 16, top: rect.bottom + 72 };
+      : { left: 16, right: 16, top: rect.bottom + GAP };
+  const arrowLeft = `min(max(28px, ${cx - 24}px), calc(100% - 28px))`;
 
   const shownBody = !onTab
     ? `Open ${cur.s.tabLabel} first — tap the marked tab below, I will continue there.`
@@ -417,12 +426,12 @@ export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps
     <div className="fixed inset-0 z-[110] pointer-events-none" role="dialog" aria-label="Guided tour">
       {rect ? (
         <>
-          <div className="absolute inset-x-0 top-0 bg-black/70" style={{ height: Math.max(0, rect.top - 8) }} />
-          <div className="absolute inset-x-0 bottom-0 bg-black/70" style={{ top: rect.bottom + 8 }} />
-          <div className="absolute top-0 bottom-0 bg-black/70" style={{ left: 0, width: Math.max(0, rect.left - 8), top: rect.top - 8, height: rect.height + 16 }} />
-          <div className="absolute top-0 bottom-0 bg-black/70" style={{ right: 0, width: Math.max(0, window.innerWidth - rect.right - 8), top: rect.top - 8, height: rect.height + 16 }} />
+          <div className="absolute inset-x-0 top-0 bg-black/70 transition-all duration-300 ease-out" style={{ height: Math.max(0, rect.top - 8) }} />
+          <div className="absolute inset-x-0 bottom-0 bg-black/70 transition-all duration-300 ease-out" style={{ top: rect.bottom + 8 }} />
+          <div className="absolute top-0 bottom-0 bg-black/70 transition-all duration-300 ease-out" style={{ left: 0, width: Math.max(0, rect.left - 8), top: rect.top - 8, height: rect.height + 16 }} />
+          <div className="absolute top-0 bottom-0 bg-black/70 transition-all duration-300 ease-out" style={{ right: 0, width: Math.max(0, window.innerWidth - rect.right - 8), top: rect.top - 8, height: rect.height + 16 }} />
           {stable && (
-            <div className="absolute" style={{ left: cx, top: cy }}>
+            <div className="absolute transition-all duration-300 ease-out" style={{ left: cx, top: cy }}>
               <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
                 <span className="absolute top-1 inline-flex h-12 w-12 rounded-full bg-gold-brand/60 animate-ping" />
                 <MousePointerClick className="relative w-8 h-8 text-gold-brand animate-bounce drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]" />
@@ -435,7 +444,12 @@ export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps
         <div className="absolute inset-0 bg-black/70" />
       )}
       <div key={stepKey} className="absolute max-w-md mx-auto pointer-events-auto animate-tour-card-in" style={cardStyle}>
-        <div className="bg-[#141414] border border-gold-brand/40 rounded-3xl p-5 shadow-2xl">
+        <div className="relative bg-[#141414] border border-gold-brand/40 rounded-3xl p-5 shadow-2xl">
+          {rect && (
+            <span aria-hidden="true"
+              className={`absolute w-3.5 h-3.5 rotate-45 bg-[#141414] ${placeAbove ? '-bottom-[7px] border-b border-r border-gold-brand/40' : '-top-[7px] border-t border-l border-gold-brand/40'}`}
+              style={{ left: arrowLeft }} />
+          )}
           <div className="flex items-center gap-1.5 mb-2">
             <div className="flex items-center gap-1.5 flex-1">
               {chapters.map((c, i) => (
@@ -464,6 +478,9 @@ export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps
           <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest">{ch.title} • {inPos + 1} of {inCh.length}</p>
           <h3 className="text-sm font-black text-white uppercase tracking-wider mt-0.5">{!onTab ? `Open ${cur.s.tabLabel}` : cur.s.title}</h3>
           <p className="text-xs text-zinc-300 font-bold mt-1 leading-relaxed">{shownBody}</p>
+          <p className="text-[9px] text-zinc-700 font-mono mt-2">
+            {typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ ? __BUILD_COMMIT__.slice(0, 7) : 'dev'} • {cur.s.id}
+          </p>
           <div className="flex gap-2 mt-4">
             <button onClick={runPrimary}
               className="flex-1 h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer bg-gold-brand text-black">
