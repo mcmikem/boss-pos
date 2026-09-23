@@ -24,6 +24,16 @@ describe('staff access', () => {
     expect(isManagerRole('cashier', true)).toBe(false);
     expect(isManagerRole('manager', true)).toBe(true);
   });
+
+  it('follows the manager-chosen cashier doors', () => {
+    expect(canAccessTab('registers', 'cashier', true, [])).toBe(false);
+    expect(canAccessTab('registers', 'cashier', true, ['registers'])).toBe(true);
+    expect(canAccessTab('inventory', 'cashier', true, ['registers', 'inventory'])).toBe(true);
+    expect(canAccessTab('analytics', 'cashier', true, ['registers'])).toBe(false);
+    expect(canAccessTab('sales', 'cashier', true, [])).toBe(true);
+    expect(canAccessTab('expenses', 'cashier', true, [])).toBe(true);
+    expect(canAccessTab('registers', 'manager', true, [])).toBe(true);
+  });
   it('resolves the active seller only among active staff', () => {
     expect(activeStaffOf(staff, 'c1')?.name).toBe('Musa');
     expect(activeStaffOf(staff, 'x1')).toBeNull();

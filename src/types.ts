@@ -355,6 +355,7 @@ export interface StoreSettings {
   closeTime?: string; // shop closes "21:00" — unaccounted-cash flags fire after this
   closedDays?: number[]; // 0=Sun..6=Sat days the shop never opens (no close flags)
   blindClose?: boolean; // cashiers close out without seeing totals (manager gets WhatsApp)
+  cashierTabs?: Array<'inventory' | 'analytics' | 'registers'>; // extra doors managers open for cashiers (Close day on by default)
   closeNotifyOwner?: boolean; // prompt a WhatsApp close summary to the owner after closing
   largeText?: boolean; // accessibility: bigger type + targets (Settings → Display)
   lockMinutes?: number; // idle auto-lock delay (10/30/60); solo sellers can relax it

@@ -39,7 +39,7 @@ import NotificationsBell from './components/NotificationsBell';
 import { pushNotice, dayKeyOf } from './utils/notifications';
 import { AdminDashboard } from './components/AdminDashboard';
 import StaffSwitcher from './components/StaffSwitcher';
-import { canAccessTab, isManagerRole, activeStaffOf } from './utils/staff';
+import { canAccessTab, isManagerRole, activeStaffOf, type TillTab } from './utils/staff';
 import SyncProductsButton from './components/SyncProductsButton';
 const Inventory = lazyRetry(() => import('./components/Inventory'));
 const Analytics = lazyRetry(() => import('./components/Analytics'));
@@ -153,7 +153,7 @@ function removeDeletedExpense(id: string): void {
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
-  'openTime','closeTime','closedDays','blindClose','closeNotifyOwner',
+  'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs',
 ]);
 function serializeSettings(s: StoreSettings): string {
   const filtered: Record<string, unknown> = {};
@@ -253,6 +253,7 @@ const SETTINGS_SECTIONS = [
   { key: 'shop', label: 'Shop' },
   { key: 'selling', label: 'Selling' },
   { key: 'staff', label: 'Staff' },
+  { key: 'staff-doors', label: 'Doors' },
   { key: 'money', label: 'Money' },
   { key: 'security', label: 'PINs' },
   { key: 'look', label: 'Look' },
@@ -404,6 +405,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const activeStaff = activeStaffOf(staffList, activeStaffId);
   const activeRole = activeStaff?.role || null;
   const isManager = isManagerRole(activeRole, staffConfigured);
+  // Manager-chosen cashier doors (Settings → Staff). Sell + Spend always on.
+  const cashierDoors = useMemo<TillTab[]>(() => settings.cashierTabs ?? ['registers'], [settings.cashierTabs]);
+  const tabOpen = (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'): boolean =>
+    canAccessTab(tab, activeRole, staffConfigured, cashierDoors);
   const [creditPayments, setCreditPayments] = useState<CreditPayment[]>([]);
   const [creditEats, setCreditEats] = useState<CreditEat[]>([]);
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
@@ -1092,13 +1097,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (activeStaff) setStaffName(activeStaff.name);
   }, [activeStaff?.id]);
 
-  // Cashiers are fenced to selling + expenses, even if they deep-link a tab.
+  // Cashiers are fenced to their manager-chosen doors, even on deep-link.
   useEffect(() => {
-    if (authState === 'ready' && !canAccessTab(activeTab, activeRole, staffConfigured)) {
+    if (authState === 'ready' && !canAccessTab(activeTab, activeRole, staffConfigured, cashierDoors)) {
       setActiveTab('sales');
       triggerToast('Managers only — ask a manager to switch in', 'error');
     }
-  }, [authState, activeTab, activeRole, staffConfigured]);
+  }, [authState, activeTab, activeRole, staffConfigured, cashierDoors]);
 
   useEffect(() => {
     localStorage.setItem('boss_pos_cart', JSON.stringify(cart));  }, [cart]);
@@ -2562,7 +2567,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'sell')}</span>
         </button>
-        {isManager && (
+        {tabOpen('inventory') && (
         <button onClick={() => setActiveTab('inventory')} aria-label={t(settings.language, 'stock')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'inventory' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "inventory" ? "page" : undefined} id="inventory-nav-btn">
           <Package className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'stock')}</span>
@@ -2572,17 +2577,19 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           <Wallet className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'spend')}</span>
         </button>
-        {isManager && (
+        {tabOpen('analytics') && (
         <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'reports')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "analytics" ? "page" : undefined} id="analytics-nav-btn">
           <TrendingUp className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'reports')}</span>
         </button>
         )}
-        {/* Close day is open to cashiers too — blind mode hides the totals. */}
+        {/* Close day follows the manager's cashier doors — blind hides totals. */}
+        {tabOpen('registers') && (
         <button onClick={() => setActiveTab('registers')} aria-label={t(settings.language, 'closeDay')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'registers' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "registers" ? "page" : undefined} id="registers-nav-btn">
           <LayoutGrid className="w-5 h-5 mb-1" />
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'closeDay')}</span>
         </button>
+        )}
       </nav>
       )}
 
@@ -2628,7 +2635,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
               </button>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-2">
-              {isManager && (
+              {tabOpen('inventory') && (
               <button onClick={() => { setActiveTab('inventory'); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <Package className="w-5 h-5 text-gold-brand shrink-0" />
@@ -2642,7 +2649,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <span><span className="block text-sm font-bold text-white">{t(settings.language, 'spend')}</span>
                 <span className="block text-[11px] text-zinc-500 font-bold">Log what the shop spends</span></span>
               </button>
-              {isManager && (
+              {tabOpen('analytics') && (
               <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <TrendingUp className="w-5 h-5 text-gold-brand shrink-0" />
@@ -2650,12 +2657,14 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <span className="block text-[11px] text-zinc-500 font-bold">Today's summary and past sales</span></span>
               </button>
               )}
+              {tabOpen('registers') && (
               <button onClick={() => { setActiveTab('registers'); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <LayoutGrid className="w-5 h-5 text-gold-brand shrink-0" />
                 <span><span className="block text-sm font-bold text-white">{t(settings.language, 'closeDay')}</span>
                 <span className="block text-[11px] text-zinc-500 font-bold">Count today's money, finish the books</span></span>
               </button>
+              )}
               <button onClick={() => { setIsSettingsOpen(true); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <Settings className="w-5 h-5 text-gold-brand shrink-0" />
@@ -3258,6 +3267,27 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   </button>
                   <p className="text-[10px] text-zinc-600">Totals, cash vs MoMo, expenses, what is left — one message, no account needed.</p>
                 </div>
+              </div>
+              </SettingsSection>
+              <SettingsSection id="set-staff-doors" icon={LayoutGrid} title="Cashier doors" hint="What cashiers may open — Sell and Spend always on"
+                open={settingsSection === 'staff-doors'} onToggle={() => toggleSettingsSection('staff-doors')}>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier can open <SettingHelp label="Cashier doors" text="Sell and Spend are always on. Tick what else cashiers may open: Close day for the evening close-out (blind mode hides every total), Stock and Reports only if you trust them with it." /></label>
+                {([['registers', 'Close day'], ['inventory', 'Stock'], ['analytics', 'Reports']] as const).map(([tab, label]) => {
+                  const doors = settings.cashierTabs ?? ['registers'];
+                  const on = doors.includes(tab);
+                  return (
+                    <button key={tab} onClick={() => setSettings(prev => {
+                      const cur = prev.cashierTabs ?? ['registers'];
+                      return { ...prev, cashierTabs: on ? cur.filter(t => t !== tab) : [...cur, tab] };
+                    })}
+                      className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center justify-between px-4 ${on ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                      <span>{label}</span>
+                      <span>{on ? 'On' : 'Off'}</span>
+                    </button>
+                  );
+                })}
+                <p className="text-[10px] text-zinc-600">Blind close (Shop hours section) hides every total on Close day.</p>
               </div>
               </SettingsSection>
               <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Till PIN, auto-lock, manager PIN, log out all"

@@ -3321,7 +3321,7 @@ const ADMIN_EDITABLE_SETTINGS = new Set([
   'shopName', 'themeId', 'vibe', 'defaultPaymentMethod', 'dailyGoalNum',
   'shopType', 'language', 'usdRate', 'categories', 'expenseCategories',
   'momoFeePct', 'ownerPhone', 'sheetsUrl', 'branches', 'eodCapital',
-  'openTime', 'closeTime', 'closedDays', 'blindClose', 'closeNotifyOwner',
+  'openTime', 'closeTime', 'closedDays', 'blindClose', 'closeNotifyOwner', 'cashierTabs',
   'largeText', 'features', 'showTailoring', 'showDesign', 'showBookings',
   'showRepairs', 'efris',
 ]);
