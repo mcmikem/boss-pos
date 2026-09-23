@@ -41,7 +41,9 @@ const EateryPricing = lazyRetry(() => import('./EateryPricing'));
 const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
 const TailorHome = lazyRetry(() => import('./TailorHome'));
-const PrintHome = lazyRetry(() => import('./PrintHome'));const Bookings = lazyRetry(() => import('./Bookings'));
+const PrintHome = lazyRetry(() => import('./PrintHome'));
+const RepairHome = lazyRetry(() => import('./RepairHome'));
+const BookingHome = lazyRetry(() => import('./BookingHome'));const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -278,6 +280,8 @@ export default function Sales({
   const [showEateryHome, setShowEateryHome] = useState<boolean>(false);
   const [showTailorHome, setShowTailorHome] = useState<boolean>(false);
   const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
+  const [showRepairHome, setShowRepairHome] = useState<boolean>(false);
+  const [showBookingHome, setShowBookingHome] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -1572,18 +1576,32 @@ export default function Sales({
               </>
             )}
             {settings?.showBookings && !showBookings && (
+              <>
+              <button onClick={() => setShowBookingHome(true)}
+                title="Today's chairs" aria-label="Bookings today"
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Flame className="w-4 h-4" /> Today
+              </button>
               <button onClick={() => setShowBookings(true)}
                 title="Appointment Book" aria-label="Appointment book"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                 <CalendarCheck className="w-4 h-4" /> Bookings{todayBookingCount > 0 ? ` • ${todayBookingCount} today` : ''}
               </button>
+              </>
             )}
             {settings?.showRepairs && !showRepairs && (
+              <>
+              <button onClick={() => setShowRepairHome(true)}
+                title="Today on the bench" aria-label="Repairs today"
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Flame className="w-4 h-4" /> Today
+              </button>
               <button onClick={() => setShowRepairs(true)}
                 title="Repair Job Intake" aria-label="Repair job intake"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                 <Wrench className="w-4 h-4" /> Repairs{repairStatus ? ` • ${repairStatus}` : ''}
               </button>
+              </>
             )}
           </div>
           </div>
@@ -1599,6 +1617,30 @@ export default function Sales({
                 onBackSell={() => setShowEateryHome(false)}
                 onLogProduction={() => { setShowEateryHome(false); setShowProduction(true); }}
                 onCloseKitchen={() => { setShowEateryHome(false); if (onGoClose) onGoClose(); }} />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {/* Booking home: today's chairs, done, new booking (area surface) */}
+        {showBookingHome ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="booking-home-scroll-container">
+            <Suspense fallback={subManagerFallback}>
+              <BookingHome
+                triggerToast={triggerToast}
+                onBackSell={() => setShowBookingHome(false)}
+                onOpenBook={() => { setShowBookingHome(false); setShowBookings(true); }} />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {/* Repair home: bench, ready, balances due (area surface) */}
+        {showRepairHome ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="repair-home-scroll-container">
+            <Suspense fallback={subManagerFallback}>
+              <RepairHome
+                formatCurrency={formatCurrency} triggerToast={triggerToast}
+                onBackSell={() => setShowRepairHome(false)}
+                onOpenBook={() => { setShowRepairHome(false); setShowRepairs(true); }} />
             </Suspense>
           </div>
         ) : null}
