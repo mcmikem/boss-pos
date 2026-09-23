@@ -2,11 +2,12 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
 import Sheet from './Sheet';
 import SettleSheet from './SettleSheet';
-import type { TailoringOrder, Sale } from '../types';
+import type { TailoringOrder, TailoringMaterial, Sale } from '../types';
 import { tailoringOrderApi } from '../api';
 import { ringServiceSale, customerWhatsAppUrl } from '../utils/serviceSale';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { localDayKey, todayLocalKey } from '../utils/dates';
+import { tailorMaterialsCost, tailorProfit, tailorBalanceDue, cleanMaterial } from '../utils/tailoring';
 
 const WORK_PRESETS: Record<string, string[]> = {
   repair: ['Trouser Hemming', 'Zip Replacement', 'Patching', 'Alteration', 'Other Repair'],
@@ -110,8 +111,13 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
   const completedToday = orders.filter(o => o.status === 'completed' && o.completedDate?.startsWith(today)).length;
   const deliveredToday = orders.filter(o => o.status === 'delivered' && localDayKey(o.createdAt) === today).length;
 
+  // Itemised materials: name + cost + who provided it. Customer-brought
+  // fabric costs the tailor zero and never eats the profit.
+  const [fMats, setFMats] = useState<{ name: string; cost: string; providedBy: 'tailor' | 'customer' }[]>([]);
+
   function resetForm() {
     setF({ customerName: '', customerPhone: '', workType: 'repair', workDescription: '', totalAmount: '', depositPaid: '', materialCost: '', expectedDate: '', notes: '', measurements: '' });
+    setFMats([]);
   }
 
   function openCreate() {
@@ -129,6 +135,9 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       expectedDate: order.expectedDate, notes: order.notes,
       measurements: order.measurements || '',
     });
+    setFMats((order.materials || []).map(m => ({
+      name: m.name, cost: String(m.cost ?? ''), providedBy: m.providedBy === 'customer' ? 'customer' as const : 'tailor' as const,
+    })));
     setShowPanel(true);
   }
 
@@ -155,6 +164,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       totalAmount: total,
       depositPaid: deposit,
       materialCost: parseFloat(f.materialCost) || 0,
+      materials: fMats.map(m => cleanMaterial({ ...m, cost: parseFloat(m.cost) || 0 })).filter((m): m is TailoringMaterial => m !== null),
       status: existing?.status || 'pending',
       notes: f.notes.trim(),
       measurements: f.measurements.trim(),
@@ -202,7 +212,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       label: `Tailoring: ${order.workDescription || order.workType}`,
       amount, method,
       customerName: order.customerName,
-      unitCost: order.materialCost || 0,
+      unitCost: tailorMaterialsCost(order),
     });
   }
 
@@ -368,7 +378,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
           {filtered.map(order => {
             const sc = STATUS_CFG[order.status];
             const tc = TYPE_CFG[order.workType] || { label: order.workType, icon: '📋' };
-            const balance = order.totalAmount - order.depositPaid;
+            const balance = tailorBalanceDue(order);
             const isOverdue = order.expectedDate < today && order.status !== 'delivered';
 
             return (
@@ -401,9 +411,14 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                   </div>
                   <div className="text-right shrink-0">
                     <p className="text-sm font-black text-gold-brand">{order.totalAmount.toLocaleString()}</p>
-                    {order.materialCost > 0 && (
-                      <p className="text-[10px] text-amber-400 font-bold">Mat: {order.materialCost.toLocaleString()}</p>
-                    )}
+                    {(() => {
+                      const profit = tailorProfit(order);
+                      return (
+                        <p className={`text-[10px] font-bold ${profit < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                          Profit: {profit.toLocaleString()}
+                        </p>
+                      );
+                    })()}
                     {order.depositPaid > 0 && (
                       <p className="text-[10px] text-emerald-400 font-bold">Paid: {order.depositPaid.toLocaleString()}</p>
                     )}
@@ -592,9 +607,9 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                       className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                   </div>
                   <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Materials</label>
+                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Materials (lump sum, yours)</label>
                     <input type="number" value={f.materialCost} onChange={e => setF(p => ({ ...p, materialCost: e.target.value }))}
-                      placeholder="Fabric, buttons..."
+                      placeholder="Thread, buttons..."
                       className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                   </div>
                   <div>
@@ -605,18 +620,60 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                   </div>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-2">
-                  {f.totalAmount && f.materialCost && parseFloat(f.materialCost) > 0 && (
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
-                      <span className="text-xs text-zinc-500 font-bold uppercase">Labor Profit</span>
-                      <span className="text-sm font-black text-amber-400">{(parseFloat(f.totalAmount) - parseFloat(f.materialCost)).toLocaleString()} UGX</span>
-                    </div>
-                  )}
+                  {(() => {
+                    const draft = {
+                      totalAmount: parseFloat(f.totalAmount) || 0,
+                      materialCost: parseFloat(f.materialCost) || 0,
+                      materials: fMats.map(m => cleanMaterial({ ...m, cost: parseFloat(m.cost) || 0 })).filter((m): m is TailoringMaterial => m !== null),
+                    };
+                    const profit = tailorProfit(draft);
+                    const mine = tailorMaterialsCost(draft);
+                    return (
+                      <>
+                        {f.totalAmount && (mine > 0 || (parseFloat(f.materialCost) || 0) > 0 || draft.materials.length > 0) && (
+                          <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center col-span-2">
+                            <span className="text-xs text-zinc-500 font-bold uppercase">Profit (mine {mine.toLocaleString()})</span>
+                            <span className={`text-sm font-black ${profit < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{profit.toLocaleString()} UGX</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
                     <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
                       <span className="text-xs text-zinc-500 font-bold uppercase">Balance Due</span>
                       <span className="text-sm font-black text-rose-400">{(parseFloat(f.totalAmount) - parseFloat(f.depositPaid)).toLocaleString()} UGX</span>
                     </div>
                   )}
+                </div>
+                {/* Itemised materials: who provided each line. Customer-brought
+                    fabric costs you zero and never eats the profit above. */}
+                <div className="mt-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Material lines</p>
+                    <button onClick={() => setFMats(prev => [...prev, { name: '', cost: '', providedBy: 'tailor' as const }])}
+                      className="text-[10px] font-black text-gold-brand uppercase tracking-wider hover:underline cursor-pointer">+ Add line</button>
+                  </div>
+                  {fMats.map((m, i) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <input type="text" value={m.name} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                        placeholder="e.g. Kitenge 4m"
+                        className="flex-1 min-w-0 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+                      <input type="number" min="0" value={m.cost} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, cost: e.target.value } : x))}
+                        placeholder="Cost"
+                        className="w-20 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-2 text-xs focus:border-gold-brand outline-none tabular-nums" />
+                      <button onClick={() => setFMats(prev => prev.map((x, j) => j === i ? { ...x, providedBy: x.providedBy === 'tailor' ? 'customer' as const : 'tailor' as const } : x))}
+                        title={m.providedBy === 'tailor' ? 'I bought it — tap if the customer brought it' : 'Customer brought it — tap if I bought it'}
+                        className={`shrink-0 h-10 px-2 rounded-xl text-[9px] font-black uppercase border transition-all cursor-pointer ${m.providedBy === 'tailor' ? 'border-amber-600/50 bg-amber-950/30 text-amber-300' : 'border-emerald-600/50 bg-emerald-950/30 text-emerald-300'}`}>
+                        {m.providedBy === 'tailor' ? 'Mine' : 'Theirs'}
+                      </button>
+                      <button onClick={() => setFMats(prev => prev.filter((_, j) => j !== i))}
+                        aria-label="Remove material line"
+                        className="shrink-0 p-1.5 text-zinc-600 hover:text-rose-400 rounded cursor-pointer">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </section>
 
@@ -646,7 +703,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
         return (
           <SettleSheet
             customerName={order.customerName}
-            balance={Math.round(order.totalAmount - (order.depositPaid || 0))}
+            balance={tailorBalanceDue(order)}
             paid={order.depositPaid || 0}
             onPick={(method) => settleAndDeliver(order, method)}
             onClose={() => setSettleId(null)}

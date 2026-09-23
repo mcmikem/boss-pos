@@ -136,6 +136,9 @@ async function initDB() {
   )`;
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN measurements TEXT DEFAULT ''`; } catch {}
   try { await sql`ALTER TABLE tailoring_orders ADD COLUMN materialcost DOUBLE PRECISION DEFAULT 0`; } catch {}
+  // Itemised material lines (JSON): tailor-bought vs customer-brought, so
+  // profit math never charges the tailor for the customer's own fabric.
+  try { await sql`ALTER TABLE tailoring_orders ADD COLUMN materials TEXT DEFAULT ''`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS design_orders (
     id TEXT PRIMARY KEY, customername TEXT NOT NULL, customerphone TEXT DEFAULT '',
     orderdate TEXT NOT NULL, expecteddate TEXT NOT NULL, completeddate TEXT,
@@ -401,6 +404,22 @@ function itemsJson(v) {
       name: String((i && i.name) || '').slice(0, 120),
       amount: Math.max(0, Math.round((parseFloat(i && i.amount) || 0) * 100) / 100),
     })).filter(i => i.name);
+    return clean.length ? JSON.stringify(clean) : '';
+  } catch { return ''; }
+}
+
+// Tailoring material lines: name + cost + who provided it. Same JSON-text
+// discipline as itemsJson so a hostile row can't smuggle shapes into the DB.
+function materialsJson(v) {
+  try {
+    const arr = typeof v === 'string' ? (v ? JSON.parse(v) : []) : v;
+    if (!Array.isArray(arr)) return '';
+    const clean = arr.slice(0, 50).map(m => ({
+      name: String((m && m.name) || '').slice(0, 80),
+      cost: Math.max(0, Math.round((parseFloat(m && m.cost) || 0) * 100) / 100),
+      ...(m && m.qty ? { qty: Math.max(0, parseFloat(m.qty) || 0) } : {}),
+      providedBy: m && m.providedBy === 'customer' ? 'customer' : 'tailor',
+    })).filter(m => m.name);
     return clean.length ? JSON.stringify(clean) : '';
   } catch { return ''; }
 }
@@ -1899,8 +1918,9 @@ app.post('/api/tailoring-orders', asHandler(async (req, res) => {
   const workDescription = text(o.workDescription, 500);
   const notes = text(o.notes, 500);
   const measurements = text(o.measurements, 500);
-  const inserted = await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat,client_write_id)
-    VALUES (${o.id},${customerName},${customerPhone},${o.orderDate},${o.expectedDate},${o.completedDate||null},${workType},${workDescription},${num(o.totalAmount)},${num(o.depositPaid)},${num(o.materialCost)},${o.status||'pending'},${notes},${measurements},${o.createdAt},${o.clientWriteId||null})
+  const materials = materialsJson(o.materials);
+  const inserted = await sql`INSERT INTO tailoring_orders (id,customername,customerphone,orderdate,expecteddate,completeddate,worktype,workdescription,totalamount,depositpaid,materialcost,status,notes,measurements,createdat,client_write_id,materials)
+    VALUES (${o.id},${customerName},${customerPhone},${o.orderDate},${o.expectedDate},${o.completedDate||null},${workType},${workDescription},${num(o.totalAmount)},${num(o.depositPaid)},${num(o.materialCost)},${o.status||'pending'},${notes},${measurements},${o.createdAt},${o.clientWriteId||null},${materials})
     ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING id`;
   if (inserted.length === 0) {
     const existing = await sql`SELECT * FROM tailoring_orders WHERE client_write_id=${o.clientWriteId}`;
@@ -1917,7 +1937,8 @@ app.put('/api/tailoring-orders/:id', asHandler(async (req, res) => {
   const workDescription = text(o.workDescription, 500);
   const notes = text(o.notes, 500);
   const measurements = text(o.measurements, 500);
-  await sql`UPDATE tailoring_orders SET customername=${customerName},customerphone=${customerPhone},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},worktype=${workType},workdescription=${workDescription},totalamount=${num(o.totalAmount)},depositpaid=${num(o.depositPaid)},materialcost=${num(o.materialCost)},status=${o.status||'pending'},notes=${notes},measurements=${measurements} WHERE id=${req.params.id}`;
+  const materials = materialsJson(o.materials);
+  await sql`UPDATE tailoring_orders SET customername=${customerName},customerphone=${customerPhone},orderdate=${o.orderDate},expecteddate=${o.expectedDate},completeddate=${o.completedDate||null},worktype=${workType},workdescription=${workDescription},totalamount=${num(o.totalAmount)},depositpaid=${num(o.depositPaid)},materialcost=${num(o.materialCost)},status=${o.status||'pending'},notes=${notes},measurements=${measurements},materials=${materials} WHERE id=${req.params.id}`;
   res.json(o);
 }));
 
@@ -2519,6 +2540,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     totalamount: num(o.totalAmount), depositpaid: num(o.depositPaid),
     materialcost: num(o.materialCost), status: o.status || 'pending',
     notes: text(o.notes, 500) || '', measurements: text(o.measurements, 500) || '',
+    materials: materialsJson(o.materials),
     createdat: o.createdAt,
   }));
 
@@ -2609,7 +2631,7 @@ app.post('/api/restore', requireAuth, asHandler(async (req, res) => {
     batchUpsert('expenses', 'id', ['id', 'timestamp', 'description', 'amount', 'category', 'items', 'staffname'], (d.expenses || []).map(e => ({ id: e.id, timestamp: e.timestamp, description: text(e.description, 300), amount: num(e.amount), category: text(e.category, 100), items: itemsJson(e.items), staffname: text(e.staffName || e.staffname, 80) || '' }))).then(n => counts.expenses = n),
     batchUpsert('credit_payments', 'id', ['id', 'saleid', 'amount', 'createdat'], creditPaymentRows).then(n => counts.creditPayments = n),
     batchUpsert('cash_transfers', 'id', ['id', 'fromcategory', 'tocategory', 'amount', 'reason', 'createdat', 'settledat'], transferRows).then(n => counts.cashTransfers = n),
-    batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
+    batchUpsert('tailoring_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'worktype', 'workdescription', 'totalamount', 'depositpaid', 'materialcost', 'status', 'notes', 'measurements', 'materials', 'createdat'], tailoringRows).then(n => counts.tailoringOrders = n),
     batchUpsert('design_orders', 'id', ['id', 'customername', 'customerphone', 'orderdate', 'expecteddate', 'completeddate', 'ordertype', 'designbrief', 'qty', 'size', 'materialcost', 'laborcost', 'transportcost', 'unitprice', 'totalamount', 'depositpaid', 'targetmarginpct', 'status', 'notes', 'createdat'], designRows).then(n => counts.designOrders = n),
     batchUpsert('bookings', 'id', ['id', 'customername', 'customerphone', 'service', 'staffname', 'date', 'time', 'durationmin', 'price', 'deposit', 'status', 'notes', 'createdat'], bookingRows).then(n => counts.bookings = n),
     batchUpsert('repair_jobs', 'id', ['id', 'customername', 'customerphone', 'itemlabel', 'issue', 'price', 'deposit', 'partscost', 'status', 'expecteddate', 'completeddate', 'notes', 'createdat'], repairJobRows).then(n => counts.repairJobs = n),
@@ -2870,6 +2892,18 @@ function mapProduct(r) {
 }
 
 function mapTailoringOrder(r) {
+  let materials = [];
+  try {
+    const raw = typeof r.materials === 'string' && r.materials ? JSON.parse(r.materials) : r.materials;
+    if (Array.isArray(raw)) {
+      materials = raw.slice(0, 50).map((m) => ({
+        name: String(m?.name || '').slice(0, 80),
+        cost: Math.max(0, num(m?.cost)),
+        ...(m?.qty ? { qty: Math.max(0, num(m.qty)) } : {}),
+        providedBy: m?.providedBy === 'customer' ? 'customer' : 'tailor',
+      })).filter((m) => m.name);
+    }
+  } catch {}
   return {
     id: r.id, customerName: r.customername, customerPhone: r.customerphone || '',
     orderDate: r.orderdate, expectedDate: r.expecteddate,
@@ -2877,6 +2911,7 @@ function mapTailoringOrder(r) {
     workType: r.worktype, workDescription: r.workdescription,
     totalAmount: r.totalamount, depositPaid: r.depositpaid,
     materialCost: r.materialcost || 0,
+    materials,
     status: r.status, notes: r.notes || '',
     measurements: r.measurements || '',
     createdAt: r.createdat,

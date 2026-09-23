@@ -207,6 +207,13 @@ export interface StaffMember {
   active: boolean;
 }
 
+export interface TailoringMaterial {
+  name: string;
+  qty?: number;
+  cost: number; // what this line cost whoever provided it
+  providedBy: 'tailor' | 'customer'; // customer brought their own fabric = tailor pays 0
+}
+
 export interface TailoringOrder {
   id: string;
   customerName: string;
@@ -218,7 +225,8 @@ export interface TailoringOrder {
   workDescription: string;
   totalAmount: number;
   depositPaid: number;
-  materialCost: number;
+  materialCost: number; // legacy lump sum (tailor-paid); kept for old orders
+  materials?: TailoringMaterial[]; // itemised lines; tailor lines add to materialCost
   status: 'pending' | 'in_progress' | 'completed' | 'delivered';
   notes: string;
   measurements?: string;
