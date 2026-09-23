@@ -4,10 +4,10 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split
+  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender } from '../types';
-import { nextOrderNumber, quoteApi } from '../api';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, TailoringOrder, DesignOrder, Booking, RepairJob } from '../types';
+import { nextOrderNumber, quoteApi, tailoringOrderApi, designOrderApi, bookingApi, repairJobApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import ProductCard from './ProductCard';
 import BarcodeScanner from './BarcodeScanner';
@@ -39,7 +39,9 @@ const TailoringOrders = lazyRetry(() => import('./TailoringOrders'));
 const DesignOrders = lazyRetry(() => import('./DesignOrders'));
 const EateryPricing = lazyRetry(() => import('./EateryPricing'));
 const MorningProduction = lazyRetry(() => import('./MorningProduction'));
-const Bookings = lazyRetry(() => import('./Bookings'));
+const EateryHome = lazyRetry(() => import('./EateryHome'));
+const TailorHome = lazyRetry(() => import('./TailorHome'));
+const PrintHome = lazyRetry(() => import('./PrintHome'));const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -122,6 +124,7 @@ interface SalesProps {
   salesHistory?: Sale[];
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
+  onGoClose?: () => void;
   simple?: boolean;
   hideGuide?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
@@ -181,7 +184,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -272,6 +275,9 @@ export default function Sales({
   const [showRepairs, setShowRepairs] = useState<boolean>(false);
   const [showEateryPricing, setShowEateryPricing] = useState<boolean>(false);
   const [showProduction, setShowProduction] = useState<boolean>(false);
+  const [showEateryHome, setShowEateryHome] = useState<boolean>(false);
+  const [showTailorHome, setShowTailorHome] = useState<boolean>(false);
+  const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -498,6 +504,61 @@ export default function Sales({
     : selectedCategory === 'Tailoring' ? 'Tailoring workspace'
     : selectedCategory === 'Graphics' ? 'Design workspace'
     : 'Workspace';
+
+  // Area reality: live status per business area, fetched only for the open
+  // area. A tailor sees orders and balances due; a repair bench sees what's
+  // in shop — never a supermarket stock screen pretending otherwise.
+  const [areaOrders, setAreaOrders] = useState<TailoringOrder[]>([]);
+  const [areaJobs, setAreaJobs] = useState<DesignOrder[]>([]);
+  const [areaBookings, setAreaBookings] = useState<Booking[]>([]);
+  const [areaRepairs, setAreaRepairs] = useState<RepairJob[]>([]);
+  useEffect(() => {
+    let live = true;
+    setAreaOrders([]); setAreaJobs([]); setAreaBookings([]); setAreaRepairs([]);
+    if (selectedCategory === 'Tailoring') {
+      tailoringOrderApi.list().then(l => { if (live) setAreaOrders(Array.isArray(l) ? l : []); }).catch(() => {});
+    } else if (selectedCategory === 'Graphics') {
+      designOrderApi.list().then(l => { if (live) setAreaJobs(Array.isArray(l) ? l : []); }).catch(() => {});
+    } else {
+      if (settings?.showBookings) bookingApi.list().then(l => { if (live) setAreaBookings(Array.isArray(l) ? l : []); }).catch(() => {});
+      if (settings?.showRepairs) repairJobApi.list().then(l => { if (live) setAreaRepairs(Array.isArray(l) ? l : []); }).catch(() => {});
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory]);
+  const areaStatus = useMemo(() => {
+    if (selectedCategory === 'Tailoring') {
+      const open = areaOrders.filter(o => o.status === 'pending' || o.status === 'in_progress');
+      const ready = areaOrders.filter(o => o.status === 'completed');
+      const due = open.reduce((s, o) => s + Math.max(0, (o.totalAmount || 0) - (o.depositPaid || 0)), 0);
+      return open.length + ready.length > 0
+        ? `${open.length} making • ${ready.length} ready${due > 0 ? ` • ${formatCurrency(due)} due` : ''}`
+        : null;
+    }
+    if (selectedCategory === 'Graphics') {
+      const active = areaJobs.filter(o => o.status === 'pending' || o.status === 'in_progress' || o.status === 'review');
+      const ready = areaJobs.filter(o => o.status === 'completed');
+      return active.length + ready.length > 0 ? `${active.length} active • ${ready.length} ready` : null;
+    }
+    if (selectedCategory !== 'Eatery' && selectedCategory !== 'Drinks' && selectedCategory !== 'All') {
+      const inCat = products.filter(p => p.category === selectedCategory && !p.isService);
+      if (inCat.length === 0) return null;
+      const low = inCat.filter(p => p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty > 0).length;
+      const out = inCat.filter(p => p.stockQty <= 0).length;
+      return low + out > 0 ? `${low} low • ${out} out of stock` : `${inCat.length} stocked • shelves ok`;
+    }
+    return null;
+  }, [selectedCategory, areaOrders, areaJobs, products, formatCurrency]);
+  const todayBookingCount = useMemo(() => {
+    const k = todayLocalKey();
+    return areaBookings.filter(b => b.date === k && b.status === 'booked').length;
+  }, [areaBookings]);
+  const repairStatus = useMemo(() => {
+    if (areaRepairs.length === 0) return null;
+    const inShop = areaRepairs.filter(r => r.status === 'received' || r.status === 'in_progress').length;
+    const ready = areaRepairs.filter(r => r.status === 'ready').length;
+    return `${inShop} in shop • ${ready} ready`;
+  }, [areaRepairs]);
 
   const handleAddToCart = (product: Product) => {
     if (product.stockQty <= 0 && !product.isService) {
@@ -1444,7 +1505,12 @@ export default function Sales({
           (settings?.showBookings && !showBookings) ||
           (settings?.showRepairs && !showRepairs) ? (
           <div className="space-y-1.5" aria-label={`${areaLabel} tools`}>
-            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">{areaLabel}</p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest shrink-0">{areaLabel}</p>
+              {areaStatus && (
+                <p className="text-[10px] font-bold text-gold-brand/90 uppercase tracking-wider truncate">{areaStatus}</p>
+              )}
+            </div>
             {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && trayStatus.length > 0 && onAddProduction && (
               <button onClick={() => setShowProduction(true)}
                 title="Yesterday's tray — make less today"
@@ -1458,6 +1524,11 @@ export default function Sales({
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" aria-label="Trade tools">
             {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
               <>
+                <button onClick={() => setShowEateryHome(true)}
+                  title="Today in the kitchen" aria-label="Eatery today"
+                  className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                  <Flame className="w-4 h-4" /> Today
+                </button>
                 <button onClick={() => setShowEateryPricing(true)}
                   title="Pricing & Recipes" aria-label="Pricing and recipes"
                   className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
@@ -1473,34 +1544,86 @@ export default function Sales({
               </>
             )}
             {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
+              <>
+              <button onClick={() => setShowTailorHome(true)}
+                title="Today in tailoring" aria-label="Tailoring today"
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Flame className="w-4 h-4" /> Today
+              </button>
               <button onClick={() => setShowTailoringOrders(true)}
                 title="Manage Tailor Orders" aria-label="Manage tailor orders"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Scissors className="w-4 h-4" /> Tailoring
-              </button>
-            )}
+                    <Scissors className="w-4 h-4" /> Tailoring
+                  </button>
+                  </>
+                )}
             {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
+              <>
+              <button onClick={() => setShowPrintHome(true)}
+                title="Today in printing" aria-label="Printing today"
+                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                <Flame className="w-4 h-4" /> Today
+              </button>
               <button onClick={() => setShowDesignOrders(true)}
                 title="Manage Design & Print Orders" aria-label="Manage design and print orders"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                 <Palette className="w-4 h-4" /> Design
               </button>
+              </>
             )}
             {settings?.showBookings && !showBookings && (
               <button onClick={() => setShowBookings(true)}
                 title="Appointment Book" aria-label="Appointment book"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <CalendarCheck className="w-4 h-4" /> Bookings
+                <CalendarCheck className="w-4 h-4" /> Bookings{todayBookingCount > 0 ? ` • ${todayBookingCount} today` : ''}
               </button>
             )}
             {settings?.showRepairs && !showRepairs && (
               <button onClick={() => setShowRepairs(true)}
                 title="Repair Job Intake" aria-label="Repair job intake"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Wrench className="w-4 h-4" /> Repairs
+                <Wrench className="w-4 h-4" /> Repairs{repairStatus ? ` • ${repairStatus}` : ''}
               </button>
             )}
           </div>
+          </div>
+        ) : null}
+
+        {/* Eatery home: the restaurant TODAY view (area operating surface) */}
+        {showEateryHome ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-home-scroll-container">
+            <Suspense fallback={subManagerFallback}>
+              <EateryHome products={products} productionRegisters={productionRegisters}
+                sales={salesHistory} wastageLogs={wastageLogs}
+                formatCurrency={formatCurrency}
+                onBackSell={() => setShowEateryHome(false)}
+                onLogProduction={() => { setShowEateryHome(false); setShowProduction(true); }}
+                onCloseKitchen={() => { setShowEateryHome(false); if (onGoClose) onGoClose(); }} />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {/* Print home: today's jobs, balances due, ready (area surface) */}
+        {showPrintHome ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="print-home-scroll-container">
+            <Suspense fallback={subManagerFallback}>
+              <PrintHome
+                formatCurrency={formatCurrency} triggerToast={triggerToast}
+                onBackSell={() => setShowPrintHome(false)}
+                onOpenJobs={() => { setShowPrintHome(false); setShowDesignOrders(true); }} />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {/* Tailor home: today's orders, balances due, ready (area surface) */}
+        {showTailorHome ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="tailor-home-scroll-container">
+            <Suspense fallback={subManagerFallback}>
+              <TailorHome
+                formatCurrency={formatCurrency} triggerToast={triggerToast}
+                onBackSell={() => setShowTailorHome(false)}
+                onOpenOrders={() => { setShowTailorHome(false); setShowTailoringOrders(true); }} />
+            </Suspense>
           </div>
         ) : null}
 
@@ -1538,9 +1661,8 @@ export default function Sales({
                 formatCurrency={formatCurrency} triggerToast={triggerToast} />
             </Suspense>
           </div>
-        ) : showProduction && onAddProduction && onDeleteProduction ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">
-            <button onClick={() => setShowProduction(false)}
+                ) : showProduction && onAddProduction && onDeleteProduction ? (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">            <button onClick={() => setShowProduction(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
