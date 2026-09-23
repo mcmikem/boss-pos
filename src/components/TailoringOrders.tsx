@@ -511,7 +511,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
               {/* CUSTOMER */}
               <section>
                 <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                  <User className="w-3 h-3" /> Customer
+                  <User className="w-3 h-3" /> 1 · Who
                 </h4>
                 <div className="space-y-2.5">
                   <div className="relative">
@@ -540,7 +540,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
               {/* WORK TYPE */}
               <section>
                 <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                  <Scissors className="w-3 h-3" /> Work Type
+                  <Scissors className="w-3 h-3" /> 2 · What job?
                 </h4>
                 <div className="grid grid-cols-3 gap-2">
                   {[
@@ -561,10 +561,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                 </div>
               </section>
 
-              {/* WORK DESCRIPTION */}
-              <section>
-                <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3">Description</h4>
-                <div className="flex flex-wrap gap-1.5 mb-2.5">
+              <div className="flex flex-wrap gap-1.5 mb-2.5">
                   {(WORK_PRESETS[f.workType] || []).map(p => (
                     <button key={p} onClick={() => setF(pr => ({ ...pr, workDescription: p }))}
                       className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
@@ -579,7 +576,6 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                 <input type="text" value={f.workDescription} onChange={e => setF(p => ({ ...p, workDescription: e.target.value }))}
                   placeholder="Or type custom description..."
                   className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-11 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-              </section>
 
               {/* MEASUREMENTS (custom only) */}
               {f.workType === 'custom' && (
@@ -594,94 +590,96 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                 </section>
               )}
 
-              {/* PRICING */}
+              {/* 3 · MONEY */}
               <section>
                 <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                  <DollarSign className="w-3 h-3" /> Pricing
+                  <DollarSign className="w-3 h-3" /> 3 · Money
                 </h4>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Total (UGX) *</label>
+                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Price they pay *</label>
                     <input type="number" value={f.totalAmount} onChange={e => setF(p => ({ ...p, totalAmount: e.target.value }))}
                       placeholder="e.g. 45000"
                       className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                   </div>
                   <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Materials (lump sum, yours)</label>
-                    <input type="number" value={f.materialCost} onChange={e => setF(p => ({ ...p, materialCost: e.target.value }))}
-                      placeholder="Thread, buttons..."
-                      className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Deposit</label>
+                    <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Paid now</label>
                     <input type="number" value={f.depositPaid} onChange={e => setF(p => ({ ...p, depositPaid: e.target.value }))}
                       placeholder="e.g. 20000"
                       className="w-full bg-[#0A0A0A] border border-white/5 text-emerald-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                   </div>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {(() => {
-                    const draft = {
-                      totalAmount: parseFloat(f.totalAmount) || 0,
-                      materialCost: parseFloat(f.materialCost) || 0,
-                      materials: fMats.map(m => cleanMaterial({ ...m, cost: parseFloat(m.cost) || 0 })).filter((m): m is TailoringMaterial => m !== null),
-                    };
-                    const profit = tailorProfit(draft);
-                    const mine = tailorMaterialsCost(draft);
-                    return (
-                      <>
-                        {f.totalAmount && (mine > 0 || (parseFloat(f.materialCost) || 0) > 0 || draft.materials.length > 0) && (
-                          <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center col-span-2">
-                            <span className="text-xs text-zinc-500 font-bold uppercase">Profit (mine {mine.toLocaleString()})</span>
-                            <span className={`text-sm font-black ${profit < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{profit.toLocaleString()} UGX</span>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                  {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
-                    <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
-                      <span className="text-xs text-zinc-500 font-bold uppercase">Balance Due</span>
-                      <span className="text-sm font-black text-rose-400">{(parseFloat(f.totalAmount) - parseFloat(f.depositPaid)).toLocaleString()} UGX</span>
-                    </div>
-                  )}
-                </div>
-                {/* Itemised materials: who provided each line. Customer-brought
-                    fabric costs you zero and never eats the profit above. */}
-                <div className="mt-2 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Material lines</p>
-                    <button onClick={() => setFMats(prev => [...prev, { name: '', cost: '', providedBy: 'tailor' as const }])}
-                      className="text-[10px] font-black text-gold-brand uppercase tracking-wider hover:underline cursor-pointer">+ Add line</button>
+                {f.totalAmount && f.depositPaid && parseFloat(f.depositPaid) > 0 && (
+                  <div className="mt-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                    <span className="text-xs text-zinc-500 font-bold uppercase">Still to pay</span>
+                    <span className="text-sm font-black text-rose-400">{(parseFloat(f.totalAmount) - parseFloat(f.depositPaid)).toLocaleString()} UGX</span>
                   </div>
-                  {fMats.map((m, i) => (
-                    <div key={i} className="flex items-center gap-1.5">
-                      <input type="text" value={m.name} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                        placeholder="e.g. Kitenge 4m"
-                        className="flex-1 min-w-0 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
-                      <input type="number" min="0" value={m.cost} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, cost: e.target.value } : x))}
-                        placeholder="Cost"
-                        className="w-20 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-2 text-xs focus:border-gold-brand outline-none tabular-nums" />
-                      <button onClick={() => setFMats(prev => prev.map((x, j) => j === i ? { ...x, providedBy: x.providedBy === 'tailor' ? 'customer' as const : 'tailor' as const } : x))}
-                        title={m.providedBy === 'tailor' ? 'I bought it — tap if the customer brought it' : 'Customer brought it — tap if I bought it'}
-                        className={`shrink-0 h-10 px-2 rounded-xl text-[9px] font-black uppercase border transition-all cursor-pointer ${m.providedBy === 'tailor' ? 'border-amber-600/50 bg-amber-950/30 text-amber-300' : 'border-emerald-600/50 bg-emerald-950/30 text-emerald-300'}`}>
-                        {m.providedBy === 'tailor' ? 'Mine' : 'Theirs'}
-                      </button>
-                      <button onClick={() => setFMats(prev => prev.filter((_, j) => j !== i))}
-                        aria-label="Remove material line"
-                        className="shrink-0 p-1.5 text-zinc-600 hover:text-rose-400 rounded cursor-pointer">
-                        <X className="w-4 h-4" />
-                      </button>
+                )}
+                <details className="mt-2 bg-[#0A0A0A]/60 border border-white/5 rounded-xl px-3 py-2">
+                  <summary className="text-[10px] font-black text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-200">More: my costs & profit</summary>
+                  <div className="pt-2 space-y-2">
+                    <div>
+                      <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">My extra costs (thread, buttons…)</label>
+                      <input type="number" value={f.materialCost} onChange={e => setF(p => ({ ...p, materialCost: e.target.value }))}
+                        placeholder="Only what YOU spent"
+                        className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
                     </div>
-                  ))}
-                </div>
+                    {(() => {
+                      const draft = {
+                        totalAmount: parseFloat(f.totalAmount) || 0,
+                        materialCost: parseFloat(f.materialCost) || 0,
+                        materials: fMats.map(m => cleanMaterial({ ...m, cost: parseFloat(m.cost) || 0 })).filter((m): m is TailoringMaterial => m !== null),
+                      };
+                      const profit = tailorProfit(draft);
+                      const mine = tailorMaterialsCost(draft);
+                      return (
+                        <>
+                          {f.totalAmount && (mine > 0 || (parseFloat(f.materialCost) || 0) > 0 || draft.materials.length > 0) && (
+                            <div className="bg-[#0A0A0A] border border-white/5 rounded-xl px-4 py-3 flex justify-between items-center">
+                              <span className="text-xs text-zinc-500 font-bold uppercase">My profit (costs {mine.toLocaleString()})</span>
+                              <span className={`text-sm font-black ${profit < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{profit.toLocaleString()} UGX</span>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">What did you use?</p>
+                        <button onClick={() => setFMats(prev => [...prev, { name: '', cost: '', providedBy: 'tailor' as const }])}
+                          className="text-[10px] font-black text-gold-brand uppercase tracking-wider hover:underline cursor-pointer">+ Add line</button>
+                      </div>
+                      {fMats.map((m, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <input type="text" value={m.name} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                            placeholder="e.g. Kitenge 4m"
+                            className="flex-1 min-w-0 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-3 text-xs focus:border-gold-brand focus:outline-none" />
+                          <input type="number" min="0" value={m.cost} onChange={e => setFMats(prev => prev.map((x, j) => j === i ? { ...x, cost: e.target.value } : x))}
+                            placeholder="Cost"
+                            className="w-20 bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-10 px-2 text-xs focus:border-gold-brand outline-none tabular-nums" />
+                          <button onClick={() => setFMats(prev => prev.map((x, j) => j === i ? { ...x, providedBy: x.providedBy === 'tailor' ? 'customer' as const : 'tailor' as const } : x))}
+                            title={m.providedBy === 'tailor' ? 'I bought it — tap if the customer brought it' : 'Customer brought it — tap if I bought it'}
+                            className={`shrink-0 h-10 px-2 rounded-xl text-[9px] font-black uppercase border transition-all cursor-pointer ${m.providedBy === 'tailor' ? 'border-amber-600/50 bg-amber-950/30 text-amber-300' : 'border-emerald-600/50 bg-emerald-950/30 text-emerald-300'}`}>
+                            {m.providedBy === 'tailor' ? 'Mine' : 'Theirs'}
+                          </button>
+                          <button onClick={() => setFMats(prev => prev.filter((_, j) => j !== i))}
+                            aria-label="Remove material line"
+                            className="shrink-0 p-1.5 text-zinc-600 hover:text-rose-400 rounded cursor-pointer">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                      <p className="text-[10px] text-zinc-600 font-bold">Theirs = customer brought it, costs you zero.</p>
+                    </div>
+                  </div>
+                </details>
               </section>
 
               {/* DATE + NOTES */}
               <section className="grid grid-cols-2 gap-3">
                 <div>
                   <h4 className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                    <Calendar className="w-3 h-3" /> Expected
+                    <Calendar className="w-3 h-3" /> 4 · Ready date
                   </h4>
                   <input type="date" value={f.expectedDate} onChange={e => setF(p => ({ ...p, expectedDate: e.target.value }))}
                     className="w-full bg-[#0A0A0A] border border-white/5 text-white rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" />
