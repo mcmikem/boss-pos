@@ -1632,7 +1632,7 @@ export default function Sales({
 
         {/* Eatery home: the restaurant TODAY view (area operating surface) */}
         {showEateryHome ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-home-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="eatery-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <EateryHome products={products} productionRegisters={productionRegisters}
                 sales={salesHistory} wastageLogs={wastageLogs}
@@ -1646,7 +1646,7 @@ export default function Sales({
 
         {/* Booking home: today's chairs, done, new booking (area surface) */}
         {showBookingHome ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="booking-home-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="booking-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <BookingHome
                 triggerToast={triggerToast}
@@ -1658,7 +1658,7 @@ export default function Sales({
 
         {/* Repair home: bench, ready, balances due (area surface) */}
         {showRepairHome ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="repair-home-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="repair-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <RepairHome
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
@@ -1670,7 +1670,7 @@ export default function Sales({
 
         {/* Print home: today's jobs, balances due, ready (area surface) */}
         {showPrintHome ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="print-home-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="print-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <PrintHome
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
@@ -1682,7 +1682,7 @@ export default function Sales({
 
         {/* Tailor home: today's orders, balances due, ready (area surface) */}
         {showTailorHome ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="tailor-home-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="tailor-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <TailorHome
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
@@ -1694,7 +1694,7 @@ export default function Sales({
 
         {/* Tailor orders view */}
         {showTailoringOrders ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="tailoring-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="tailoring-scroll-container">
             <button onClick={() => setShowTailoringOrders(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1705,7 +1705,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showDesignOrders ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="design-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="design-scroll-container">
             <button onClick={() => setShowDesignOrders(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1716,7 +1716,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showEateryPricing ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="eatery-pricing-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="eatery-pricing-scroll-container">
             <button onClick={() => setShowEateryPricing(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1727,7 +1727,7 @@ export default function Sales({
             </Suspense>
           </div>
                 ) : showProduction && onAddProduction && onDeleteProduction ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="morning-production-scroll-container">            <button onClick={() => setShowProduction(false)}
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="morning-production-scroll-container">            <button onClick={() => setShowProduction(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
@@ -1739,7 +1739,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showBookings ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="bookings-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="bookings-scroll-container">
             <button onClick={() => setShowBookings(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1750,7 +1750,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showRepairs ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="repairs-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="repairs-scroll-container">
             <button onClick={() => setShowRepairs(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1761,7 +1761,7 @@ export default function Sales({
             </Suspense>
           </div>
         ) : showQuotes ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-2 scrollbar-thin" id="quotes-scroll-container">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="quotes-scroll-container">
             <button onClick={() => setShowQuotes(false)}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
@@ -1783,7 +1783,7 @@ export default function Sales({
           </div>
         ) : (
         /* Products */
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-2 scrollbar-thin" id="catalog-scroll-container">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
           <section className="space-y-2">
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
               {selectedCategory === 'All' ? 'All Products' : selectedCategory}

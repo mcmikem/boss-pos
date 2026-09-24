@@ -263,6 +263,27 @@ html {
   animation: fab-pop 0.25s ease-out;
 }
 
+/* Tab entrance: soft rise used by dashboard + reports on mount. */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+/* Motion sensitivity: kill decorative animation (ping, bounce, glow,
+   entrance) while keeping state readable. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .animate-tour-card-in, .animate-fab-pop,
+  .animate-ping, .animate-bounce, .animate-pulse, .animate-tour-glow {
+    animation: none !important;
+  }
+  .tour-draw {
+    animation-duration: 0.01s !important;
+  }
+}
+
 /* Tour tip card: soft rise-in on every step change (keyed by step, so the
    animation replays as the pointer moves to the next target). */
 @keyframes tour-card-in {
