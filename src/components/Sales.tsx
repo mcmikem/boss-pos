@@ -279,6 +279,13 @@ export default function Sales({
   const [showProduction, setShowProduction] = useState<boolean>(false);
   const [showEateryHome, setShowEateryHome] = useState<boolean>(false);
   const [showTailorHome, setShowTailorHome] = useState<boolean>(false);
+  // Area chips open their workspace, not a product grid — a tailor's work
+  // is orders, a printer's is jobs; shelf grids stay one tap away inside.
+  // (Eatery keeps its fast-selling grid: chapatis ring by the second.)
+  useEffect(() => {
+    if (selectedCategory === 'Tailoring' && !showTailoringOrders) setShowTailorHome(true);
+    if (selectedCategory === 'Graphics' && !showDesignOrders) setShowPrintHome(true);
+  }, [selectedCategory]);
   const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
   const [showRepairHome, setShowRepairHome] = useState<boolean>(false);
   const [showBookingHome, setShowBookingHome] = useState<boolean>(false);
@@ -1545,22 +1552,38 @@ export default function Sales({
                     <Sunrise className="w-4 h-4" /> Production
                   </button>
                 )}
+                {onGoClose && (
+                  <button onClick={onGoClose}
+                    title="Close the kitchen" aria-label="Close kitchen"
+                    className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-white/10 bg-[#141414] text-zinc-300 hover:text-white active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                    <Wallet className="w-4 h-4" /> Close
+                  </button>
+                )}
               </>
             )}
-            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
-              <>
+            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && !showTailorHome && (
               <button onClick={() => setShowTailorHome(true)}
-                title="Today in tailoring" aria-label="Tailoring today"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Flame className="w-4 h-4" /> Today
+                title="Back to workspace" aria-label="Back to tailoring workspace"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[#141414] border border-white/10 text-zinc-300 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
+                <ArrowRightLeft className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] font-black uppercase tracking-wider">← Tailoring workspace</span>
               </button>
+            )}
+            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
               <button onClick={() => setShowTailoringOrders(true)}
                 title="Manage Tailor Orders" aria-label="Manage tailor orders"
                 className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                     <Scissors className="w-4 h-4" /> Tailoring
                   </button>
-                  </>
                 )}
+            {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && !showPrintHome && (
+              <button onClick={() => setShowPrintHome(true)}
+                title="Back to workspace" aria-label="Back to printing workspace"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[#141414] border border-white/10 text-zinc-300 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
+                <ArrowRightLeft className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] font-black uppercase tracking-wider">← Printing workspace</span>
+              </button>
+            )}
             {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
               <>
               <button onClick={() => setShowPrintHome(true)}

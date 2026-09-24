@@ -49,6 +49,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
   const [showPanel, setShowPanel] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [cardMenuId, setCardMenuId] = useState<string | null>(null);
   // Handover settle: order awaiting the customer's pick of Cash/MoMo/Book.
   const [settleId, setSettleId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -321,7 +322,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
           { label: 'Pending', count: pendingCount, color: 'text-amber-400', border: 'border-l-amber-500' },
           { label: 'Cutting', count: inProgressCount, color: 'text-blue-400', border: 'border-l-blue-500' },
           { label: 'Done', count: completedToday, color: 'text-emerald-400', border: 'border-l-emerald-500' },
-          { label: 'Sold', count: deliveredToday, color: 'text-zinc-400', border: 'border-l-zinc-500' },
+          { label: 'Out', count: deliveredToday, color: 'text-zinc-400', border: 'border-l-zinc-500' },
         ].map(s => (
           <div key={s.label} className={`boss-card p-2.5 border-l-4 ${s.border}`}>
             <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">{s.label}</p>
@@ -382,7 +383,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
             const isOverdue = order.expectedDate < today && order.status !== 'delivered';
 
             return (
-              <div key={order.id} className="boss-card p-4 hover:bg-[#1C1C1C] transition-all">
+              <div key={order.id} className="relative boss-card p-4 hover:bg-[#1C1C1C] transition-all">
                 {/* Row 1: Customer + Amount */}
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="min-w-0 flex-1">
@@ -438,8 +439,8 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                   <p className="text-[10px] text-zinc-500 italic mb-2 line-clamp-2">📝 {order.notes}</p>
                 )}
 
-                {/* Row 4: Actions */}
-                <div className="flex items-center gap-1.5 pt-2.5 border-t border-white/5">
+                {/* Row 4: one primary action + overflow — the card stays scannable */}
+                <div className="relative flex items-center gap-1.5 pt-2.5 border-t border-white/5">
                   {order.status !== 'delivered' && (
                     <button onClick={() => advanceStatus(order)}
                       className="flex-1 h-9 bg-gold-brand/20 text-gold-light border border-gold-brand/30 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-gold-brand/30 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1">
@@ -447,44 +448,56 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
                       {order.status === 'pending' ? 'Start' : order.status === 'in_progress' ? 'Complete' : 'Deliver'}
                     </button>
                   )}
-                  {order.status !== 'pending' && order.status !== 'delivered' && (
-                    <button onClick={() => revertStatus(order)}
-                      className="h-9 w-9 bg-zinc-800/30 text-zinc-500 hover:text-zinc-300 rounded-xl flex items-center justify-center active:scale-95 transition-all cursor-pointer"
-                      title="Revert to previous status">
-                      <RotateCcw className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  {order.status === 'completed' && order.customerPhone && balance > 0 && (() => {
-                    const url = customerWhatsAppUrl(order.customerPhone,
-                      `Hello ${order.customerName}, your ${order.workDescription || order.workType} is READY for pickup! Balance: ${fmt(balance)}. Thank you!`);
-                    if (!url) return null;
-                    return (
-                      <button onClick={() => {
-                          const w = window.open(url, '_blank', 'noopener');
-                          if (w) triggerToast('WhatsApp opened — send the pickup note', 'success');
-                          else triggerToast('Could not open WhatsApp', 'error');
-                        }}
-                        className="h-9 px-3 bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-emerald-950/50 active:scale-95 transition-all cursor-pointer">
-                        Notify
-                      </button>
-                    );
-                  })()}
-                  <button onClick={() => openEdit(order)}
-                    className="h-9 px-3 bg-zinc-800/30 text-zinc-400 hover:text-white border border-zinc-800/50 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer">
-                    Edit
+                  <button onClick={() => setCardMenuId(cardMenuId === order.id ? null : order.id)}
+                    aria-label="More actions for this order" aria-expanded={cardMenuId === order.id}
+                    className="h-9 w-9 bg-zinc-800/30 text-zinc-400 hover:text-white border border-zinc-800/50 rounded-xl flex items-center justify-center active:scale-95 transition-all cursor-pointer shrink-0">
+                    <span className="text-sm font-black tracking-tighter">•••</span>
                   </button>
-                  {confirmDelete === order.id ? (
-                    <div className="flex gap-1">
-                      <button onClick={() => handleDelete(order.id)}
-                        className="h-9 px-3 bg-rose-600 text-white rounded-xl text-[10px] font-bold cursor-pointer">Delete</button>
-                      <button onClick={() => setConfirmDelete(null)}
-                        className="h-9 px-3 bg-zinc-800 text-zinc-400 rounded-xl text-[10px] font-bold cursor-pointer">No</button>
-                    </div>
-                  ) : (
-                    <button onClick={() => setConfirmDelete(order.id)}
-                      className="h-9 w-9 bg-zinc-800/20 text-zinc-600 hover:text-rose-400 rounded-xl flex items-center justify-center active:scale-95 transition-all cursor-pointer">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                  {cardMenuId === order.id && (
+                    <>
+                      <div className="fixed inset-0 z-[60]" onClick={() => setCardMenuId(null)} aria-hidden="true" />
+                      <div className="absolute right-0 bottom-full mb-2 z-[61] w-52 bg-[#141414] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1">
+                        {order.status !== 'pending' && order.status !== 'delivered' && (
+                          <button onClick={() => { setCardMenuId(null); revertStatus(order); }}
+                            className="w-full h-10 px-3 rounded-xl text-[11px] font-black uppercase tracking-wider text-zinc-300 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                            <RotateCcw className="w-4 h-4" /> Move back a step
+                          </button>
+                        )}
+                        {order.status === 'completed' && order.customerPhone && balance > 0 && (() => {
+                          const url = customerWhatsAppUrl(order.customerPhone,
+                            `Hello ${order.customerName}, your ${order.workDescription || order.workType} is READY for pickup! Balance: ${fmt(balance)}. Thank you!`);
+                          if (!url) return null;
+                          return (
+                            <button onClick={() => {
+                                setCardMenuId(null);
+                                const w = window.open(url, '_blank', 'noopener');
+                                if (w) triggerToast('WhatsApp opened — send the pickup note', 'success');
+                                else triggerToast('Could not open WhatsApp', 'error');
+                              }}
+                              className="w-full h-10 px-3 rounded-xl text-[11px] font-black uppercase tracking-wider text-emerald-300 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                              Notify pickup
+                            </button>
+                          );
+                        })()}
+                        <button onClick={() => { setCardMenuId(null); openEdit(order); }}
+                          className="w-full h-10 px-3 rounded-xl text-[11px] font-black uppercase tracking-wider text-zinc-300 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
+                          Edit order
+                        </button>
+                        {confirmDelete === order.id ? (
+                          <div className="flex gap-1">
+                            <button onClick={() => handleDelete(order.id)}
+                              className="flex-1 h-10 bg-rose-600 text-white rounded-xl text-[11px] font-bold cursor-pointer">Delete</button>
+                            <button onClick={() => setConfirmDelete(null)}
+                              className="flex-1 h-10 bg-zinc-800 text-zinc-400 rounded-xl text-[11px] font-bold cursor-pointer">No</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setConfirmDelete(order.id)}
+                            className="w-full h-10 px-3 rounded-xl text-[11px] font-black uppercase tracking-wider text-rose-400/80 hover:bg-rose-950/30 flex items-center gap-2.5 cursor-pointer">
+                            Delete order
+                          </button>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
