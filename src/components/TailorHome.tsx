@@ -13,11 +13,12 @@ interface TailorHomeProps {
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBackSell: () => void;
-  onOpenOrders: () => void;
+  onNewOrder: () => void;
+  onOpenBook: () => void;
 }
 
 export default function TailorHome({
-  formatCurrency, triggerToast, onBackSell, onOpenOrders,
+  formatCurrency, triggerToast, onBackSell, onNewOrder, onOpenBook,
 }: TailorHomeProps) {
   const [orders, setOrders] = useState<TailoringOrder[]>([]);
   useEffect(() => {
@@ -93,9 +94,13 @@ export default function TailorHome({
         </div>
       )}
 
-      <button onClick={onOpenOrders}
+      <button onClick={onNewOrder}
         className="w-full h-12 bg-gold-brand text-black rounded-xl text-sm font-black uppercase tracking-widest hover:opacity-90 active:scale-[0.99] transition-all cursor-pointer flex items-center justify-center gap-2">
-        <Plus className="w-4 h-4" /> New order / open book
+        <Plus className="w-4 h-4" /> New order
+      </button>
+      <button onClick={onOpenBook}
+        className="w-full h-10 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all cursor-pointer">
+        Open book
       </button>
       <button onClick={onBackSell}
         className="w-full h-10 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer">

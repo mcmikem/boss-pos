@@ -41,7 +41,7 @@ interface TailoringOrdersProps {
   formatCurrency?: (val: number) => string;
 }
 
-export default function TailoringOrders({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency }: TailoringOrdersProps) {
+export default function TailoringOrders({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency, autoNew }: TailoringOrdersProps & { autoNew?: boolean }) {
   const [orders, setOrders] = useState<TailoringOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -126,6 +126,13 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
     resetForm();
     setShowPanel(true);
   }
+
+  // Deep link: area home "New order" lands straight in the form, skipping
+  // the book. Runs once per mount (the manager remounts on every open).
+  useEffect(() => {
+    if (autoNew) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openEdit(order: TailoringOrder) {
     setEditId(order.id);

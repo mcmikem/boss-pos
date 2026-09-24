@@ -279,12 +279,31 @@ export default function Sales({
   const [showProduction, setShowProduction] = useState<boolean>(false);
   const [showEateryHome, setShowEateryHome] = useState<boolean>(false);
   const [showTailorHome, setShowTailorHome] = useState<boolean>(false);
+  const [tailorStartNew, setTailorStartNew] = useState<boolean>(false);
+  const [designStartNew, setDesignStartNew] = useState<boolean>(false);
   // Area chips open their workspace, not a product grid — a tailor's work
   // is orders, a printer's is jobs; shelf grids stay one tap away inside.
   // (Eatery keeps its fast-selling grid: chapatis ring by the second.)
+  // Switching areas always resets sub-views first: otherwise yesterday's
+  // tailor home stays mounted under today's Eatery chip.
   useEffect(() => {
-    if (selectedCategory === 'Tailoring' && !showTailoringOrders) setShowTailorHome(true);
-    if (selectedCategory === 'Graphics' && !showDesignOrders) setShowPrintHome(true);
+    setShowTailoringOrders(false);
+    setShowDesignOrders(false);
+    setShowBookings(false);
+    setShowRepairs(false);
+    setShowQuotes(false);
+    setShowEateryPricing(false);
+    setShowProduction(false);
+    setShowEateryHome(false);
+    setShowTailorHome(false);
+    setShowPrintHome(false);
+    setShowRepairHome(false);
+    setShowBookingHome(false);
+    setTailorStartNew(false);
+    setDesignStartNew(false);
+    if (selectedCategory === 'Tailoring') setShowTailorHome(true);
+    if (selectedCategory === 'Graphics') setShowPrintHome(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory]);
   const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
   const [showRepairHome, setShowRepairHome] = useState<boolean>(false);
@@ -1631,7 +1650,7 @@ export default function Sales({
         ) : null}
 
         {/* Eatery home: the restaurant TODAY view (area operating surface) */}
-        {showEateryHome ? (
+        {showEateryHome && (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="eatery-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <EateryHome products={products} productionRegisters={productionRegisters}
@@ -1669,25 +1688,27 @@ export default function Sales({
         ) : null}
 
         {/* Print home: today's jobs, balances due, ready (area surface) */}
-        {showPrintHome ? (
+        {showPrintHome && selectedCategory === 'Graphics' ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="print-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <PrintHome
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
                 onBackSell={() => setShowPrintHome(false)}
-                onOpenJobs={() => { setShowPrintHome(false); setShowDesignOrders(true); }} />
+                onNewJob={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
+                onOpenBook={() => { setShowPrintHome(false); setDesignStartNew(false); setShowDesignOrders(true); }} />
             </Suspense>
           </div>
         ) : null}
 
         {/* Tailor home: today's orders, balances due, ready (area surface) */}
-        {showTailorHome ? (
+        {showTailorHome && selectedCategory === 'Tailoring' ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="tailor-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <TailorHome
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
                 onBackSell={() => setShowTailorHome(false)}
-                onOpenOrders={() => { setShowTailorHome(false); setShowTailoringOrders(true); }} />
+                onNewOrder={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
+                onOpenBook={() => { setShowTailorHome(false); setTailorStartNew(false); setShowTailoringOrders(true); }} />
             </Suspense>
           </div>
         ) : null}
@@ -1695,23 +1716,23 @@ export default function Sales({
         {/* Tailor orders view */}
         {showTailoringOrders ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="tailoring-scroll-container">
-            <button onClick={() => setShowTailoringOrders(false)}
+            <button onClick={() => { setShowTailoringOrders(false); setTailorStartNew(false); }}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <TailoringOrders triggerToast={triggerToast} onAddSale={onAddSale}
+              <TailoringOrders triggerToast={triggerToast} onAddSale={onAddSale} autoNew={tailorStartNew}
                 staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>
         ) : showDesignOrders ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="design-scroll-container">
-            <button onClick={() => setShowDesignOrders(false)}
+            <button onClick={() => { setShowDesignOrders(false); setDesignStartNew(false); }}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <DesignOrders triggerToast={triggerToast} onAddSale={onAddSale}
+              <DesignOrders triggerToast={triggerToast} onAddSale={onAddSale} autoNew={designStartNew}
                 staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>

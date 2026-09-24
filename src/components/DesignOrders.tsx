@@ -56,7 +56,7 @@ interface DesignOrdersProps {
 // new handovers ring real sales (tagged), old ones keep the legacy estimate.
 export const DESIGN_SALE_TAG = (id: string) => `Design order ${id}`;
 
-export default function DesignOrders({ triggerToast, shopName = 'Design & Print', onAddSale, staffName, tillBranch, formatCurrency }: DesignOrdersProps) {
+export default function DesignOrders({ triggerToast, shopName = 'Design & Print', onAddSale, staffName, tillBranch, formatCurrency, autoNew }: DesignOrdersProps & { autoNew?: boolean }) {
   const [settleId, setSettleId] = useState<string | null>(null);
   const fmtMoney = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
   const [orders, setOrders] = useState<DesignOrder[]>([]);
@@ -164,6 +164,13 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
     resetForm();
     setShowPanel(true);
   }
+
+  // Deep link: area home "New job" lands straight in the form, skipping
+  // the book. Runs once per mount (the manager remounts on every open).
+  useEffect(() => {
+    if (autoNew) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openEdit(order: DesignOrder) {
     setEditId(order.id);
