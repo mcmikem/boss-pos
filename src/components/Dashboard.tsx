@@ -36,6 +36,7 @@ interface DashboardProps {
   expenseCategories: string[];
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   momoTransfers?: MomoTransfer[];
+  onShowAllReports?: () => void;
 }
 
 export default function Dashboard({ 
@@ -52,6 +53,7 @@ export default function Dashboard({
   expenseCategories,
   triggerToast,
   momoTransfers = [],
+  onShowAllReports,
 }: DashboardProps) {
   const [selectedSaleForModal, setSelectedSaleForModal] = useState<Sale | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
@@ -553,7 +555,7 @@ export default function Dashboard({
       <section className="space-y-3">
         <div className="flex justify-between items-center">
           <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest">Recent Sales</h3>
-          <button onClick={() => onNavigate('analytics')} className="text-xs text-gold-brand hover:underline font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer">
+          <button onClick={() => { if (onShowAllReports) onShowAllReports(); else onNavigate('analytics'); }} className="text-xs text-gold-brand hover:underline font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer">
             All Reports <ArrowUpRight className="w-3.5 h-3.5" />
           </button>
         </div>

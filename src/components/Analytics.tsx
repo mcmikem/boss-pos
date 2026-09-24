@@ -722,6 +722,10 @@ const colorsMap: { [key: string]: string } = {
           <Dashboard
             sales={sales} expenses={expenses} products={products}
             formatCurrency={formatCurrency} onNavigate={onNavigate}
+            onShowAllReports={() => {
+              setShowAllDays(true);
+              setTimeout(() => { try { document.getElementById('daily-breakdown')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {} }, 80);
+            }}
             onRepeatLastSale={onRepeatLastSale} onRefundSale={onRefundSale} onReturnItems={onReturnItems}
             settings={settings}
             onAddExpense={onAddExpense}
@@ -1164,7 +1168,7 @@ const colorsMap: { [key: string]: string } = {
             const avgBasket = filteredSales.length > 0 ? revenue / filteredSales.length : 0;
             if (top.length === 0 && avgBasket <= 0) return null;
             return (
-              <section className="boss-card p-5">
+          <section className="boss-card p-5 scroll-mt-20" id="daily-breakdown">
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
                     <User className="w-4 h-4 text-gold-brand" /> Top Customers ({timeFilter})
