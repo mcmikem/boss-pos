@@ -6,7 +6,7 @@ import { bookingApi } from '../api';
 import type { Booking } from '../types';
 import { Sunrise, TrendingUp, TrendingDown, Users, PackageX, RefreshCw, AlertTriangle, ChevronDown, Wallet } from 'lucide-react';
 import type { Sale, CreditEat, Product, Expense, MomoTransfer } from '../types';
-import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory, openingPhoneFor } from '../utils/cashflow';
+import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory, openingPhoneFor, prevDayKey } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
 import { stockoutLosses } from '../utils/stockout';
@@ -16,6 +16,7 @@ interface MorningBriefProps {
   products: Product[];
   creditEats: CreditEat[];
   pendingCount: number;
+  lastSyncedAt?: number | null;
   formatCurrency: (val: number) => string;
   onNavigate: (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers') => void;
   onSync: () => void;
@@ -38,7 +39,7 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function MorningBrief({ sales, products, creditEats, pendingCount, formatCurrency, onNavigate, onSync, dailyGoal, dailyGoalRevenue, expenses = [], momoTransfers = [], eodCapital, managerView = true, sellerName = '' }: MorningBriefProps) {
+export default function MorningBrief({ sales, products, creditEats, pendingCount, lastSyncedAt = null, formatCurrency, onNavigate, onSync, dailyGoal, dailyGoalRevenue, expenses = [], momoTransfers = [], eodCapital, managerView = true, sellerName = '' }: MorningBriefProps) {
   // Cashier shift card: greeting, MY sales today, handover, sync — the
   // worker's own work, never revenue/debts/drawer (manager-only numbers).
   const shift = useMemo(() => {
@@ -115,6 +116,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     let inDrawers = 0;
     let drawerCash = 0;
     let phoneCash = 0;
+    let phoneFloat = 0;
     for (const cat of cats) {
       const t = tender[cat] || { cash: 0, momo: 0 };
       const m = moved[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
@@ -122,6 +124,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       drawerCash += getOpeningCapital(today, cat, eodCapital) + t.cash
         - (drawerExp[cat] || 0) - movedOut;
       phoneCash += (phoneOpen.get(cat) || 0) + t.momo + m.float - (momoExp[cat] || 0);
+      phoneFloat += m.float;
     }
     inDrawers = drawerCash + phoneCash;
     // Rush hour: busiest sales hour today (5am–11pm sane range for display).
@@ -138,6 +141,16 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       const h12 = h % 12 === 0 ? 12 : h % 12;
       return `${h12}${h < 12 ? 'am' : 'pm'}`;
     };
+    // Yesterday's close record: closed clean vs never closed — the first
+    // thing a boss checks at 8am.
+    const yKey = prevDayKey(today);
+    let closedDepts = 0;
+    for (const cat of cats) {
+      try {
+        const raw = JSON.parse(localStorage.getItem(`boss_pos_dayclosed_${yKey}::${cat}`) || 'null');
+        if (raw?.at) closedDepts += 1;
+      } catch {}
+    }
     return {
       today: t,
       delta: dayDelta(t.revenue, y.revenue),
@@ -150,6 +163,9 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       inDrawers,
       drawerCash,
       phoneCash,
+      phoneFloat,
+      closedDepts,
+      deptCount: cats.size,
     };
   }, [sales, products, creditEats]);
 
@@ -183,7 +199,11 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     {
       label: 'Unsynced',
       value: String(pendingCount),
-      sub: pendingCount > 0 ? 'tap to sync' : 'all synced',
+      sub: pendingCount > 0
+        ? 'tap to sync — sales wait on this phone'
+        : lastSyncedAt
+          ? `all synced ${Math.max(0, Math.round((Date.now() - lastSyncedAt) / 60000))}m ago`
+          : 'all synced',
       tone: pendingCount > 0 ? 'text-amber-300' : 'text-zinc-500',
       icon: <RefreshCw className="w-3.5 h-3.5 text-amber-400" />,
       act: onSync,
@@ -191,7 +211,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     {
       label: 'In drawer',
       value: formatCurrency(Math.max(0, Math.round(brief.inDrawers))),
-      sub: `cash ${formatCurrency(Math.max(0, Math.round(brief.drawerCash)))} • phone ${formatCurrency(Math.max(0, Math.round(brief.phoneCash)))}`,
+      sub: `cash ${formatCurrency(Math.max(0, Math.round(brief.drawerCash)))} • phone ${formatCurrency(Math.max(0, Math.round(brief.phoneCash)))}${brief.phoneFloat > 0 ? ` (float ${formatCurrency(Math.round(brief.phoneFloat))})` : ''}`,
       tone: 'text-cyan-300',
       icon: <Wallet className="w-3.5 h-3.5 text-cyan-400" />,
       act: () => onNavigate('registers'),
@@ -270,6 +290,10 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         <h3 className="text-xs font-black text-white uppercase tracking-widest font-display flex-1 min-w-0 truncate">
           {greeting()} — today at a glance
         </h3>
+        <span className={`text-[10px] font-black tabular-nums shrink-0 ${brief.closedDepts > 0 ? 'text-emerald-400' : 'text-zinc-600'}`}
+          title={brief.closedDepts > 0 ? 'Yesterday was closed' : 'Yesterday was never closed'}>
+          {brief.closedDepts > 0 ? `Yday ✓` : 'Yday open'}
+        </span>
         {collapsed && (
           <span className="text-[10px] font-black text-gold-brand tabular-nums shrink-0">{formatCurrency(brief.today.revenue)}</span>
         )}

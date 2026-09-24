@@ -783,7 +783,7 @@ export default function Sales({
     const val = parseQty(trimmed);
     if (val <= 0) {
       if (/^0+(\.0+)?$/.test(trimmed)) handleRemoveItem(productId, variantId);
-      else { playError(); triggerToast('Enter a valid quantity (e.g. 2 or 2.5)', 'error'); }
+      else { playError(); triggerToast('How many? Type a number like 2 or 2.5', 'error'); }
       setEditingItemId(null);
       return;
     }
@@ -878,7 +878,7 @@ export default function Sales({
     // Playable demo (#2): run the full checkout thrill, but save nothing —
     // the cart just clears with a success note instead of a real sale.
     if (demoMode) {
-      if (cart.length === 0) { playError(); triggerToast('Cart is empty!', 'error'); return false; }
+      if (cart.length === 0) { playError(); triggerToast('Add items to the cart first', 'error'); return false; }
       setCart([]);
       setCustomCashReceived('');
       setDiscount('');
@@ -889,7 +889,7 @@ export default function Sales({
       return true;
     }
     if (isCompleting) return false;
-    if (cart.length === 0) { playError(); triggerToast('Cart is empty!', 'error'); return false; }
+    if (cart.length === 0) { playError(); triggerToast('Add items to the cart first', 'error'); return false; }
     // F2 / QuickSale bypass the disabled buttons, so the name gate lives here too.
     if (paymentMethod === 'Credit / Book' && customerName.trim() === '') {
       playError();
@@ -984,7 +984,7 @@ export default function Sales({
     if (paymentMethod === 'Cash' && customCashReceived !== '' && !isNaN(cashPaidNum) && cashPaidNum < saleTotal) {
       setIsCompleting(false);
       playError();
-      triggerToast(`Short by ${formatCurrency(saleTotal - cashPaidNum)} — collect full cash first`, 'error');
+      triggerToast(`Still need ${formatCurrency(saleTotal - cashPaidNum)} — collect it or lower the total`, 'error');
       return false;
     }
     // Split guard (F2 bypasses the disabled button): legs must be positive,
@@ -996,7 +996,7 @@ export default function Sales({
       if (!(saleTotal > 0 && a > 0 && b > 0 && splitLeg1Method !== splitLeg2Method)) {
         setIsCompleting(false);
         playError();
-        triggerToast('Split legs must add up to the total (two methods)', 'error');
+        triggerToast('Make both legs add up to the total', 'error');
         return false;
       }
       splitTenders = [
@@ -1118,7 +1118,7 @@ export default function Sales({
       const p = catalog.find(x => x.id === item.productId);
       return !!p && (p.isService || p.stockQty >= item.qty);
     });
-    if (live.length === 0) { triggerToast('Last sale items are out of stock now', 'error'); return; }
+    if (live.length === 0) { triggerToast("Last sale cannot repeat — those items are out of stock", 'error'); return; }
     setCart(live);
     if (live.length < lastSaleItems.length) triggerToast('Some items out of stock — added what is available', 'info');
   };
@@ -1836,16 +1836,46 @@ export default function Sales({
                       className="mt-4 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
                       Sell “{searchQuery.trim().slice(0, 24)}” as a custom item
                     </button>
-                  ) : (
+                  )                   : (
                     // Empty states that teach (#4): one action button, not just
                     // "no data". In demo mode the catalog is never empty.
+                    // Area-aware: a tailor needs orders, an eatery needs a
+                    // batch — never a stock form for a non-stock trade.
                     <div className="mt-2 space-y-2">
+                      {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && onAddProduction ? (
+                        <>
+                          <p className="text-xs text-zinc-500 font-bold uppercase">No food yet today — log what the kitchen made</p>
+                          <button onClick={() => setShowProduction(true)}
+                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                            Log morning production
+                          </button>
+                        </>
+                      ) : selectedCategory === 'Tailoring' ? (
+                        <>
+                          <p className="text-xs text-zinc-500 font-bold uppercase">Tailors don't stock shelves — take an order</p>
+                          <button onClick={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
+                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                            + New order
+                          </button>
+                        </>
+                      ) : selectedCategory === 'Graphics' ? (
+                        <>
+                          <p className="text-xs text-zinc-500 font-bold uppercase">No products needed — take a job</p>
+                          <button onClick={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
+                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                            + New job
+                          </button>
+                        </>
+                      ) : (
+                        <>
                       <p className="text-xs text-zinc-500 font-bold uppercase">Add products in Stock to start selling</p>
                       {onGoToStock && (
                         <button onClick={onGoToStock}
                           className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
                           + Add your first product
                         </button>
+                      )}
+                        </>
                       )}
                     </div>
                   )}
@@ -1930,7 +1960,7 @@ export default function Sales({
                   { name: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" /> },
                   { name: 'Credit / Book', label: t(lang, 'credit'), icon: <UserCheck className="w-4 h-4" /> },
                   { name: 'Split', label: 'Split', icon: <Split className="w-4 h-4" /> },
-                ].map(opt => (
+                ].filter(opt => !simple || (opt.name !== 'Credit / Book' && opt.name !== 'Split')).map(opt => (
                   <button key={opt.name} onClick={() => { setPaymentMethod(opt.name as any); setCustomCashReceived(''); }}
                     className={`${opt.name === 'Cash' ? 'tour-cash-btn ' : ''}flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
                       paymentMethod === opt.name ? 'border-gold-brand bg-gold-brand/15 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500 hover:border-white/10 hover:text-zinc-300'
@@ -1970,11 +2000,14 @@ export default function Sales({
 
               {!simpleTill && (
               <>
-              {/* Discount field */}
+              {/* Discount field (hidden in simple till; big ones need manager PIN) */}
               <div className="bg-[#0A0A0A] border border-white/5 p-3 rounded-2xl space-y-2 mt-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
                     <Percent className="w-3.5 h-3.5" /> {t(lang, 'discount')}
+                    {(settings?.discountPinAbove || 0) > 0 && (
+                      <span className="text-[9px] text-zinc-600 font-bold normal-case">· big ones ask manager PIN</span>
+                    )}
                   </label>
                   <div className="flex bg-[#141414] rounded-lg border border-white/5 overflow-hidden">
                     <button onClick={() => setDiscountType('fixed')}
@@ -2126,7 +2159,7 @@ export default function Sales({
           <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
             <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
             <div className="grid grid-cols-5 gap-1.5">
-              {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
+              {(simple ? ['Cash', 'MTN MoMo', 'Airtel Money'] : ['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split']).map(name => (
                 <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
                     className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-3 rounded-xl text-[10px] border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
                     paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500'
@@ -2313,7 +2346,7 @@ export default function Sales({
                 {cart.map(item => renderCompactCartRow(item, true))}
               </div>
               <div className="grid grid-cols-5 gap-1.5">
-                {['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'].map(name => (
+                {(simple ? ['Cash', 'MTN MoMo', 'Airtel Money'] : ['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split']).map(name => (
                   <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
                     className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-2.5 rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
                       paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'

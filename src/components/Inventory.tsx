@@ -64,6 +64,9 @@ export default function Inventory({
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
+  // Quick add: name + price + qty for basic sellers. Full details hides
+  // behind one link — same save path, same validation, zero intimidation.
+  const [quickMode, setQuickMode] = useState(true);
   
   const [stockAdjustment, setStockAdjustment] = useState<number>(0);
   const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
@@ -880,7 +883,7 @@ export default function Inventory({
         </div>
       </section>
 
-      <button onClick={() => setIsAddingNew(true)} id="tour-add-product"
+      <button onClick={() => { setQuickMode(true); setIsAddingNew(true); }} id="tour-add-product"
         className="fixed bottom-24 right-4 z-40 w-14 h-14 bg-gold-brand text-black rounded-2xl shadow-2xl flex items-center justify-center active:scale-95 transition-transform border border-white/10">
         <Plus className="w-8 h-8" />
       </button>
@@ -1026,6 +1029,56 @@ export default function Inventory({
               <button onClick={() => setIsAddingNew(false)} className="text-zinc-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
 
+            <div className="flex gap-1.5 bg-zinc-900 rounded-xl p-1">
+              <button onClick={() => setQuickMode(true)}
+                className={`flex-1 h-9 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer ${quickMode ? 'bg-gold-brand text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                Quick
+              </button>
+              <button onClick={() => setQuickMode(false)}
+                className={`flex-1 h-9 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all cursor-pointer ${!quickMode ? 'bg-gold-brand text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                Full details
+              </button>
+            </div>
+
+            {quickMode ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">What are you selling?</label>
+                  <input type="text" placeholder="e.g. Chapati, Coke 500ml" value={newName} onChange={(e) => setNewName(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none" autoFocus />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Which business?</label>
+                    <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-12 px-2 text-xs focus:border-gold-brand outline-none font-bold">
+                      {categoriesList.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Selling price</label>
+                    <input type="number" min="0" placeholder="e.g. 1000" value={newPrice} onChange={(e) => setNewPrice(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-brand rounded-xl h-12 px-4 text-sm font-black focus:border-gold-brand focus:outline-none tabular-nums" />
+                  </div>
+                </div>
+                {(newCategory === 'Eatery' || newCategory === 'Drinks') ? (
+                  <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2.5 leading-snug">
+                    Starts at zero — log today's batch in Sell → Production.
+                  </p>
+                ) : (
+                  <div>
+                    <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">How many do you have?</label>
+                    <input type="number" min="0" placeholder="e.g. 24" value={newStock} onChange={(e) => setNewStock(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-800 text-gold-light rounded-xl h-12 px-4 text-sm focus:border-gold-brand focus:outline-none tabular-nums" />
+                  </div>
+                )}
+                <button onClick={handleCreateProduct}
+                  className="w-full h-12 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl shadow-lg active:scale-[0.99] transition-all cursor-pointer">
+                  Add it — start selling
+                </button>
+                <p className="text-[10px] text-zinc-600 font-bold uppercase text-center">Cost defaults to 0 — add it later for true profit.</p>
+              </div>
+            ) : (
             <div className="space-y-3">
               <div>
                 <label className="block text-xs text-zinc-400 font-bold uppercase mb-1.5">Product Name</label>
@@ -1201,6 +1254,7 @@ export default function Inventory({
 
             {(newCategory === 'Eatery' || newCategory === 'Drinks') && renderRecipeCard(newRecipe, setNewRecipe, newPrice, setNewPrice, setNewVariants)}
             </div>
+            )}
 
             <div className="pt-4 flex gap-3">
               <button onClick={() => setIsAddingNew(false)} className="flex-1 h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl">Cancel</button>

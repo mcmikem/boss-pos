@@ -260,6 +260,51 @@ const SETTINGS_SECTIONS = [
   { key: 'data', label: 'Data' },
 ] as const;
 
+// Setup quiz: "what do you sell?" One tap per trade pre-builds the
+// workspace (areas + modules) so a tailor never meets a stock form.
+function SetupQuiz({ onApply }: {
+  onApply: (picked: string[]) => void;
+}) {
+  const [picked, setPicked] = useState<string[]>([]);
+  const [done, setDone] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_quiz_done') === '1'; } catch { return false; }
+  });
+  if (done) return null;
+  const opts = [
+    { key: 'shop', label: 'Shelf products', hint: 'Shop goods' },
+    { key: 'eatery', label: 'Cooked food', hint: 'Eatery' },
+    { key: 'tailoring', label: 'Tailor orders', hint: 'Sewing' },
+    { key: 'design', label: 'Design & print', hint: 'Jobs' },
+    { key: 'bookings', label: 'Bookings', hint: 'Chairs' },
+    { key: 'repairs', label: 'Repairs', hint: 'Bench' },
+  ];
+  const toggle = (k: string) => setPicked(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+  const apply = () => {
+    try { localStorage.setItem('boss_pos_quiz_done', '1'); } catch {}
+    setDone(true);
+    onApply(picked);
+  };
+  return (
+    <div className="boss-card p-4 rounded-2xl border border-gold-brand/30 mb-4">
+      <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">What do you sell?</h3>
+      <p className="text-[11px] text-zinc-500 font-bold mt-0.5">Tick everything — the till sets itself up.</p>
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        {opts.map(o => (
+          <button key={o.key} onClick={() => toggle(o.key)} aria-pressed={picked.includes(o.key)}
+            className={`p-3 rounded-xl border text-left transition-all active:scale-95 cursor-pointer ${picked.includes(o.key) ? 'border-gold-brand bg-gold-brand/10 text-white' : 'bg-[#0A0A0A] border-white/5 text-zinc-400'}`}>
+            <span className="block text-xs font-black uppercase tracking-wider">{o.label}</span>
+            <span className="block text-[10px] text-zinc-500 font-bold">{o.hint}</span>
+          </button>
+        ))}
+      </div>
+      <button onClick={apply}
+        className="mt-3 w-full h-11 bg-gold-brand text-black rounded-xl text-xs font-black uppercase tracking-wider hover:opacity-90 active:scale-[0.99] transition-all cursor-pointer">
+        {picked.length === 0 ? 'Skip for now' : `Set up (${picked.length})`}
+      </button>
+    </div>
+  );
+}
+
 export default function App() {  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const stored = localStorage.getItem(THEME_KEY);
@@ -2094,10 +2139,28 @@ Count the drawer now (UGX)? Empty = skip.`, '');
         return (
           <ErrorBoundary key="sales">
           {isOn(settings.features, 'briefing') && (
-            <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount}
+            <MorningBrief sales={sales} products={products} creditEats={creditEats} pendingCount={pendingCount} lastSyncedAt={lastSyncedAt}
               formatCurrency={formatCurrency} onNavigate={(t) => setActiveTab(t)} onSync={handleForceSync}
               dailyGoal={settings.dailyGoalNum} dailyGoalRevenue={settings.dailyGoalRevenue} expenses={expenses} momoTransfers={momoTransfers} eodCapital={settings.eodCapital}
               managerView={isManager || !staffConfigured} sellerName={activeStaff?.name || staffName} />
+          )}
+          {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && products.length === 0 && (
+            <SetupQuiz
+              onApply={(picked) => {
+                if (picked.includes('eatery')) {
+                  const cats = new Set(categories);
+                  cats.add('Eatery'); cats.add('Drinks');
+                  setCategories(ensureDrinks(Array.from(cats)));
+                }
+                setSettings(prev => ({
+                  ...prev,
+                  showTailoring: prev.showTailoring || picked.includes('tailoring'),
+                  showDesign: prev.showDesign || picked.includes('design'),
+                  showBookings: prev.showBookings || picked.includes('bookings'),
+                  showRepairs: prev.showRepairs || picked.includes('repairs'),
+                }));
+                triggerToast(picked.length === 0 ? 'Kept your current setup' : 'Workspace ready — add your first item', picked.length === 0 ? 'info' : 'success');
+              }} />
           )}
           {isManager && isOn(settings.features, 'setupChecklist') && !setupDismissed && (() => {
             const installed = typeof window !== 'undefined' && (
@@ -2546,11 +2609,11 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           </div>
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'sell')}</span>
         </button>
-        <button onClick={() => { setActiveTab(isManager ? 'analytics' : 'expenses'); setShowMore(false); }} aria-label="Money"
+        <button onClick={() => { setActiveTab(isManager ? 'analytics' : 'expenses'); setShowMore(false); }} aria-label={isManager ? 'Money' : 'Spend'}
           className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' || activeTab === 'expenses' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`}
           aria-current={activeTab === 'analytics' || activeTab === 'expenses' ? 'page' : undefined} id="money-nav-btn">
           <Wallet className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'money')}</span>
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, isManager ? 'money' : 'spend')}</span>
         </button>
         <button onClick={() => setShowMore(true)} aria-label="More options" aria-expanded={showMore}
           className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${showMore || (activeTab !== 'sales' && activeTab !== 'analytics' && activeTab !== 'expenses') ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} id="more-nav-btn">
