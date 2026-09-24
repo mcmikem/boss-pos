@@ -40,10 +40,8 @@ const DesignOrders = lazyRetry(() => import('./DesignOrders'));
 const EateryPricing = lazyRetry(() => import('./EateryPricing'));
 const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
-const TailorHome = lazyRetry(() => import('./TailorHome'));
-const PrintHome = lazyRetry(() => import('./PrintHome'));
-const RepairHome = lazyRetry(() => import('./RepairHome'));
-const BookingHome = lazyRetry(() => import('./BookingHome'));const Bookings = lazyRetry(() => import('./Bookings'));
+const AreaHome = lazyRetry(() => import('./AreaHome'));
+import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -127,6 +125,8 @@ interface SalesProps {
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
   onGoClose?: () => void;
+  // Blind cashier close: Eatery money figures render masked.
+  hideMoney?: boolean;
   simple?: boolean;
   hideGuide?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
@@ -186,7 +186,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -299,6 +299,7 @@ export default function Sales({
     setShowPrintHome(false);
     setShowRepairHome(false);
     setShowBookingHome(false);
+    setBookingStartNew(false);
     setTailorStartNew(false);
     setDesignStartNew(false);
     if (selectedCategory === 'Tailoring') setShowTailorHome(true);
@@ -308,6 +309,7 @@ export default function Sales({
   const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
   const [showRepairHome, setShowRepairHome] = useState<boolean>(false);
   const [showBookingHome, setShowBookingHome] = useState<boolean>(false);
+  const [bookingStartNew, setBookingStartNew] = useState<boolean>(false);
   const [variantProduct, setVariantProduct] = useState<Product | null>(null);
   const [serviceQtyProduct, setServiceQtyProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -1655,7 +1657,7 @@ export default function Sales({
             <Suspense fallback={subManagerFallback}>
               <EateryHome products={products} productionRegisters={productionRegisters}
                 sales={salesHistory} wastageLogs={wastageLogs}
-                formatCurrency={formatCurrency}
+                formatCurrency={formatCurrency} hideMoney={hideMoney}
                 onBackSell={() => setShowEateryHome(false)}
                 onLogProduction={() => { setShowEateryHome(false); setShowProduction(true); }}
                 onCloseKitchen={() => { setShowEateryHome(false); if (onGoClose) onGoClose(); }} />
@@ -1667,10 +1669,11 @@ export default function Sales({
         {showBookingHome ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="booking-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
-              <BookingHome
-                triggerToast={triggerToast}
+              <AreaHome config={bookingHomeConfig}
+                formatCurrency={formatCurrency}
                 onBackSell={() => setShowBookingHome(false)}
-                onOpenBook={() => { setShowBookingHome(false); setShowBookings(true); }} />
+                onPrimary={() => { setShowBookingHome(false); setBookingStartNew(true); setShowBookings(true); }}
+                onOpenBook={() => { setShowBookingHome(false); setBookingStartNew(false); setShowBookings(true); }} />
             </Suspense>
           </div>
         ) : null}
@@ -1679,9 +1682,10 @@ export default function Sales({
         {showRepairHome ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="repair-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
-              <RepairHome
-                formatCurrency={formatCurrency} triggerToast={triggerToast}
+              <AreaHome config={repairHomeConfig}
+                formatCurrency={formatCurrency}
                 onBackSell={() => setShowRepairHome(false)}
+                onPrimary={() => { setShowRepairHome(false); setShowRepairs(true); }}
                 onOpenBook={() => { setShowRepairHome(false); setShowRepairs(true); }} />
             </Suspense>
           </div>
@@ -1691,10 +1695,10 @@ export default function Sales({
         {showPrintHome && selectedCategory === 'Graphics' ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="print-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
-              <PrintHome
-                formatCurrency={formatCurrency} triggerToast={triggerToast}
+              <AreaHome config={printHomeConfig}
+                formatCurrency={formatCurrency}
                 onBackSell={() => setShowPrintHome(false)}
-                onNewJob={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
+                onPrimary={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
                 onOpenBook={() => { setShowPrintHome(false); setDesignStartNew(false); setShowDesignOrders(true); }} />
             </Suspense>
           </div>
@@ -1704,10 +1708,10 @@ export default function Sales({
         {showTailorHome && selectedCategory === 'Tailoring' ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="tailor-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
-              <TailorHome
-                formatCurrency={formatCurrency} triggerToast={triggerToast}
+              <AreaHome config={tailorHomeConfig}
+                formatCurrency={formatCurrency}
                 onBackSell={() => setShowTailorHome(false)}
-                onNewOrder={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
+                onPrimary={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
                 onOpenBook={() => { setShowTailorHome(false); setTailorStartNew(false); setShowTailoringOrders(true); }} />
             </Suspense>
           </div>
@@ -1761,12 +1765,12 @@ export default function Sales({
           </div>
         ) : showBookings ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="bookings-scroll-container">
-            <button onClick={() => setShowBookings(false)}
+            <button onClick={() => { setShowBookings(false); setBookingStartNew(false); }}
               className="h-10 px-4 bg-[#141414] border border-white/10 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer touch-target">
               <ArrowRightLeft className="w-4 h-4" /> {t(lang, 'backToProducts')}
             </button>
             <Suspense fallback={subManagerFallback}>
-              <Bookings triggerToast={triggerToast} onAddSale={onAddSale}
+              <Bookings triggerToast={triggerToast} onAddSale={onAddSale} autoNew={bookingStartNew}
                 staffName={staffName} tillBranch={tillBranch} formatCurrency={formatCurrency} />
             </Suspense>
           </div>

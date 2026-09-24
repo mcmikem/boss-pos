@@ -19,12 +19,16 @@ interface EateryHomeProps {
   onBackSell: () => void;
   onLogProduction: () => void;
   onCloseKitchen: () => void;
+  // Blind cashier close: quantities stay visible (the kitchen needs them),
+  // money figures render as •••.
+  hideMoney?: boolean;
 }
 
 export default function EateryHome({
   products, productionRegisters, sales, wastageLogs,
-  formatCurrency, onBackSell, onLogProduction, onCloseKitchen,
+  formatCurrency, onBackSell, onLogProduction, onCloseKitchen, hideMoney = false,
 }: EateryHomeProps) {
+  const cash = (v: number): string => (hideMoney ? '•••' : formatCurrency(v));
   const today = todayLocalKey();
   const rows = useMemo(
     () => leftoverFor(products, productionRegisters, sales, wastageLogs, today),
@@ -106,8 +110,8 @@ export default function EateryHome({
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1">
             <Wallet className="w-3 h-3" /> Money
           </p>
-          <p className="text-lg font-black text-white font-display mt-1 tabular-nums">{formatCurrency(money.revenue)}</p>
-          <p className="text-[10px] text-zinc-500 font-bold uppercase">kept {formatCurrency(money.dishProfit)}</p>
+          <p className="text-lg font-black text-white font-display mt-1 tabular-nums">{cash(money.revenue)}</p>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase">kept {cash(money.dishProfit)}</p>
         </div>
       </div>
 

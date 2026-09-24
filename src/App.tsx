@@ -2207,6 +2207,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+            hideMoney={!!settings.blindClose && !isManager}
             simple={isSimpleNav}
             hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}
@@ -2350,6 +2351,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+            hideMoney={!!settings.blindClose && !isManager}
             simple={isSimpleNav}
             hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}

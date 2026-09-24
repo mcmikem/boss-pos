@@ -23,7 +23,7 @@ interface BookingsProps {
 
 // Salon / barbershop appointment book. Who is coming, when, for what, and
 // what is already paid — the till still rings the actual sale at the chair.
-export default function Bookings({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency }: BookingsProps) {
+export default function Bookings({ triggerToast, onAddSale, staffName, tillBranch, formatCurrency, autoNew }: BookingsProps & { autoNew?: boolean }) {
   const [settleId, setSettleId] = useState<string | null>(null);
   const fmt = (n: number) => formatCurrency ? formatCurrency(n) : n.toLocaleString();
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -73,6 +73,13 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
     resetForm();
     setShowPanel(true);
   }
+
+  // Deep link: area home "New booking" lands straight in the form.
+  // Runs once per mount (the manager remounts on every open).
+  useEffect(() => {
+    if (autoNew) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openEdit(b: Booking) {
     setEditId(b.id);
