@@ -38,3 +38,26 @@ describe('summarizeRefused', () => {
     expect(summarizeRefused({ path: '/api/x', method: 'POST' }, 'refused')).toContain('/api/x');
   });
 });
+
+describe('buildReconnectReport', () => {
+  it('stays silent when nothing happened', async () => {
+    const { buildReconnectReport } = await import('./syncReview');
+    const r = buildReconnectReport({ salesSent: 0, otherSent: 0, needsReview: 0, remaining: 0, refreshed: false });
+    expect(r.orderNumbersRefreshed).toBe(false);
+    expect(r.at).toBeGreaterThan(0);
+  });
+
+  it('flags settled order numbers only when sales actually sent', async () => {
+    const { buildReconnectReport } = await import('./syncReview');
+    expect(buildReconnectReport({ salesSent: 3, otherSent: 0, needsReview: 0, remaining: 0, refreshed: true }).orderNumbersRefreshed).toBe(true);
+    expect(buildReconnectReport({ salesSent: 0, otherSent: 2, needsReview: 0, remaining: 0, refreshed: true }).orderNumbersRefreshed).toBe(false);
+  });
+
+  it('clamps garbage to safe zeros', async () => {
+    const { buildReconnectReport } = await import('./syncReview');
+    const r = buildReconnectReport({ salesSent: -5, otherSent: NaN, needsReview: 1.7, remaining: 2, refreshed: 1 as unknown as boolean });
+    expect(r.salesSent).toBe(0);
+    expect(r.otherSent).toBe(0);
+    expect(r.needsReview).toBe(2);
+  });
+});

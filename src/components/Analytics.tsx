@@ -8,6 +8,7 @@ import {
 import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem, MomoTransfer, CreditEat } from '../types';
 import { t } from '../utils/i18n';
 import { supplierDrift } from '../utils/cashflow';
+import { applySupplierPricesToRecipes } from '../utils/recipe';
 import CreditsLedger from './CreditsLedger';
 import Customers from './Customers';
 import type { CustomerProfile } from '../utils/customers';
@@ -35,6 +36,7 @@ interface AnalyticsProps {
   onDeleteExpenseCategory: (name: string) => void;
   onAddSupplier: (supplier: Supplier) => void;
   onUpdateSupplier: (supplier: Supplier) => void;
+  onUpdateProduct: (product: Product) => void;
   onDeleteSupplier: (supplierId: string) => void;
   onPayCredit: (saleId: string, amount: number) => void;
   creditEats?: CreditEat[];
@@ -67,6 +69,7 @@ export default function Analytics({
   onDeleteExpense,
   onAddSupplier,
   onUpdateSupplier,
+  onUpdateProduct,
   onDeleteSupplier,
   onPayCredit,
   creditEats = [],
@@ -139,6 +142,16 @@ export default function Analytics({
     const fromSales = Array.from(new Set(sales.map(s => s.branch || '').filter(Boolean)));
     return Array.from(new Set([...fromSettings, ...fromSales]));
   }, [settings.branches, sales]);
+  const supplierRecipeSync = useMemo(() => applySupplierPricesToRecipes(products, supplierPrices), [products, supplierPrices]);
+  const applySupplierPrices = () => {
+    if (supplierRecipeSync.changedProducts.length === 0) {
+      triggerToast('Supplier prices are already in sync with recipes', 'info');
+      return;
+    }
+    supplierRecipeSync.changedProducts.forEach(product => onUpdateProduct(product));
+    const recipeCount = supplierRecipeSync.changedRecipes;
+    triggerToast(`Supplier prices applied to ${recipeCount} recipe${recipeCount === 1 ? '' : 's'}`, 'success');
+  };
   useEffect(() => {
     setExpandedDays(new Set());
     setShowAllDays(false);
@@ -622,6 +635,12 @@ const colorsMap: { [key: string]: string } = {
                     {d.productName}: cost {formatCurrency(d.cost)} vs quote {formatCurrency(d.quote)} ({d.driftPct > 0 ? '+' : ''}{d.driftPct}%) — update cost or renegotiate.
                   </p>
                 ))}
+                {supplierRecipeSync.matchedIngredients > 0 && supplierRecipeSync.changedProducts.length > 0 && (
+                  <button onClick={applySupplierPrices}
+                    className="mt-2 h-9 px-3 bg-amber-500 hover:bg-amber-400 text-black rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer">
+                    Apply supplier prices to recipes
+                  </button>
+                )}
               </div>
             );
           })()}

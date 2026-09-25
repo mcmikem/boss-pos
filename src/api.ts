@@ -135,6 +135,21 @@ interface OutboxEntry {
   seq?: number;
 }
 
+export interface OutboxFlushReport {
+  attempted: number;
+  flushed: number;
+  sent: number;
+  salesQueued: number;
+  salesSent: number;
+  salesDropped: number;
+  conflicts: number;
+  dropped: number;
+  reviewAdded: number;
+  remaining: number;
+  authFailed: boolean;
+  networkFailed: boolean;
+}
+
 function getOutbox(): OutboxEntry[] {
   try {
     return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
@@ -211,8 +226,7 @@ export function dropOutboxEntry(id: string): void {
   saveOutbox(getOutbox().filter(e => e.id !== id));
 }
 
-export async function flushOutbox(): Promise<number> {
-  // Prefer IndexedDB (quota-free) if available, else LS
+export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
   let list: OutboxEntry[] = getOutbox();
   try {
     const m = await import('./utils/outboxIdb');
@@ -221,11 +235,25 @@ export async function flushOutbox(): Promise<number> {
     if (idbList.length > list.length) list = idbList;
     else if (idbList.length === list.length && idbList.length > 0) list = idbList;
   } catch {}
-  if (list.length === 0) return 0;
-  // If there's no token (expired/cleared), don't burn through the queue with 401s — let the UI re-lock first.
-  if (!getAuthToken()) {
-    return 0;
+  const salesQueued = list.filter(entry => entry.path === '/api/sales' && entry.method === 'POST').length;
+  if (list.length === 0) {
+    return {
+      attempted: 0, flushed: 0, sent: 0, salesQueued: 0, salesSent: 0,
+      salesDropped: 0, conflicts: 0, dropped: 0, reviewAdded: 0, remaining: 0,
+      authFailed: false, networkFailed: false,
+    };
   }
+  if (!getAuthToken()) {
+    return {
+      attempted: list.length, flushed: 0, sent: 0, salesQueued, salesSent: 0,
+      salesDropped: 0, conflicts: 0, dropped: 0, reviewAdded: 0,
+      remaining: list.length, authFailed: false, networkFailed: false,
+    };
+  }
+  let sent = 0;
+  let salesSent = 0;
+  let salesDropped = 0;
+  let reviewAdded = 0;
   let flushed = 0;
   let conflicts = 0;
   let dropped = 0;
@@ -235,13 +263,33 @@ export async function flushOutbox(): Promise<number> {
   const remaining: OutboxEntry[] = [];
   for (let idx = 0; idx < list.length; idx++) {
     const entry = list[idx];
+    const isSale = entry.path === '/api/sales' && entry.method === 'POST';
     try {
       const res = await fetchTimeout(`${BASE}${entry.path}`, {
         method: entry.method,
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
         body: entry.body,
       }, WRITE_TIMEOUT_MS);
-      if (res.ok || res.status === 404) {
+      if (res.ok) {
+        sent++;
+        if (isSale) salesSent++;
+        flushed++;
+        continue;
+      }
+      if (res.status === 404) {
+        if (isSale) {
+          dropped++;
+          salesDropped++;
+          reviewAdded++;
+          try { stashSyncReview('refused', entry); } catch {}
+        } else if (entry.method === 'DELETE') {
+          // Deleting something already gone is idempotent success.
+          sent++;
+        } else {
+          dropped++;
+          reviewAdded++;
+          try { stashSyncReview('refused', entry); } catch {}
+        }
         flushed++;
         continue;
       }
@@ -255,36 +303,44 @@ export async function flushOutbox(): Promise<number> {
         const body = await res.json().catch(() => ({}));
         if (body.code === 'CONFLICT') {
           conflicts++;
+          reviewAdded++;
+          if (isSale) salesDropped++;
           flushed++;
           try { stashSyncReview('conflict', entry); } catch {}
           continue;
         }
         if (body.code === 'INSUFFICIENT_STOCK') {
-          // Stock race lost offline — retrying can't create stock. Stash for
-          // review (never silently vanish) and warn.
           dropped++;
+          reviewAdded++;
+          if (isSale) salesDropped++;
           flushed++;
           try { stashSyncReview('stock', entry); } catch {}
           continue;
         }
+        // Unknown 409: the server refused for a reason we don't understand —
+        // it will never succeed on retry, so review it instead of looping.
+        dropped++;
+        reviewAdded++;
+        if (isSale) salesDropped++;
+        flushed++;
+        try { stashSyncReview('conflict', entry); } catch {}
+        continue;
       }
-      // Permanent client errors (except 401/429) never succeed on retry — stash
-      // for review and drop to avoid an infinite queue.
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         await res.json().catch(() => ({}));
         dropped++;
+        reviewAdded++;
+        if (isSale) salesDropped++;
         flushed++;
         try { stashSyncReview('refused', entry); } catch {}
         continue;
       }
       remaining.push(entry);
     } catch (err) {
-      // Network timeout / offline: don't burn 30s per remaining entry — keep the rest as-is.
       const isNetwork = err instanceof TypeError;
       remaining.push(entry);
       if (isNetwork) {
         sawNetworkFailure = true;
-        // Keep every not-yet-tried entry too.
         for (let j = idx + 1; j < list.length; j++) remaining.push(list[j]);
         break;
       }
@@ -309,7 +365,26 @@ export async function flushOutbox(): Promise<number> {
       window.dispatchEvent(new CustomEvent('boss-pos-sync-dropped', { detail: dropped }));
     } catch {}
   }
-  return flushed;
+  return {
+    attempted: list.length,
+    flushed,
+    sent,
+    salesQueued,
+    salesSent,
+    salesDropped,
+    conflicts,
+    dropped,
+    reviewAdded,
+    remaining: remaining.length,
+    authFailed: sawAuthFailure,
+    networkFailed: sawNetworkFailure,
+  };
+}
+
+export async function flushOutbox(): Promise<number> {
+  // Back-compat: number of entries the server actually ACCEPTED (sent), not
+  // merely processed — dropped/conflicted rows must never read as "synced".
+  return (await flushOutboxDetailed()).sent;
 }
 
 // Server-side PIN auth (plain PIN over HTTPS; hashing happens on the server).

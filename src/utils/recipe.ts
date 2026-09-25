@@ -1,4 +1,4 @@
-import type { Product, Recipe, RecipeIngredient } from '../types';
+import type { Product, Recipe, RecipeIngredient, SupplierPrice } from '../types';
 
 export const RECIPE_UNITS = ['kg', 'g', 'pcs', 'litres', 'ml', 'cups', 'tsp', 'tbsp'];
 
@@ -12,6 +12,171 @@ export interface RecipeCalc {
   suggestedPrice: number;
   isLoss: boolean;
   isUnderpriced: boolean;
+}
+
+export interface RecipeSupplierMatch {
+  ingredient: RecipeIngredient;
+  product: Product;
+  quote: SupplierPrice;
+}
+
+export interface RecipeSupplierUpdate {
+  product: Product;
+  matchedIngredients: number;
+  changedIngredients: number;
+}
+
+export interface SupplierPriceSyncResult {
+  products: Product[];
+  changedProducts: Product[];
+  matchedIngredients: number;
+  changedIngredients: number;
+  changedRecipes: number;
+  changedProductCosts: number;
+}
+
+function normalizedIngredientName(value: unknown): string {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function ingredientNameWithoutPackaging(value: unknown): string {
+  return normalizedIngredientName(value)
+    .replace(/\s+(?:\d+(?:\.\d+)?\s*)?(?:kg|kgs?|g|l|litres?|liters?|ml|pcs?|pieces?|pack(?:et)?s?|bags?|bottles?|tins?)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function preferredSupplierQuote(product: Product, quotes: SupplierPrice[]): SupplierPrice | null {
+  const usable = quotes.filter(q => q.productId === product.id && Number.isFinite(Number(q.price)) && Number(q.price) > 0);
+  if (usable.length === 0) return null;
+  const assigned = product.supplierId ? usable.filter(q => q.supplierId === product.supplierId) : [];
+  if (assigned.length > 0) {
+    return assigned.reduce((best, quote) => {
+      const bestAt = Date.parse(best.updatedAt || '') || 0;
+      const quoteAt = Date.parse(quote.updatedAt || '') || 0;
+      return quoteAt > bestAt ? quote : best;
+    });
+  }
+  return usable.reduce((best, quote) => Number(quote.price) < Number(best.price) ? quote : best);
+}
+
+function ingredientProductCandidates(
+  ingredient: RecipeIngredient,
+  products: Product[],
+  recipeProductId: string,
+): Product[] {
+  const available = products.filter(p => p.id !== recipeProductId && !p.isService);
+  if (ingredient.productId) {
+    const linked = available.find(p => p.id === ingredient.productId);
+    if (linked) return [linked];
+  }
+  const name = normalizedIngredientName(ingredient.name);
+  if (!name) return [];
+  const exact = available.filter(p => normalizedIngredientName(p.name) === name);
+  if (exact.length > 0) return exact;
+  const base = ingredientNameWithoutPackaging(ingredient.name);
+  if (!base) return [];
+  return available.filter(p => ingredientNameWithoutPackaging(p.name) === base);
+}
+
+export function recipeSupplierMatches(
+  recipeProduct: Product,
+  products: Product[],
+  quotes: SupplierPrice[],
+): RecipeSupplierMatch[] {
+  const recipe = recipeProduct.recipe;
+  if (!recipe || !Array.isArray(recipe.ingredients)) return [];
+  const matches: RecipeSupplierMatch[] = [];
+  for (const ingredient of recipe.ingredients) {
+    const candidates = ingredientProductCandidates(ingredient, products, recipeProduct.id);
+    const matched = candidates
+      .map(product => ({ product, quote: preferredSupplierQuote(product, quotes) }))
+      .find(candidate => candidate.quote !== null);
+    if (matched?.quote) {
+      matches.push({ ingredient, product: matched.product, quote: matched.quote });
+    }
+  }
+  return matches;
+}
+
+function applyRecipeMatches(recipeProduct: Product, matches: RecipeSupplierMatch[]): RecipeSupplierUpdate {
+  const recipe = recipeProduct.recipe;
+  if (!recipe) return { product: recipeProduct, matchedIngredients: 0, changedIngredients: 0 };
+  let changedIngredients = 0;
+  const ingredients = recipe.ingredients.map(ingredient => {
+    const match = matches.find(candidate => candidate.ingredient === ingredient);
+    if (!match) return ingredient;
+    const price = Number(match.quote.price);
+    if (ingredient.unitCost === price && ingredient.productId === match.product.id) return ingredient;
+    changedIngredients++;
+    return { ...ingredient, unitCost: price, productId: match.product.id };
+  });
+  if (changedIngredients === 0) {
+    return { product: recipeProduct, matchedIngredients: matches.length, changedIngredients: 0 };
+  }
+  return {
+    product: { ...recipeProduct, recipe: { ...recipe, ingredients } },
+    matchedIngredients: matches.length,
+    changedIngredients,
+  };
+}
+
+export function applySupplierPricesToRecipe(
+  recipeProduct: Product,
+  products: Product[],
+  quotes: SupplierPrice[],
+): RecipeSupplierUpdate {
+  return applyRecipeMatches(recipeProduct, recipeSupplierMatches(recipeProduct, products, quotes));
+}
+
+export function applySupplierPricesToRecipes(
+  products: Product[],
+  quotes: SupplierPrice[],
+): SupplierPriceSyncResult {
+  const recipeMatches = new Map<string, RecipeSupplierMatch[]>();
+  const sourcePrices = new Map<string, number>();
+  let matchedIngredients = 0;
+  let changedIngredients = 0;
+  let changedRecipes = 0;
+
+  for (const product of products) {
+    const matches = recipeSupplierMatches(product, products, quotes);
+    if (matches.length === 0) continue;
+    recipeMatches.set(product.id, matches);
+    matchedIngredients += matches.length;
+    const update = applyRecipeMatches(product, matches);
+    if (update.changedIngredients > 0) {
+      changedIngredients += update.changedIngredients;
+      changedRecipes++;
+    }
+    for (const match of matches) sourcePrices.set(match.product.id, Number(match.quote.price));
+  }
+
+  let changedProductCosts = 0;
+  const changedProducts: Product[] = [];
+  const nextProducts = products.map(product => {
+    const update = recipeMatches.has(product.id)
+      ? applyRecipeMatches(product, recipeMatches.get(product.id) || [])
+      : null;
+    const sourcePrice = sourcePrices.get(product.id);
+    let next = update?.product || product;
+    const costChanged = sourcePrice !== undefined && product.cost !== sourcePrice;
+    if (costChanged) {
+      next = { ...next, cost: sourcePrice };
+      changedProductCosts++;
+    }
+    if (next !== product) changedProducts.push(next);
+    return next;
+  });
+
+  return {
+    products: changedProducts.length > 0 ? nextProducts : products,
+    changedProducts,
+    matchedIngredients,
+    changedIngredients,
+    changedRecipes,
+    changedProductCosts,
+  };
 }
 
 export function emptyRecipe(): Recipe {

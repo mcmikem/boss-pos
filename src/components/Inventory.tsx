@@ -7,7 +7,7 @@ import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Expense, R
 import { uploadImage } from '../api';
 import CategoryManager from './CategoryManager';
 import StocktakePanel from './StocktakePanel';
-import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor } from '../utils/recipe';
+import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor, applySupplierPricesToRecipes } from '../utils/recipe';
 import { parseQty } from '../utils/units';
 import { expiryStatus, daysUntilExpiry } from '../utils/dates';
 import { staleProducts } from '../utils/stale';
@@ -234,6 +234,19 @@ export default function Inventory({
   const lowStockProducts = useMemo(() => {
     return products.filter(p => p.stockQty <= p.lowStockThreshold && !p.isService);
   }, [products]);
+
+  const supplierPriceSync = useMemo(() => applySupplierPricesToRecipes(products, supplierPrices), [products, supplierPrices]);
+  const applySupplierPrices = () => {
+    const changed = supplierPriceSync.changedProducts;
+    if (changed.length === 0) {
+      triggerToast('Supplier prices are already in sync with recipes', 'info');
+      return;
+    }
+    changed.forEach(product => onUpdateProduct(product));
+    const recipeCount = supplierPriceSync.changedRecipes;
+    const recipeLabel = `${recipeCount} recipe${recipeCount === 1 ? '' : 's'}`;
+    triggerToast(`Supplier prices applied to ${recipeLabel}`, 'success');
+  };
 
   // Dead money: stocked items with no sale in 30+ days (mitumba one-offs,
   // slow gadgets). Suggests clearance, the mirror of low-stock alerts.
@@ -763,6 +776,21 @@ export default function Inventory({
           )}
         </div>
       </section>
+
+      {supplierPriceSync.matchedIngredients > 0 && supplierPriceSync.changedProducts.length > 0 && (
+        <div className="boss-card p-4 border border-amber-600/30 bg-amber-950/20 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-black text-amber-300 uppercase tracking-wider">Supplier prices ready</p>
+            <p className="text-[11px] text-zinc-400 font-bold mt-1">
+              {supplierPriceSync.matchedIngredients} recipe ingredient{supplierPriceSync.matchedIngredients === 1 ? '' : 's'} matched. Apply once to update {supplierPriceSync.changedRecipes} recipe{supplierPriceSync.changedRecipes === 1 ? '' : 's'} and the stock costs behind them.
+            </p>
+          </div>
+          <button onClick={applySupplierPrices}
+            className="h-11 shrink-0 px-4 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer">
+            Apply to recipes
+          </button>
+        </div>
+      )}
 
       {staleList.length > 0 && (
         <details className="boss-card p-4">

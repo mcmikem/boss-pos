@@ -7,7 +7,7 @@ import {
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi, authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, normalizeExpenses, ApiError, type BootData, type AuditEntry } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi,   normalizeExpenses, ApiError, type BootData, type AuditEntry, type OutboxFlushReport } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { t } from './utils/i18n';
@@ -22,7 +22,7 @@ import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
 import { isPastClose } from './utils/dates';
-import { readSyncReview, clearSyncReview, type SyncReviewItem } from './utils/syncReview';
+import { readSyncReview, clearSyncReview, buildReconnectReport, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
@@ -1009,20 +1009,30 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, [products]);
 
   // Reconnect report: after offline stretches the till says what landed,
-  // what refreshed, and what needs a human — never silent healing.
-  const reportReconnect = (flushed: number) => {
+  // what refreshed, and what needs a human — never silent healing. Built on
+  // the shared report builder so numbers stay honest in one place.
+  const reportReconnect = (r: OutboxFlushReport) => {
     let refused = 0;
     try {
       const review = readSyncReview();
       refused = review.length;
       setSyncReview(review);
     } catch {}
-    if (flushed === 0 && refused === 0) return;
+    const built = buildReconnectReport({
+      salesSent: r.salesSent,
+      otherSent: Math.max(0, r.sent - r.salesSent),
+      needsReview: refused,
+      remaining: r.remaining,
+      refreshed: r.sent > 0,
+    });
+    if (built.salesSent === 0 && built.otherSent === 0 && built.needsReview === 0) return;
     const parts: string[] = [];
-    if (flushed > 0) parts.push(`${flushed} waiting sale${flushed !== 1 ? 's' : ''} sent`);
-    parts.push('figures refreshed');
-    if (refused > 0) parts.push(`${refused} need review (Settings → Data)`);
-    triggerToast(`Back online — ${parts.join(' • ')}`, refused > 0 ? 'error' : 'success');
+    if (built.salesSent > 0) parts.push(`${built.salesSent} waiting sale${built.salesSent !== 1 ? 's' : ''} sent`);
+    if (built.otherSent > 0) parts.push(`${built.otherSent} other change${built.otherSent !== 1 ? 's' : ''} sent`);
+    if (built.refreshed) parts.push('figures refreshed');
+    if (built.orderNumbersRefreshed) parts.push('order numbers settled');
+    if (built.needsReview > 0) parts.push(`${built.needsReview} need review (Settings → Data)`);
+    triggerToast(`Back online — ${parts.join(' • ')}`, built.needsReview > 0 ? 'error' : 'success');
   };
 
   useEffect(() => {
@@ -1030,10 +1040,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setIsOnline(true);
       try {
         const hadToken = !!getAuthToken();
-        const n = await flushOutbox();
+        const r = await flushOutboxDetailed();
         const stillHasToken = !!getAuthToken();
-        if (n > 0) {
-          reportReconnect(n);
+        if (r.flushed > 0) {
+          reportReconnect(r);
           fetchAllData();
         } else if (outboxCount() > 0 && hadToken && stillHasToken) {
           // Non-auth failure at this point is either network (offline event would have fired)
@@ -1061,11 +1071,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (authState !== 'ready') return;
     (async () => {
       try {
-        const n = await flushOutbox();
+        const r = await flushOutboxDetailed();
         // Auth failures lock via boss-pos-auth-revoked; network failures are silent;
         // permanent drops are reported via boss-pos-sync-dropped.
-        if (n > 0) {
-          reportReconnect(n);
+        if (r.flushed > 0) {
+          reportReconnect(r);
           fetchAllData();
         }
         setPendingCount(outboxCount());

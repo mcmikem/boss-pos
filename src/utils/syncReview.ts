@@ -94,6 +94,41 @@ export function stashSyncReview(kind: SyncReviewKind, entry: QueueEntry): SyncRe
   return item;
 }
 
+export interface ReconnectReportInput {
+  salesSent: number;
+  otherSent: number;
+  needsReview: number;
+  remaining: number;
+  refreshed: boolean;
+}
+
+export interface ReconnectReport extends ReconnectReportInput {
+  at: number;
+  orderNumbersRefreshed: boolean;
+}
+
+export function buildReconnectReport(input: ReconnectReportInput, at = Date.now()): ReconnectReport {
+  // Math.max(0, NaN) is NaN — sanitize first or garbage propagates to the UI.
+  const clean = (n: unknown): number => {
+    const r = Math.round(Number(n));
+    return Number.isFinite(r) ? Math.max(0, r) : 0;
+  };
+  const salesSent = clean(input.salesSent);
+  const otherSent = clean(input.otherSent);
+  const needsReview = clean(input.needsReview);
+  const remaining = clean(input.remaining);
+  const refreshed = !!input.refreshed;
+  return {
+    salesSent,
+    otherSent,
+    needsReview,
+    remaining,
+    refreshed,
+    at,
+    orderNumbersRefreshed: salesSent > 0 && refreshed,
+  };
+}
+
 export function clearSyncReview(): void {
   try {
     localStorage.removeItem(REVIEW_KEY);

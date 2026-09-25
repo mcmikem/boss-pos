@@ -12,6 +12,7 @@ export interface RecipeIngredient {
   unit: string;
   unitCost: number;
   wastePct: number;
+  productId?: string;
 }
 
 export interface Recipe {
