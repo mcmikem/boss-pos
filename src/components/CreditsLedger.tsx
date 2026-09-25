@@ -22,6 +22,7 @@ interface UnifiedRecord {
   paidAmount: number;
   remaining: number;
   createdAt: string;
+  ts: number; // epoch ms — oldest debt collects first
 }
 
 export default function CreditsLedger({
@@ -55,7 +56,8 @@ export default function CreditsLedger({
           total: s.total,
           paidAmount: paid,
           remaining: Math.max(0, s.total - paid),
-          createdAt: new Date(s.timestamp).toLocaleDateString()
+          createdAt: new Date(s.timestamp).toLocaleDateString(),
+          ts: Date.parse(s.timestamp) || 0,
         };
       })
       .filter(r => r.remaining > 0);
@@ -75,10 +77,12 @@ export default function CreditsLedger({
         paidAmount: e.paidAmount || 0,
         remaining: Math.max(0, e.total - (e.paidAmount || 0)),
         createdAt: e.date,
+        ts: Date.parse(e.date) || 0,
       }))
       .filter(r => r.remaining > 0);
 
-    return [...saleRecs, ...bookRecs];
+    // Collect queue: oldest debt first — money rots with age.
+    return [...saleRecs, ...bookRecs].sort((a, b) => a.ts - b.ts);
   }, [sales, creditPayments, creditEats]);
 
   const totalOutstanding = records.reduce((sum, r) => sum + r.remaining, 0);
@@ -146,11 +150,19 @@ export default function CreditsLedger({
       </div>
 
       <div className="space-y-2 max-h-[400px] overflow-y-auto">
-        {records.map(record => (
+        {records.map((record, idx) => {
+          const ageD = Math.max(0, Math.floor((Date.now() - (record.ts || Date.now())) / 86400000));
+          return (
           <div key={record.key} className="boss-card p-3 flex items-center justify-between hover:bg-[#1C1C1C]">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <p className="font-bold text-sm text-white truncate">{record.customerName}</p>
+                {idx === 0 && (
+                  <span className="text-[8px] font-black uppercase text-gold-brand bg-gold-brand/10 border border-gold-brand/40 rounded px-1.5 py-0.5">Collect first</span>
+                )}
+                {ageD > 0 && (
+                  <span className="text-[8px] font-bold uppercase text-zinc-500">{ageD}d</span>
+                )}
                 <span className="text-[8px] text-zinc-500">{record.orderNumber}</span>
                 {record.kind === 'book' && (
                   <span className="text-[8px] font-black uppercase text-emerald-300 bg-emerald-950/40 border border-emerald-800/40 rounded px-1.5 py-0.5">Book</span>
@@ -194,7 +206,8 @@ export default function CreditsLedger({
             </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Payment Modal */}

@@ -1008,6 +1008,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (products.length > 0) saveProducts(products);
   }, [products]);
 
+  // Reconnect report: after offline stretches the till says what landed,
+  // what refreshed, and what needs a human — never silent healing.
+  const reportReconnect = (flushed: number) => {
+    let refused = 0;
+    try {
+      const review = readSyncReview();
+      refused = review.length;
+      setSyncReview(review);
+    } catch {}
+    if (flushed === 0 && refused === 0) return;
+    const parts: string[] = [];
+    if (flushed > 0) parts.push(`${flushed} waiting sale${flushed !== 1 ? 's' : ''} sent`);
+    parts.push('figures refreshed');
+    if (refused > 0) parts.push(`${refused} need review (Settings → Data)`);
+    triggerToast(`Back online — ${parts.join(' • ')}`, refused > 0 ? 'error' : 'success');
+  };
+
   useEffect(() => {
     const handleOnline = async () => {
       setIsOnline(true);
@@ -1016,7 +1033,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         const n = await flushOutbox();
         const stillHasToken = !!getAuthToken();
         if (n > 0) {
-          triggerToast(`Synced ${n} offline change(s)`, 'success');
+          reportReconnect(n);
           fetchAllData();
         } else if (outboxCount() > 0 && hadToken && stillHasToken) {
           // Non-auth failure at this point is either network (offline event would have fired)
@@ -1048,7 +1065,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         // Auth failures lock via boss-pos-auth-revoked; network failures are silent;
         // permanent drops are reported via boss-pos-sync-dropped.
         if (n > 0) {
-          triggerToast(`Synced ${n} offline change(s)`, 'success');
+          reportReconnect(n);
           fetchAllData();
         }
         setPendingCount(outboxCount());
@@ -2380,6 +2397,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onUpdateExpenseCategory={handleUpdateExpenseCategory}
             onDeleteExpenseCategory={handleDeleteExpenseCategory}
             onAddSupplier={handleAddSupplier} onUpdateSupplier={handleUpdateSupplier}
+            onUpdateProduct={handleUpdateProduct}
             onDeleteSupplier={handleDeleteSupplier}
             onPayCredit={handlePayCredit}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
