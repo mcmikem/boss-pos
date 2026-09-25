@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { confirmDialog } from './Dialog';
 
 export interface AdminShop {
   id: string;
@@ -369,7 +370,7 @@ function ShopConsole({ token }: { token: string }) {
 
   const resetPin = async (clear: boolean) => {
     if (!clear && !/^\d{4}$/.test(pin)) { setMsg('PIN must be exactly 4 digits.'); return; }
-    if (!confirm(clear ? 'Clear the till PIN? The shop opens without a PIN.' : 'Set a new till PIN? All devices re-lock.')) return;
+    if (!(await confirmDialog({ title: clear ? 'Clear PIN' : 'Set PIN', message: clear ? 'Clear the till PIN? The shop opens without a PIN.' : 'Set a new till PIN? All devices re-lock.', confirmLabel: clear ? 'Clear' : 'Set PIN', danger: clear }))) return;
     try {
       await adminSend(token, 'POST', '/shop/pin', { pin: clear ? '' : pin });
       setMsg(clear ? 'PIN cleared.' : 'PIN reset — devices re-locked.');
@@ -381,7 +382,7 @@ function ShopConsole({ token }: { token: string }) {
   };
 
   const setStatus = async (status: 'active' | 'suspended') => {
-    if (!confirm(status === 'suspended' ? 'Suspend this shop?' : 'Reactivate this shop?')) return;
+    if (!(await confirmDialog({ title: status === 'suspended' ? 'Suspend shop' : 'Reactivate shop', message: status === 'suspended' ? 'Suspend this shop?' : 'Reactivate this shop?', confirmLabel: status === 'suspended' ? 'Suspend' : 'Reactivate', danger: status === 'suspended' }))) return;
     try {
       await adminSend(token, 'POST', '/shop/status', { status });
       setMsg(`Shop ${status}.`);
@@ -590,7 +591,7 @@ function Marketers({ token }: { token: string }) {
   };
 
   const toggleActive = async (m: AdminMarketer) => {
-    if (m.active && !confirm(`Deactivate ${m.name}? They stop accruing commission.`)) return;
+    if (m.active && !(await confirmDialog({ title: 'Deactivate marketer', message: `Deactivate ${m.name}? They stop accruing commission.`, confirmLabel: 'Deactivate', danger: true }))) return;
     try {
       await adminSend(token, 'PUT', `/marketers/${m.id}`, { active: !m.active });
       load();

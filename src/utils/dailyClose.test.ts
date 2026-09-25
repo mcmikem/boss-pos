@@ -54,6 +54,40 @@ describe('closeTotals', () => {
     expect(t.saleCount).toBe(0);
     expect(t.revenue).toBe(0);
   });
+
+  it('counts a just-after-midnight sale on the local business day, not UTC', () => {
+    // 00:30 wall-clock time, no timezone suffix = parsed as local time.
+    const t = closeTotals('2026-09-07', [sale({ id: 's-1', timestamp: '2026-09-07T00:30:00' })], []);
+    expect(t.saleCount).toBe(1);
+    expect(t.revenue).toBe(2000);
+  });
+
+  it('reports net debt after payments, not gross credit', () => {
+    const credit = sale({ id: 's-9', total: 100000, paymentMethod: 'Credit / Book', customerName: 'Yawe', items: [] });
+    const t = closeTotals(
+      '2026-09-07',
+      [credit],
+      [],
+      [{ id: 'cp-1', saleId: 's-9', amount: 60000, createdAt: '2026-09-07T18:00:00' }],
+    );
+    expect(t.credit).toBe(100000);
+    expect(t.collectedCash).toBe(60000);
+    expect(t.debtOutstanding).toBe(40000);
+    const msg = buildCloseSummary('Shop', t);
+    expect(msg).toContain('Debts collected');
+    expect(msg).toContain('Total still owed');
+  });
+
+  it('counts book debts and their collections too', () => {
+    const t = closeTotals(
+      '2026-09-07', [],
+      [],
+      [{ id: 'cp-2', saleId: 'book:ce-1', amount: 2000, createdAt: '2026-09-07T18:00:00' }],
+      [{ total: 5000, paidAmount: 2000, paid: false }],
+    );
+    expect(t.collectedCash).toBe(2000);
+    expect(t.debtOutstanding).toBe(3000);
+  });
 });
 
 describe('buildCloseSummary', () => {

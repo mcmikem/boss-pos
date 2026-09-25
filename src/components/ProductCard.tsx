@@ -10,13 +10,14 @@ interface ProductCardProps {
   formatCurrency: (val: number) => string;
   onAddToCart: (product: Product) => void;
   onAdjustQty?: (productId: string, delta: number) => void;
+  onOutOfStock?: (product: Product) => void;
   compact?: boolean;
   pinned?: boolean;
   onTogglePin?: (productId: string) => void;
   simple?: boolean;
 }
 
-const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, compact, pinned, onTogglePin, simple }: ProductCardProps) {
+const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, onOutOfStock, compact, pinned, onTogglePin, simple }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
   const hasVariants = !!product.variants && product.variants.length > 0;
@@ -33,15 +34,22 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   const isEatery = product.category === 'Eatery' || product.category === 'Drinks';
   const effCost = isEatery ? effectiveCost(product) : product.cost;
   const marginPct = isEatery && effCost > 0 && product.price > 0 ? ((product.price - effCost) / product.price) * 100 : null;
+  const handleClick = () => {
+    if (isOutOfStock) {
+      if (onOutOfStock) onOutOfStock(product);
+      return;
+    }
+    onAddToCart(product);
+  };
 
   if (compact) {
     return (
       <button
-        onClick={() => !isOutOfStock && onAddToCart(product)}
-        disabled={isOutOfStock}
-        aria-label={isOutOfStock ? `${product.name}, sold out` : `Add ${product.name} to cart, ${formatCurrency(product.price)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
+        onClick={handleClick}
+        disabled={isOutOfStock && !onOutOfStock}
+        aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${formatCurrency(product.price)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
         className={`w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 p-4 rounded-xl transition-all text-left cursor-pointer active:scale-[0.98] min-h-[64px] ${
-          isOutOfStock ? 'opacity-30' : ''
+          isOutOfStock ? (onOutOfStock ? 'opacity-70' : 'opacity-30') : ''
         } ${inCart ? 'border-gold-brand/40 bg-gold-brand/5' : ''}`}
       >
         <div className="min-w-0 flex-1">
@@ -53,7 +61,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         </div>
         <div className="flex items-center gap-2 shrink-0 ml-3">
           {inCart && <span className="text-xs font-bold text-gold-brand tabular-nums">×{cartQtyLabel}</span>}
-          <div className="w-11 h-11 bg-gold-brand text-black rounded-xl flex items-center justify-center font-black text-lg" aria-hidden="true">+</div>
+          <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-lg ${isOutOfStock ? 'bg-rose-950/60 text-rose-300 text-[9px] uppercase tracking-wider' : 'bg-gold-brand text-black'}`} aria-hidden="true">{isOutOfStock ? (onOutOfStock ? 'Fix' : '×') : '+'}</div>
         </div>
       </button>
     );
@@ -65,9 +73,9 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   if (simple) {
     return (
       <button
-        onClick={() => !isOutOfStock && onAddToCart(product)}
-        disabled={isOutOfStock}
-        aria-label={isOutOfStock ? `${product.name}, sold out` : `Add ${product.name} to cart, ${formatCurrency(minPrice)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
+        onClick={handleClick}
+        disabled={isOutOfStock && !onOutOfStock}
+        aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${formatCurrency(minPrice)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
         className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col text-left focus-visible:outline-2 focus-visible:outline-gold-brand w-full min-h-[64px] ${
           isOutOfStock
             ? 'opacity-40 border-dashed border-rose-800/40'
@@ -118,12 +126,18 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   return (
     <div
       role="button"
-      tabIndex={isOutOfStock ? -1 : 0}
-      aria-label={isOutOfStock ? `${product.name}, sold out` : `${product.name}, ${formatCurrency(minPrice)}${hasVariants ? ' and up, has options' : ''}${!product.isService ? `, ${product.stockQty} in stock` : ''}${inCart ? `, ${cartQtyLabel} in cart` : ''}. Activate to ${hasVariants ? 'choose options' : 'add to cart'}.`}
-      aria-disabled={isOutOfStock}
-      onClick={() => !isOutOfStock && onAddToCart(product)}
+      tabIndex={isOutOfStock && !onOutOfStock ? -1 : 0}
+      aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `${product.name}, ${formatCurrency(minPrice)}${hasVariants ? ' and up, has options' : ''}${!product.isService ? `, ${product.stockQty} in stock` : ''}${inCart ? `, ${cartQtyLabel} in cart` : ''}. Activate to ${hasVariants ? 'choose options' : 'add to cart'}.`}
+      aria-disabled={isOutOfStock && !onOutOfStock}
+      onClick={handleClick}
       onKeyDown={(e) => {
-        if (isOutOfStock) return;
+        if (isOutOfStock) {
+          if (onOutOfStock && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            onOutOfStock(product);
+          }
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAddToCart(product); }
       }}
       className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col focus-visible:outline-2 focus-visible:outline-gold-brand ${
@@ -209,7 +223,18 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
               )
             )}
           </div>
-          {hasVariants ? (
+          {isOutOfStock ? (
+            <button
+              type="button"
+              disabled={!onOutOfStock}
+              onClick={(e) => { e.stopPropagation(); onOutOfStock?.(product); }}
+              onKeyDown={(e) => e.stopPropagation()}
+              aria-label={`${product.name} is sold out, open recovery options`}
+              className="touch-target rounded-xl flex items-center justify-center px-2 text-[9px] font-black uppercase tracking-wider bg-rose-950/50 text-rose-300 hover:bg-rose-900/60 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Recover
+            </button>
+          ) : hasVariants ? (
             <span className="text-[10px] text-amber-300/90 font-semibold tracking-[0.06em] border border-white/10 bg-white/5 rounded-lg px-2 py-1.5">
               Options
             </span>
@@ -221,10 +246,10 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             </div>
           ) : (
             <button
-              disabled={isOutOfStock}
+              type="button"
               onClick={(e) => { e.stopPropagation(); onAddToCart(product); }}
-              aria-label={isOutOfStock ? `${product.name} is sold out` : `Add ${product.name} to cart`}
-              className="touch-target rounded-xl flex items-center justify-center transition-all active:scale-90 bg-zinc-800 hover:bg-gold-brand text-zinc-400 hover:text-black disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label={`Add ${product.name} to cart`}
+              className="touch-target rounded-xl flex items-center justify-center transition-all active:scale-90 bg-zinc-800 hover:bg-gold-brand text-zinc-400 hover:text-black"
             >
               <Plus className="w-5 h-5" />
             </button>

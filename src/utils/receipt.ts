@@ -7,7 +7,7 @@ export function printReceipt(
   sale: Sale,
   settings: StoreSettings,
   formatCurrency: (val: number) => string,
-): void {
+): boolean {
   const items = sale.items
     .map(i => {
       const label = i.variantLabel ? ` (${i.variantLabel})` : '';
@@ -77,13 +77,11 @@ export function printReceipt(
 </html>`;
 
   const win = window.open('', '_blank', 'width=380,height=600');
-  if (!win) {
-    alert('Popup blocked — allow popups to print receipts.');
-    return;
-  }
+  if (!win) return false;
   win.document.write(html);
   win.document.close();
   win.focus();
+  return true;
 }
 
 function escapeHtml(s: string): string {

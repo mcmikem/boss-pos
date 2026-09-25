@@ -1,19 +1,35 @@
-import {StrictMode} from 'react';
+import {StrictMode, useEffect, type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import ErrorBoundary from './components/ErrorBoundary.tsx';
 import {AdminDashboard} from './components/AdminDashboard.tsx';
+import {initSentry} from './utils/sentry.ts';
+
+initSentry();
 
 const root = createRoot(document.getElementById('root')!);
 
 const Root = window.location.pathname === '/admin' ? AdminDashboard : App;
 
+function MainTarget({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    const main = document.querySelector('main');
+    if (!main) return;
+    main.id = 'main-content';
+    if (!main.hasAttribute('tabindex')) main.setAttribute('tabindex', '-1');
+  }, []);
+
+  return children;
+}
+
 root.render(
   <StrictMode>
-    <ErrorBoundary>
-      <Root />
-    </ErrorBoundary>
+    <MainTarget>
+      <ErrorBoundary>
+        <Root />
+      </ErrorBoundary>
+    </MainTarget>
   </StrictMode>,
 );
 
@@ -60,8 +76,9 @@ document.addEventListener('focusin', (event) => {
   }, 350);
 });
 
-// Service worker: auto-update to the latest version on deploy
 if ('serviceWorker' in navigator) {
+  type ServiceWorkerWindow = Window & { __bossPosServiceWorkerRegistered?: boolean };
+  const serviceWorkerWindow = window as ServiceWorkerWindow;
   let refreshing = false;
   let hasController = !!navigator.serviceWorker.controller;
 
@@ -75,16 +92,22 @@ if ('serviceWorker' in navigator) {
     window.location.reload();
   });
 
-  // Proactively ask the network for a newer build on boot and whenever the app
-  // returns to the foreground, so phones on flaky Wi-Fi pick up deploys within
-  // minutes instead of silently running an old service-worker cache for weeks.
-  // A new SW -> controllerchange above -> one reload into the fresh build.
   const checkForUpdate = () => {
     navigator.serviceWorker.getRegistration().then(reg => {
       if (reg) reg.update().catch(() => {});
     }).catch(() => {});
   };
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+  const registerServiceWorker = () => {
+    if (serviceWorkerWindow.__bossPosServiceWorkerRegistered) return;
+    serviceWorkerWindow.__bossPosServiceWorkerRegistered = true;
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+      serviceWorkerWindow.__bossPosServiceWorkerRegistered = false;
+    });
+  };
+
+  if (document.readyState === 'complete') registerServiceWorker();
+  else window.addEventListener('load', registerServiceWorker, { once: true });
   window.addEventListener('load', () => setTimeout(checkForUpdate, 2500));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') setTimeout(checkForUpdate, 800);

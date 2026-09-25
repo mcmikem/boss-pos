@@ -1,5 +1,6 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 import { chunkRetried, markChunkRetried, clearChunkRetried, isChunkError } from '../utils/lazyRetry';
+import { reportClientError } from '../utils/sentry';
 
 interface Props {
   children: ReactNode;
@@ -41,6 +42,14 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('ErrorBoundary caught:', error, info.componentStack);
+    const traceId = (error as { traceId?: string })?.traceId;
+    reportClientError({
+      kind: 'react',
+      msg: error?.message || 'Render failed',
+      stack: error?.stack || '',
+      context: info?.componentStack || '',
+      traceId,
+    });
     noteCrash();
   }
 

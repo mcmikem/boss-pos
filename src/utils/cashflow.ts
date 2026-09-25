@@ -2,21 +2,28 @@ import type { Expense, MomoTransfer, Product, ProductionRegister, Sale, WastageL
 import { localDayKey } from './dates';
 
 // ---------------------------------------------------------------------------
-// Smart cash accountability: every shilling must be somewhere at close.
-// Drawer equation per department per day:
+// Drawer equation per department per day. Two separate questions, never mixed:
 //
-//   opening (yesterday's capital carried forward)
-//   + collected (today's non-credit sales for the dept)
-//   - drawerExpenses (today's expenses paid from the drawer)
-//   - floatOut - cashOut - ownerOut (today's Money-Out moves)
-//   - closing (capital set aside for tomorrow)
-//   = unaccounted (still in drawer, unexplained -> FLAG)
+//   1. WHERE IS THE CASH RIGHT NOW?
+//        expectedInDrawer = openingFloat + cashSales - drawerExpenses
+//      (cashSales excludes phone tender — MoMo/Airtel money is never in the
+//      drawer, so an MTN-only day must not ask anyone to count notes.)
 //
-// Positive unaccounted = cash sitting in the drawer that was never moved to
-// float/cash/owner nor kept as tomorrow's capital -> theft / forgetfulness.
-// Negative unaccounted = more moved out than came in -> data error or
-// yesterday's capital was never recorded.
+//   2. WHAT DID THE OWNER DECIDE TO DO WITH IT?
+//        assigned   = moneyOut (float/cash/owner/bank) + keptForTomorrow
+//        unassigned = expectedInDrawer - assigned
+//
+//   3. DID THE PHYSICAL COUNT MATCH?
+//        variance = counted - expectedInDrawer   (null until someone counts)
+//
+// `unassigned` is a DECISION still to make, not a crime — money sitting in the
+// drawer is exactly where it should be. Only `variance` is a real problem, and
+// it can only exist once a human has counted the till.
 // ---------------------------------------------------------------------------
+
+const CHANGE_TOLERANCE = 500;
+
+const ugx = (value: number) => Math.round(value).toLocaleString();
 
 export interface DayCashInput {
   category: string;
@@ -29,13 +36,26 @@ export interface DayCashInput {
   cashOut: number;
   ownerOut: number;
   bankOut?: number;
+  // Phone-tender slice of `collected` (MTN/Airtel). Phone money never sits
+  // in the physical drawer, so the drawer equation runs on cash only — an
+  // MTN sale with an empty drawer must not ask for phone money as cash.
+  phoneCollected?: number;
+  // Physical drawer count, once a human has entered it. Null = not counted.
+  countedCash?: number | null;
 }
 
+export type DayCashStatus = 'balanced' | 'unassigned' | 'over-moved' | 'variance';
+
 export interface DayCashResult extends DayCashInput {
-  available: number; // opening + collected - drawerExpenses
+  cashSales: number; // collected minus phone tender
+  expectedInDrawer: number; // opening + cashSales - drawerExpenses
   movedOut: number; // float + cash + owner + bank
-  unaccounted: number; // available - movedOut - closing
-  status: 'balanced' | 'drawer-cash' | 'missing' | 'over-moved';
+  assigned: number; // movedOut + keptForTomorrow
+  unassigned: number; // expectedInDrawer - assigned (a decision, not a loss)
+  variance: number | null; // counted - expectedInDrawer, null until counted
+  unaccounted: number; // legacy alias of unassigned
+  available: number; // legacy alias of expectedInDrawer
+  status: DayCashStatus;
   message: string;
 }
 
@@ -43,40 +63,62 @@ export function computeDayCash(input: DayCashInput): DayCashResult {
   const openingCapital = Math.max(0, Math.round(input.openingCapital || 0));
   const closingCapital = Math.max(0, Math.round(input.closingCapital || 0));
   const collected = Math.max(0, Math.round(input.collected || 0));
+  const phoneCollected = Math.max(0, Math.round(input.phoneCollected || 0));
+  const cashSales = Math.max(0, collected - phoneCollected);
   const drawerExpenses = Math.max(0, Math.round(input.drawerExpenses || 0));
   const floatOut = Math.max(0, Math.round(input.floatOut || 0));
   const cashOut = Math.max(0, Math.round(input.cashOut || 0));
   const ownerOut = Math.max(0, Math.round(input.ownerOut || 0));
   const bankOut = Math.max(0, Math.round(input.bankOut || 0));
-  const available = openingCapital + collected - drawerExpenses;
+  const expectedInDrawer = openingCapital + cashSales - drawerExpenses;
   const movedOut = floatOut + cashOut + ownerOut + bankOut;
-  const unaccounted = available - movedOut - closingCapital;
-  let status: DayCashResult['status'] = 'balanced';
-  let message = 'Every shilling is accounted for.';
-  if (unaccounted > 0.5) {
-    // Small change tolerance: <= 500 UGX still in drawer is normal coins.
-    status = unaccounted <= 500 ? 'drawer-cash' : 'missing';
-    message =
-      status === 'drawer-cash'
-        ? `Small balance (${Math.round(unaccounted).toLocaleString()} UGX) still in the drawer — move it or keep as capital.`
-        : `${Math.round(unaccounted).toLocaleString()} UGX collected but NOT moved to float/cash/owner nor kept as capital — FLAG for review.`;
-  } else if (unaccounted < -0.5) {
+  const assigned = movedOut + closingCapital;
+  const unassigned = expectedInDrawer - assigned;
+  const rawCount = input.countedCash;
+  const counted = rawCount == null || !Number.isFinite(rawCount) ? null : Math.round(rawCount);
+  const variance = counted == null ? null : counted - expectedInDrawer;
+
+  let status: DayCashStatus = 'balanced';
+  let message = 'Every shilling has a home.';
+  if (variance != null && variance > 0.5) {
+    status = 'variance';
+    message = `Counted ${ugx(counted as number)} but expected ${ugx(expectedInDrawer)} — ${ugx(variance)} over. Recount, or record what changed.`;
+  } else if (variance != null && variance < -0.5) {
+    status = 'variance';
+    message = `Counted ${ugx(counted as number)} but expected ${ugx(expectedInDrawer)} — ${ugx(Math.abs(variance))} short. Recount, or record what changed.`;
+  } else if (variance != null) {
+    // Counting matched: the money is provably there. Whatever is left unassigned
+    // is a choice to make tomorrow, not a problem to shout about tonight.
+    message = `Counted ${ugx(counted as number)} — matches the expected ${ugx(expectedInDrawer)}.`;
+  } else if (unassigned < -0.5) {
     status = 'over-moved';
-    message = `${Math.round(Math.abs(unaccounted)).toLocaleString()} UGX more moved out than came in — check opening capital or duplicate Money-Out.`;
+    message = `${ugx(Math.abs(unassigned))} more moved out than came in — check the opening float or a duplicate Money Out.`;
+  } else if (unassigned > 0.5) {
+    status = 'unassigned';
+    message = unassigned <= CHANGE_TOLERANCE
+      ? `${ugx(unassigned)} left in the drawer — coins and change.`
+      : `${ugx(unassigned)} still to assign — keep it for tomorrow, send it to the owner, or bank it.`;
   }
+
   return {
     ...input,
     openingCapital,
     closingCapital,
     collected,
+    countedCash: counted,
     drawerExpenses,
     floatOut,
     cashOut,
     ownerOut,
     bankOut,
-    available,
+    cashSales,
+    expectedInDrawer,
     movedOut,
-    unaccounted,
+    assigned,
+    unassigned,
+    variance,
+    unaccounted: unassigned,
+    available: expectedInDrawer,
     status,
     message,
   };
@@ -398,7 +440,14 @@ export function openingForDay(
     let open = 0;
     for (let back = lookbackDays; back >= 1; back--) {
       const d = dayKeyMinus(dayKey, back);
-      open = Math.max(0, open + madeOn(p.id, p.name, production, d) - soldOn(p.id, sales, d) - expiredOn(p.id, p.name, wastage, d));
+      const carried = sumFor(
+        wastage.filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === d && x.reason === 'remaining'),
+      );
+      // A confirmed tray count closes the day authoritatively; otherwise the
+      // paper trail (open + made − sold − expired) carries forward.
+      open = carried > 0
+        ? Math.round(carried * 1000) / 1000
+        : Math.max(0, open + madeOn(p.id, p.name, production, d) - soldOn(p.id, sales, d) - expiredOn(p.id, p.name, wastage, d));
     }
     if (open > 0) out.set(p.id, Math.round(open * 1000) / 1000);
   }
@@ -573,11 +622,13 @@ export interface LeftoverRow {
   sold: number;
   lost: number;
   carried: number;
+  // Tomorrow's opening. A confirmed tray count is AUTHORITATIVE — when the
+  // seller counts 7 and confirms it, tomorrow opens with 7, not the math.
   leftover: number;
-  // Expected open (opening + made − sold − expired) minus the tray count the
-  // cashier actually logged. >0 = pieces vanished, <0 = over-counted,
-  // 0 = agreement. Only meaningful when carried > 0 (no log = auto-carry,
-  // not theft).
+  // What the paper trail alone says (opening + made − sold − expired).
+  expected: number;
+  // expected − carried: >0 pieces vanished, <0 over-counted, 0 agreement.
+  // Only meaningful when carried > 0 (no log = auto-carry, not theft).
   gap: number;
 }
 
@@ -605,7 +656,13 @@ export function leftoverFor(
         .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey)
         .reduce((s, x) => s + (x.qty || 0), 0);
     const opening = openingYesterday.get(p.id) || 0;
-    if (made <= 0 && opening <= 0) continue;
+    if (made <= 0 && opening <= 0) {
+      // …unless a tray count was logged with no batch behind it.
+      const hasCarry = wastage.some(
+        (x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey && x.reason === 'remaining',
+      );
+      if (!hasCarry) continue;
+    }
     const sold = daySales
       .flatMap((s) => s.items)
       .filter((i) => i.productId === p.id)
@@ -616,11 +673,13 @@ export function leftoverFor(
     const carried = wastage
       .filter((x) => (x.productId === p.id || (!x.productId && x.item === p.name)) && x.date === yesterdayKey && x.reason === 'remaining')
       .reduce((s, x) => s + (x.qty || 0), 0);
-    const leftover = Math.max(0, opening + made - sold - lost);
-    const gap = Math.round((leftover - carried) * 1000) / 1000;
-    out.push({ productId: p.id, productName: p.name, made, sold, lost, carried, leftover, gap });
+    const expected = Math.max(0, opening + made - sold - lost);
+    // Authoritative carry: a confirmed tray count wins over the paper trail.
+    const leftover = carried > 0 ? Math.round(carried * 1000) / 1000 : expected;
+    const gap = Math.round((expected - carried) * 1000) / 1000;
+    out.push({ productId: p.id, productName: p.name, made, sold, lost, carried, leftover, expected, gap });
   }
-  return out.filter((r) => r.leftover > 0 || r.made > 0).sort((a, b) => b.leftover - a.leftover);
+  return out.filter((r) => r.leftover > 0 || r.made > 0 || r.carried > 0).sort((a, b) => b.leftover - a.leftover);
 }
 
 // ---- Seller risk: high refunds/discounts vs sales ----
@@ -733,70 +792,80 @@ export function buildTheftFlags(args: {
   production: ProductionRegister[];
   wastage: WastageLog[];
   voidCount?: number;
-  // Close-time gating: unaccounted-cash / MoMo-gap flags are end-of-day
+  // Close-time gating: unaccounted-cash / phone-money flags are end-of-day
   // verdicts. Before the shop's close time they would fire on money that
   // simply hasn't been moved yet — so they wait. Defaults true (legacy).
   pastClose?: boolean;
+  // Raw transfers for the phone opening carry. Without them the phone bucket
+  // only sees today (still correct, just no multi-day memory).
+  transfers?: MomoTransfer[];
+  // MoMo-paid expenses per category (money, not qty).
+  momoExpenses?: Record<string, number>;
 }): TheftFlag[] {
   const pastClose = args.pastClose !== false;
   const flags: TheftFlag[] = [];
-  // Phone-money tender per category: MTN/Airtel sales sit on the phone, not
-  // in the drawer — the flag must say "move to float", not "missing".
-  const momoByCat: Record<string, number> = {};
+  // Tender split per category: cash belongs to the drawer equation, MTN /
+  // Airtel tender belongs to the phone bucket (split legs apportioned).
+  const tender = tenderByCategory(args.sales, args.products, args.dayKey);
+  // MoMo-paid expenses per category (optional — sharpens the phone bucket;
+  // without it the bucket is float-aware but expense-blind).
+  const momoExp = args.momoExpenses || {};
+  let phoneOpen: Map<string, number>;
   try {
-    for (const s of args.sales) {
-      if (s.refunded || localDayKey(s.timestamp) !== args.dayKey) continue;
-      if (s.paymentMethod !== 'MTN MoMo' && s.paymentMethod !== 'Airtel Money') continue;
-      for (const i of s.items) {
-        const prod = args.products.find((p) => p.id === i.productId);
-        const cat = prod?.category || 'Eatery';
-        momoByCat[cat] = (momoByCat[cat] || 0) + (i.lineTotal || 0);
-      }
-    }
-  } catch {}
+    phoneOpen = openingPhoneFor(args.sales, args.products, args.transfers || [], [], args.dayKey);
+  } catch {
+    phoneOpen = new Map();
+  }
   for (const cat of args.categories) {
     const opening = getOpeningCapital(args.dayKey, cat, args.eodCapital);
     const closing = getClosingCapital(args.dayKey, cat, args.eodCapital);
     const m = args.moneyOut[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+    const phone = tender[cat]?.momo || 0;
     const r = computeDayCash({
       category: cat,
       dayKey: args.dayKey,
       openingCapital: opening,
       closingCapital: closing,
       collected: args.collected[cat] || 0,
+      phoneCollected: phone,
       drawerExpenses: args.drawerExpenses[cat] || 0,
       floatOut: m.float,
       cashOut: m.cash,
       ownerOut: m.owner,
       bankOut: m.bank || 0,
     });
-    if (r.status === 'missing') {
-      // Before close: the evening move hasn't happened — not a verdict.
+    if (r.status === 'unassigned') {
       if (!pastClose) continue;
-      const phone = momoByCat[cat] || 0;
-      const amt = Math.round(r.unaccounted);
-      if (phone >= amt - 500) {
-        flags.push({
-          kind: 'unaccounted',
-          severity: 'warn',
-          title: `${cat}: ${amt.toLocaleString()} UGX phone money not moved to float`,
-          detail: `Opened ${r.openingCapital.toLocaleString()}, sold ${r.collected.toLocaleString()} (phone money), moved ${r.movedOut.toLocaleString()}, capital ${r.closingCapital.toLocaleString()}. MTN/Airtel sales sit on the phone, not the drawer — move it to float in Close day → Money out, or keep as capital.`,
-        });
-      } else {
-        flags.push({
-          kind: 'unaccounted',
-          severity: 'critical',
-          title: `${cat}: ${amt.toLocaleString()} UGX unaccounted`,
-          detail: `Opened ${r.openingCapital.toLocaleString()}, sold ${r.collected.toLocaleString()}, moved ${r.movedOut.toLocaleString()}, capital ${r.closingCapital.toLocaleString()}. Still in drawer with no record — move to float/cash/owner or keep as capital.`,
-        });
-      }
+      const amt = Math.round(r.unassigned);
+      flags.push({
+        kind: 'unaccounted',
+        severity: 'warn',
+        title: `${cat}: ${ugx(amt)} still to assign`,
+        detail: `Expected ${ugx(r.expectedInDrawer)} in the drawer (opened ${ugx(r.openingCapital)}, cash sold ${ugx(r.cashSales)}, expenses ${ugx(r.drawerExpenses)}). Assigned ${ugx(r.assigned)} so far. Decide: keep ${ugx(amt)} for tomorrow, send it to the owner, or bank it.`,
+      });
     } else if (r.status === 'over-moved') {
       flags.push({
         kind: 'unaccounted',
         severity: 'warn',
-        title: `${cat}: over-moved by ${Math.round(Math.abs(r.unaccounted)).toLocaleString()} UGX`,
+        title: `${cat}: over-moved by ${ugx(Math.abs(r.unassigned))}`,
         detail: r.message,
       });
+    }
+    // Phone bucket: yesterday's float carried + today's phone tender and
+    // float moves − MoMo-paid expenses. After close, phone money sitting
+    // idle (never floated) gets its own nudge — never a theft flag.
+    if (pastClose) {
+      const held = Math.round(
+        (phoneOpen.get(cat) || 0) + phone + m.float - (momoExp[cat] || 0),
+      );
+      if (held > 500 && m.float <= 0) {
+        flags.push({
+          kind: 'momo',
+          severity: 'warn',
+          title: `${cat}: ${held.toLocaleString()} UGX phone money not moved to float`,
+          detail: `MTN/Airtel sales sit on the phone, not the drawer — move it to float in Close day → Money out, or confirm it is still on the phone.`,
+        });
+      }
     }
   }
   // Sold without morning production and without automatic leftover cover.
@@ -841,20 +910,6 @@ export function buildTheftFlags(args: {
       detail: `${badTickets} of ${ticketCount} tickets voided or refunded — voids need manager PIN; confirm each was real.`,
     });
   }
-  // MoMo float gap: MoMo sales that never reached float.
-  const totalFloat = Object.values(args.moneyOut).reduce((a, m) => a + m.float, 0);
-  const momoSales = args.sales
-    .filter((s) => !s.refunded && localDayKey(s.timestamp) === args.dayKey)
-    .filter((s) => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')
-    .reduce((a, s) => a + (s.total || 0), 0);
-  const gap = momoSales - totalFloat;
-  if (pastClose && momoSales > 0 && gap >= 10000) {
-    flags.push({
-      kind: 'momo',
-      severity: 'warn',
-      title: `${Math.round(gap).toLocaleString()} UGX MoMo sales not moved to float`,
-      detail: `MoMo sales ${Math.round(momoSales).toLocaleString()} but only ${Math.round(totalFloat).toLocaleString()} moved to float — move it or confirm it is still on the phone.`,
-    });
-  }
+  // (Phone float gaps are flagged per department above, where the fix lives.)
   return flags;
 }

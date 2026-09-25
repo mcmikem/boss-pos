@@ -167,7 +167,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       closedDepts,
       deptCount: cats.size,
     };
-  }, [sales, products, creditEats]);
+  }, [sales, products, creditEats, expenses, momoTransfers, eodCapital]);
 
   const tiles = [
     {
@@ -210,9 +210,11 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     },
     {
       label: 'In drawer',
-      value: formatCurrency(Math.max(0, Math.round(brief.inDrawers))),
-      sub: `cash ${formatCurrency(Math.max(0, Math.round(brief.drawerCash)))} • phone ${formatCurrency(Math.max(0, Math.round(brief.phoneCash)))}${brief.phoneFloat > 0 ? ` (float ${formatCurrency(Math.round(brief.phoneFloat))})` : ''}`,
-      tone: 'text-cyan-300',
+      value: brief.inDrawers < 0
+        ? `${formatCurrency(Math.abs(Math.round(brief.inDrawers)))} short`
+        : formatCurrency(Math.round(brief.inDrawers)),
+      sub: `cash ${formatCurrency(Math.round(brief.drawerCash))} • phone ${formatCurrency(Math.round(brief.phoneCash))}${brief.phoneFloat > 0 ? ` (float ${formatCurrency(Math.round(brief.phoneFloat))})` : ''}${brief.inDrawers < 0 ? ' • over-moved' : ''}`,
+      tone: brief.inDrawers < 0 ? 'text-rose-300' : 'text-cyan-300',
       icon: <Wallet className="w-3.5 h-3.5 text-cyan-400" />,
       act: () => onNavigate('registers'),
     },

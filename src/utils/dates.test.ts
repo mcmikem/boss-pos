@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp, isPastClose, isShopDayOff } from './dates';
+import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp, isPastClose, isShopDayOff, minutesUntilClose, closeReminderState, formatMinutesLeft } from './dates';
 
 describe('localDayKey', () => {
   it('returns a zero-padded YYYY-MM-DD', () => {
@@ -109,5 +109,47 @@ describe('shop hours', () => {
     expect(isPastClose(hours, at(20))).toBe(false); // mid-shift
     expect(isPastClose(hours, at(3))).toBe(true); // after close, before open
     expect(isPastClose(hours, at(10))).toBe(true); // last night's 2am close passed
+  });
+});
+
+describe('closing reminder', () => {
+  const hours = { openTime: '08:00', closeTime: '21:00' };
+  const at = (h: number, m: number) => new Date(2026, 8, 25, h, m, 0);
+
+  it('returns minutes left until close', () => {
+    expect(minutesUntilClose(hours, at(19, 0))).toBe(120);
+    expect(minutesUntilClose(hours, at(20, 30))).toBe(30);
+  });
+
+  it('stays quiet outside the reminder window', () => {
+    expect(closeReminderState(hours, 45, at(18, 0))).toBeNull();
+  });
+
+  it('reminds inside the window', () => {
+    const s = closeReminderState(hours, 45, at(20, 30));
+    expect(s?.minutesLeft).toBe(30);
+  });
+
+  it('is off when the owner sets no lead time', () => {
+    expect(closeReminderState(hours, 0, at(20, 30))).toBeNull();
+    expect(closeReminderState(hours, undefined, at(20, 30))).toBeNull();
+  });
+
+  it('is off on a day off', () => {
+    const dayOff = { openTime: '08:00', closeTime: '21:00', closedDays: [5] };
+    const friday = new Date(2026, 8, 25, 20, 30, 0);
+    expect(closeReminderState(dayOff, 45, friday)).toBeNull();
+  });
+
+  it('handles overnight shifts across midnight', () => {
+    const night = { openTime: '18:00', closeTime: '02:00' };
+    expect(minutesUntilClose(night, at(23, 30))).toBe(150);
+    expect(minutesUntilClose(night, at(1, 0))).toBe(60);
+  });
+
+  it('formats the countdown in words a shop owner reads', () => {
+    expect(formatMinutesLeft(45)).toBe('45 min');
+    expect(formatMinutesLeft(60)).toBe('1 hr');
+    expect(formatMinutesLeft(95)).toBe('1 hr 35 min');
   });
 });

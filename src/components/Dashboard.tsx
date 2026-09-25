@@ -18,6 +18,7 @@ import { t } from '../utils/i18n';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { eateryDayClose } from '../utils/eateryClose';
 import ReceiptModal from './ReceiptModal';
+import { confirmDialog, promptDialog } from './Dialog';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 import { serviceCategoryOf } from '../utils/serviceCategories';
 import { splitLegs, paymentLabel } from '../utils/serviceSale';
@@ -361,7 +362,7 @@ export default function Dashboard({
             </p>
           ) : (
             <>
-              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">End of day</p>
+              <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest">End of day · after spending</p>
               <p className={`text-3xl font-black font-display tabular-nums mt-1 ${eatery.verdict === 'kept' ? 'text-emerald-400' : eatery.verdict === 'lost' ? 'text-rose-400' : 'text-gold-brand'}`}
                 title={formatCurrency(eatery.left)}>
                 {eatery.verdict === 'kept' && `You kept ${formatCurrency(eatery.left)}`}
@@ -382,7 +383,7 @@ export default function Dashboard({
                   <span className="text-sm font-black text-amber-300 tabular-nums">−{formatCurrency(eatery.foodCost)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-zinc-400 uppercase">Dish profit</span>
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Dish profit · before spending</span>
                   <span className={`text-sm font-black tabular-nums ${eatery.dishProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {formatCurrency(eatery.dishProfit)}
                     <span className="text-[10px] text-zinc-500 font-bold"> · {Math.round(eatery.marginPct)}%</span>
@@ -640,9 +641,9 @@ export default function Dashboard({
                       <span className="text-zinc-500 shrink-0">x{item.qty}</span>
                       <span className="text-gold-light shrink-0">{formatCurrency(item.lineTotal)}</span>
                       {!selectedSaleForModal.refunded && onReturnItems && (
-                        <button onClick={() => {
+                        <button onClick={async () => {
                             const raw = item.qty > 1
-                              ? window.prompt(`Return how many of ${item.productName}? (max ${item.qty})`, String(item.qty))
+                              ? await promptDialog({ title: 'Return items', message: `Return how many of ${item.productName}? (max ${item.qty})`, defaultValue: String(item.qty), inputMode: 'numeric', placeholder: String(item.qty), validate: value => { const n = Math.round(parseFloat(value) || 0); return n >= 1 && n <= item.qty ? null : `Enter 1 – ${item.qty}.`; }, confirmLabel: 'Return' })
                               : '1';
                             if (raw === null) return;
                             const q = Math.min(item.qty, Math.max(0, Math.round(parseFloat(raw) || 0)));
@@ -689,8 +690,8 @@ export default function Dashboard({
             </div>
             <div className="flex gap-2 mt-2">
               {!selectedSaleForModal.refunded && (
-                <button onClick={() => {
-                  if (confirm('Refund this sale? Stock will be restored.')) {
+                <button onClick={async () => {
+                  if (await confirmDialog({ title: 'Refund sale', message: 'Refund this sale? Stock will be restored.', confirmLabel: 'Refund', danger: true })) {
                     onRefundSale(selectedSaleForModal.id);
                     setSelectedSaleForModal(null);
                   }

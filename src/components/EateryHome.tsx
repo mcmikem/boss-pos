@@ -111,7 +111,7 @@ export default function EateryHome({
             <Wallet className="w-3 h-3" /> Money
           </p>
           <p className="text-lg font-black text-white font-display mt-1 tabular-nums">{cash(money.revenue)}</p>
-          <p className="text-[10px] text-zinc-500 font-bold uppercase">kept {cash(money.dishProfit)}</p>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase">kept before spending {cash(money.dishProfit)}</p>
         </div>
       </div>
 

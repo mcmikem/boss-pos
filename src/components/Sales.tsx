@@ -6,15 +6,16 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
   CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, TailoringOrder, DesignOrder, Booking, RepairJob } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, TailoringOrder, DesignOrder, Booking, RepairJob, SaleSaveResult } from '../types';
 import { nextOrderNumber, quoteApi, tailoringOrderApi, designOrderApi, bookingApi, repairJobApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import ProductCard from './ProductCard';
-import BarcodeScanner from './BarcodeScanner';
 import KeyboardShortcuts from './KeyboardShortcuts';
+import { useDialogFocus } from './Sheet';
 import CustomChargeModal from './CustomChargeModal';
 import ServiceQtyModal from './ServiceQtyModal';
-import ConfirmSaleModal from './ConfirmSaleModal';
+import ConfirmSaleModal, { type ConfirmSaleResult } from './ConfirmSaleModal';
+import { confirmDialog, promptDialog } from './Dialog';
 import type { TriggerToast } from './Toast';
 import CashTransferModal from './CashTransferModal';
 import Customers from './Customers';
@@ -31,10 +32,13 @@ import { todayLocalKey } from '../utils/dates';
 import { expiryStatus } from '../utils/dates';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
 import { pastVisits, isRewardVisit, visitsToReward, clampPct, clampEveryN } from '../utils/loyalty';
-import { loadParked, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart } from '../utils/parked';
+import { loadParked, loadParkedAsync, parkCart, unparkCart, parkedTotal, parkedCount, type ParkedCart, type ParkedCartScope } from '../utils/parked';
+import { checkoutDraftScopeKey, clearCheckoutDraft, clearActiveCheckoutDraft, loadActiveCheckoutDraft, loadCheckoutDraft, readCheckoutDraftSync, saveActiveCheckoutDraft, type CheckoutDraftScope, type CheckoutPaymentMethod } from '../utils/checkoutDraft';
+import { clearPendingSale, clearPendingSaleAsync, loadPendingSale, loadPendingSaleAsync, savePendingSale, savePendingSaleAsync, type PendingSaleScope } from '../utils/pendingSale';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 // Heavy sub-managers are lazy-loaded so the initial sell screen (and the main
 // bundle) stays small — important on the slow connections this app targets.
+const BarcodeScanner = lazyRetry(() => import('./BarcodeScanner'));
 const TailoringOrders = lazyRetry(() => import('./TailoringOrders'));
 const DesignOrders = lazyRetry(() => import('./DesignOrders'));
 const EateryPricing = lazyRetry(() => import('./EateryPricing'));
@@ -99,7 +103,7 @@ function playChargeFeedback() {
 
 interface SalesProps {
   products: Product[];
-  onAddSale: (sale: Sale) => void;
+  onAddSale: (sale: Sale) => void | Promise<SaleSaveResult>;
   onUpdateProduct: (p: Product) => void;
   formatCurrency: (val: number) => string;
   cart: SaleItem[];
@@ -118,6 +122,8 @@ interface SalesProps {
   staffConfigured?: boolean;
   onOpenStaffSwitcher?: () => void;
   tillBranch?: string;
+  draftScope?: CheckoutDraftScope;
+  cartDraftReady?: boolean;
   productionRegisters?: ProductionRegister[];
   onAddProduction?: (p: ProductionRegister) => void;
   onDeleteProduction?: (id: string) => void;
@@ -125,6 +131,10 @@ interface SalesProps {
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
   onGoClose?: () => void;
+  // Money set aside at close for tomorrow's ingredients. The kitchen spends it
+  // as batches are logged, and asks for a top-up when a day needs more.
+  ingredientBudgetToday?: number;
+  onRecordIngredientTopUp?: (amount: number, reason: string) => void;
   // Blind cashier close: Eatery money figures render masked.
   hideMoney?: boolean;
   simple?: boolean;
@@ -186,9 +196,16 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
+  const effectiveDraftScope = useMemo<CheckoutDraftScope>(() => ({
+    branch: draftScope?.branch ?? tillBranch ?? '',
+    tillId: draftScope?.tillId ?? 'device',
+  }), [draftScope?.branch, draftScope?.tillId, tillBranch]);
+  const draftScopeKey = checkoutDraftScopeKey(effectiveDraftScope);
+  const parkedScope = useMemo<ParkedCartScope>(() => effectiveDraftScope, [effectiveDraftScope]);
+  const pendingScope = useMemo<PendingSaleScope>(() => effectiveDraftScope, [effectiveDraftScope]);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Hide sold-out rows on crowded tills (per device). Services always show.
   const [inStockOnly, setInStockOnly] = useState<boolean>(() => {
@@ -222,11 +239,26 @@ export default function Sales({
   const [parked, setParked] = useState<ParkedCart[]>(() => {
     try { return loadParked(); } catch { return []; }
   });
-  const parkCurrent = () => {
+  useEffect(() => {
+    let active = true;
+    void loadParkedAsync(parkedScope).then(list => { if (active) setParked(list); }).catch(() => {});
+    return () => { active = false; };
+  }, [parkedScope]);
+  const clearPending = () => {
+    clearPendingSale();
+    return clearPendingSaleAsync(pendingScope).catch(() => {});
+  };
+  const savePending = (sale: Sale) => {
+    savePendingSale(sale);
+    return savePendingSaleAsync(sale, pendingScope);
+  };
+  const parkCurrent = async () => {
     if (cart.length === 0) return;
-    const name = window.prompt('Park this sale under which name?', customerName || '');
+    const name = await promptDialog({ title: 'Park sale', message: 'Park this sale under which name?', defaultValue: customerName || '', placeholder: 'Customer name' });
     if (name === null) return;
-    setParked(parkCart({ name: name.trim() || `Customer ${parked.length + 1}`, items: cart, paymentMethod, customerName }));
+    setParked(parkCart({ name: name.trim() || `Customer ${parked.length + 1}`, items: cart, paymentMethod, customerName }, parkedScope));
+    setPendingRecovery(null);
+    clearPending();
     setCart([]);
     triggerToast('Sale parked — recall it from the cart', 'success');
   };
@@ -241,19 +273,21 @@ export default function Sales({
     if (hrs < 24) return `${hrs}h ago`;
     return `${Math.round(hrs / 24)}d ago`;
   };
-  const recallParked = (id: string) => {
+  const recallParked = async (id: string) => {
     const entry = parked.find(p => p.id === id);
     if (!entry) return;
-    if (cart.length > 0 && !window.confirm(`Replace the current cart with ${entry.name}'s parked sale?`)) return;
+    if (cart.length > 0 && !(await confirmDialog({ title: 'Replace cart', message: `Replace the current cart with ${entry.name}'s parked sale?`, confirmLabel: 'Replace' }))) return;
     // Parked prices go stale (owner repriced at lunch): reprice to the live
     // catalog on recall. Variant lines and deleted products keep their snapped
     // price — only genuine catalog changes rewrite the cart. Stock shortages
     // are still caught at charge time by the oversell guard.
     const { cart: fresh, changed } = reconcileCartPrices(entry.items, products);
+    setPendingRecovery(null);
+    clearPending();
     setCart(fresh);
     if (entry.paymentMethod) setPaymentMethod(entry.paymentMethod as never);
     setCustomerName(entry.customerName || '');
-    setParked(unparkCart(id));
+    setParked(unparkCart(id, parkedScope));
     triggerToast(changed ? `Recalled ${entry.name}'s sale — prices updated to today's` : `Recalled ${entry.name}'s sale`, 'info');
   };
   const renderParkedRows = () => (parked.length > 0 && !simpleTill) ? (
@@ -265,7 +299,7 @@ export default function Sales({
             <span className="block text-xs font-black text-white truncate">{p.name}</span>
             <span className="block text-[10px] text-zinc-500 font-bold">{parkedCount(p)} items • {formatCurrency(parkedTotal(p))} • {parkedAge(p.createdAt)}</span>
           </button>
-          <button onClick={() => setParked(unparkCart(p.id))} aria-label={`Drop parked sale ${p.name}`}
+           <button onClick={() => setParked(unparkCart(p.id, parkedScope))} aria-label={`Drop parked sale ${p.name}`}
             className="shrink-0 text-zinc-600 hover:text-rose-400 font-bold text-lg leading-none px-1 cursor-pointer">×</button>
         </div>
       ))}
@@ -304,6 +338,13 @@ export default function Sales({
     setDesignStartNew(false);
     if (selectedCategory === 'Tailoring') setShowTailorHome(true);
     if (selectedCategory === 'Graphics') setShowPrintHome(true);
+    // Eatery and Drinks open on Morning Production. Making the batch is the
+    // first job of the day in a kitchen — the read-only summary is the result
+    // of that, not the doorway in. One tap from the area chip to the real work.
+    if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
+      setShowProduction(true);
+      setShowEateryHome(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory]);
   const [showPrintHome, setShowPrintHome] = useState<boolean>(false);
@@ -332,6 +373,7 @@ export default function Sales({
   });
   const [streetCount, setStreetCount] = useState(0);
   const [streetTotal, setStreetTotal] = useState(0);
+  const streetInFlight = useRef(new Set<string>());
   // Contractor quotations sync to the server; localStorage is the offline
   // cache. On load the server wins by id and locally-created (still-queued)
   // rows are kept, so an offline-written quote never vanishes on refresh.
@@ -386,8 +428,8 @@ export default function Sales({
   // Last-used payment method wins per device (a MoMo-heavy till stays on
   // MoMo); falls back to the shop default on first run.
   const PAY_METHOD_KEY = 'boss_pos_pay_method';
-  type PayMethod = 'Cash' | 'MTN MoMo' | 'Airtel Money' | 'Credit / Book' | 'Split';
-  const [paymentMethod, setPaymentMethod] = useState<PayMethod>(() => {
+  type PayMethod = CheckoutPaymentMethod;
+  const defaultPaymentMethod = (): PayMethod => {
     try {
       const last = localStorage.getItem(PAY_METHOD_KEY);
       if (last === 'Cash' || last === 'MTN MoMo' || last === 'Airtel Money' || last === 'Credit / Book' || last === 'Split') return last as PayMethod;
@@ -396,7 +438,9 @@ export default function Sales({
     if (settings?.defaultPaymentMethod === 'Airtel Money') return 'Airtel Money';
     if (settings?.defaultPaymentMethod === 'Credit / Book') return 'Credit / Book';
     return 'Cash';
-  });
+  };
+  const initialCheckoutDraft = useRef(readCheckoutDraftSync(effectiveDraftScope) || loadCheckoutDraft()).current;
+  const [paymentMethod, setPaymentMethod] = useState<PayMethod>(() => initialCheckoutDraft?.paymentMethod || defaultPaymentMethod());
   useEffect(() => {
     try { localStorage.setItem(PAY_METHOD_KEY, paymentMethod); } catch {}
   }, [paymentMethod]);
@@ -405,7 +449,7 @@ export default function Sales({
   const [isMobileCartOpen, setIsMobileCartOpen] = useState<boolean>(false);
   const [isCustomChargeOpen, setIsCustomChargeOpen] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
-  const [customerName, setCustomerName] = useState<string>('');
+  const [customerName, setCustomerName] = useState<string>(initialCheckoutDraft?.customerName || '');
   const [showMoreActions, setShowMoreActions] = useState(false);
   // Simple till: attendant mode hides discounts, quotes and parking so the
   // sell flow is tap → charge. Per device; toggled in Settings → Display.
@@ -417,23 +461,122 @@ export default function Sales({
     window.addEventListener('boss_pos_simple_till', h);
     return () => window.removeEventListener('boss_pos_simple_till', h);
   }, []);
-  const [discount, setDiscount] = useState<string>('');
-  const [customCashReceived, setCustomCashReceived] = useState<string>('');
-  const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
+  const [discount, setDiscount] = useState<string>(initialCheckoutDraft?.discount || '');
+  const [customCashReceived, setCustomCashReceived] = useState<string>(initialCheckoutDraft?.customCashReceived || '');
+  const [discountType, setDiscountType] = useState<'fixed' | 'percent'>(initialCheckoutDraft?.discountType || 'fixed');
   // Split tender: leg 1 typed, leg 2 = remainder. Cash-like legs only.
-  const [splitLeg1Method, setSplitLeg1Method] = useState<SplitTender['method']>('Cash');
-  const [splitLeg1Amount, setSplitLeg1Amount] = useState('');
-  const [splitLeg2Method, setSplitLeg2Method] = useState<SplitTender['method']>('MTN MoMo');
+  const [splitLeg1Method, setSplitLeg1Method] = useState<SplitTender['method']>(initialCheckoutDraft?.splitLeg1Method || 'Cash');
+  const [splitLeg1Amount, setSplitLeg1Amount] = useState<string>(initialCheckoutDraft?.splitLeg1Amount || '');
+  const [splitLeg2Method, setSplitLeg2Method] = useState<SplitTender['method']>(initialCheckoutDraft?.splitLeg2Method || 'MTN MoMo');
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState<boolean>(false);
+  const confirmOpenRef = useRef(false);
   const [showConfirmSale, setShowConfirmSale] = useState<boolean>(false);
+  confirmOpenRef.current = showConfirmSale;
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [showQuickExpense, setShowQuickExpense] = useState(false);
   const [showFoodCost, setShowFoodCost] = useState(false);
   const [showTransfers, setShowTransfers] = useState(false);
   const [showCustomers, setShowCustomers] = useState(false);
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
-  const [isCompleting, setIsCompleting] = useState(false);
+  const [checkoutState, setCheckoutState] = useState<'idle' | 'saving' | 'queued' | 'saved' | 'error'>('idle');
+  const [pendingRecovery, setPendingRecovery] = useState<Sale | null>(() => loadPendingSale());
+  // A batch that costs more than the set-aside ingredient money: ask where the
+  // extra came from and record it, rather than silently overspending the drawer.
+  const requestIngredientTopUp = async (shortfall: number) => {
+    const missing = Math.max(0, Math.round(shortfall));
+    const raw = await promptDialog({
+      title: 'Need more ingredient money',
+      message: missing > 0
+        ? `This batch needs ${formatCurrency(missing)} more than is set aside. Where is the extra money coming from?`
+        : 'The ingredient money set aside is used up. Where is the extra money coming from?',
+      placeholder: 'e.g. 20,000 added from the owner, or topped up on float',
+      inputMode: 'text',
+      confirmLabel: 'Record it',
+    });
+    if (raw === null) return;
+    const note = raw.trim();
+    if (!note) { triggerToast('Say where the money came from', 'error'); return; }
+    if (onRecordIngredientTopUp) onRecordIngredientTopUp(missing, note);
+    triggerToast('Ingredient top-up recorded', 'success');
+  };
+  useEffect(() => {
+    let active = true;
+    void loadPendingSaleAsync(pendingScope).then((sale) => { if (active && sale) setPendingRecovery(sale); }).catch(() => {});
+    return () => { active = false; };
+  }, [pendingScope]);
+  const [checkoutDraftHydrated, setCheckoutDraftHydrated] = useState(false);
+  const checkoutDraftTouched = useRef(false);
+  const isCompleting = checkoutState === 'saving';
+  useEffect(() => {
+    let active = true;
+    checkoutDraftTouched.current = false;
+    setCheckoutDraftHydrated(false);
+    setPaymentMethod(defaultPaymentMethod());
+    setCustomerName('');
+    setDiscount('');
+    setDiscountType('fixed');
+    setCustomCashReceived('');
+    setSplitLeg1Method('Cash');
+    setSplitLeg1Amount('');
+    setSplitLeg2Method('MTN MoMo');
+    void loadActiveCheckoutDraft(effectiveDraftScope).then((record) => {
+      if (!active) return;
+      if (record && !checkoutDraftTouched.current) {
+        setPaymentMethod(record.paymentMethod);
+        setCustomerName(record.customerName);
+        setDiscount(record.discount);
+        setDiscountType(record.discountType);
+        setCustomCashReceived(record.customCashReceived);
+        setSplitLeg1Method(record.splitLeg1Method);
+        setSplitLeg1Amount(record.splitLeg1Amount);
+        setSplitLeg2Method(record.splitLeg2Method);
+        if (!cartDraftReady && cart.length === 0 && record.cart.length > 0) setCart(record.cart);
+      }
+      setCheckoutDraftHydrated(true);
+    }).catch(() => { if (active) setCheckoutDraftHydrated(true); });
+    return () => { active = false; };
+  }, [draftScopeKey]);
+  useEffect(() => {
+    if (checkoutDraftHydrated) checkoutDraftTouched.current = true;
+  }, [checkoutDraftHydrated, paymentMethod, customerName, discount, discountType, customCashReceived, splitLeg1Method, splitLeg1Amount, splitLeg2Method]);
+  useEffect(() => {
+    if (!checkoutDraftHydrated || !cartDraftReady) return;
+    if (cart.length > 0) {
+      void saveActiveCheckoutDraft({
+        cart,
+        paymentMethod,
+        customerName,
+        discount,
+        discountType,
+        customCashReceived,
+        splitLeg1Method,
+        splitLeg1Amount,
+        splitLeg2Method,
+      }, effectiveDraftScope).catch(() => {});
+    } else {
+      void clearActiveCheckoutDraft(effectiveDraftScope).catch(() => {});
+      clearCheckoutDraft();
+    }
+  }, [cart, cartDraftReady, checkoutDraftHydrated, paymentMethod, customerName, discount, discountType, customCashReceived, splitLeg1Method, splitLeg1Amount, splitLeg2Method, effectiveDraftScope]);
+  const cartSignature = (items: SaleItem[]) => items
+    .map(item => `${item.productId}::${item.variantId || ''}:${item.qty}`)
+    .sort()
+    .join('|');
+  const pendingMatchesCart = !!pendingRecovery && cartSignature(cart) === cartSignature(pendingRecovery.items);
+  useEffect(() => {
+    if (!pendingRecovery || isCompleting) return;
+    if (cart.length === 0) {
+      setCart(pendingRecovery.items);
+      return;
+    }
+    triggerToast('An unfinished sale was recovered — review it before confirming', 'info');
+  }, [pendingRecovery, isCompleting]);
+  const discardPendingRecovery = () => {
+    setPendingRecovery(null);
+    clearPending();
+    triggerToast('Unfinished sale discarded', 'info');
+  };
   // Undo window for the just-completed sale: 10s to tap Undo, then it lapses
   // (a manager can still refund from Reports).
   const [undoSaleId, setUndoSaleId] = useState<string | null>(null);
@@ -452,10 +595,42 @@ export default function Sales({
   const PAGE_SIZE = 30;
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const moreActionsRef = useRef<HTMLDivElement>(null);
+  const mobileCartRef = useRef<HTMLDivElement>(null);
+  const quickSaleRef = useRef<HTMLDivElement>(null);
+  const customChargeRef = useRef<HTMLDivElement>(null);
+  const serviceQtyRef = useRef<HTMLDivElement>(null);
+  const scannerRef = useRef<HTMLDivElement>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
+  const transfersRef = useRef<HTMLDivElement>(null);
+  const customersRef = useRef<HTMLDivElement>(null);
+  const quickExpenseRef = useRef<HTMLDivElement>(null);
+  const foodCostRef = useRef<HTMLDivElement>(null);
+  const variantRef = useRef<HTMLDivElement>(null);
+  const clearCartRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     searchRef.current?.focus();
   }, []);
+
+  const closeQuickSale = () => {
+    setIsQuickSale(false);
+    setQuickSearchQuery('');
+  };
+
+  useDialogFocus(showMoreActions, moreActionsRef, () => setShowMoreActions(false));
+  useDialogFocus(isMobileCartOpen, mobileCartRef, () => setIsMobileCartOpen(false));
+  useDialogFocus(isQuickSale, quickSaleRef, closeQuickSale);
+  useDialogFocus(isCustomChargeOpen, customChargeRef, () => setIsCustomChargeOpen(false));
+  useDialogFocus(!!serviceQtyProduct, serviceQtyRef, () => setServiceQtyProduct(null));
+  useDialogFocus(isScannerOpen, scannerRef, () => setIsScannerOpen(false));
+  useDialogFocus(!!reprintSale, receiptRef, () => setReprintSale(null));
+  useDialogFocus(showTransfers, transfersRef, () => setShowTransfers(false));
+  useDialogFocus(showCustomers && !!onSaveCustomer && !!onDeleteCustomer, customersRef, () => setShowCustomers(false));
+  useDialogFocus(showQuickExpense, quickExpenseRef, () => setShowQuickExpense(false));
+  useDialogFocus(showFoodCost, foodCostRef, () => setShowFoodCost(false));
+  useDialogFocus(!!variantProduct, variantRef, () => setVariantProduct(null));
+  useDialogFocus(showClearConfirm, clearCartRef, () => setShowClearConfirm(false));
 
   useEffect(() => {
     setVisibleCount(30);
@@ -592,23 +767,22 @@ export default function Sales({
     return `${inShop} in shop • ${ready} ready`;
   }, [areaRepairs]);
 
+  const handleOutOfStock = (product: Product) => {
+    playError();
+    triggerToast(`${product.name} is out of stock`, 'error', onGoToStock
+      ? { label: 'Restock', onClick: onGoToStock }
+      : { label: 'Sell custom', onClick: () => setIsCustomChargeOpen(true) });
+    try {
+      pushNotice('info', `${product.name} is out of stock`,
+        `Tapped ${product.stockQty} left on ${dayKeyOf()}. Restock from Inventory so tomorrow's sales aren't lost.`,
+        `oos:${product.id}:${dayKeyOf()}`,
+        { action: { label: 'Restock', tab: 'inventory' } });
+    } catch {}
+  };
+
   const handleAddToCart = (product: Product) => {
     if (product.stockQty <= 0 && !product.isService) {
-      // No dead ends (#20): an out-of-stock tap offers the custom-item path
-      // so the cashier can still serve the customer.
-      playError();
-      triggerToast(`${product.name} is out of stock!`, 'error', {
-        label: 'Sell custom',
-        onClick: () => setIsCustomChargeOpen(true),
-      });
-      // Restock nudge: one bell reminder per product per day so the shelf
-      // gap survives the rush and gets refilled from Stock later.
-      try {
-        pushNotice('info', `${product.name} is out of stock`,
-          `Tapped ${product.stockQty} left on ${dayKeyOf()}. Restock from Inventory so tomorrow's sales aren't lost.`,
-          `oos:${product.id}:${dayKeyOf()}`,
-          { action: { label: 'Restock', tab: 'inventory' } });
-      } catch {}
+      handleOutOfStock(product);
       return;
     }
     // Expiry guard: never sell expired stock; warn when expiring soon.
@@ -689,12 +863,16 @@ export default function Sales({
     setServiceQtyProduct(null);
   };
 
-  const handleCompleteSaleRef = useRef<(() => boolean | void | Promise<boolean | void>) | null>(null);
+  const requestCompleteSaleRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F1') { e.preventDefault(); setIsScannerOpen(true); }
-      if (e.key === 'F2') { e.preventDefault(); handleCompleteSaleRef.current?.(); }
+      if (e.key === 'F2') {
+        e.preventDefault();
+        if (confirmOpenRef.current) document.getElementById('tour-confirm-btn')?.focus();
+        else requestCompleteSaleRef.current();
+      }
       if (e.ctrlKey && e.key === '/') { e.preventDefault(); setShowKeyboardHelp(true); }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -737,14 +915,14 @@ export default function Sales({
 
   // Per-line haggle: knock UGX off one row (empty clears). Clamped to the
   // line gross so a line can never go negative. Shows as "−X off" on the row.
-  const handleLineDiscount = (productId: string, variantId: string | undefined) => {
+  const handleLineDiscount = async (productId: string, variantId: string | undefined) => {
     const key = `${productId}::${variantId || ''}`;
     const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
     if (!item) return;
     const gross = Math.round(item.qty * item.unitPrice);
-    const raw = window.prompt(`Discount off ${item.productName}? UGX or % (max ${gross.toLocaleString()}). Empty clears.`, item.lineDiscount ? String(item.lineDiscount) : '');
+    const raw = await promptDialog({ title: 'Line discount', message: `Discount off ${item.productName}? UGX or % (max ${gross.toLocaleString()}). Empty clears.`, defaultValue: item.lineDiscount ? String(item.lineDiscount) : '', placeholder: '0 or 10%', confirmLabel: 'Apply' });
     if (raw === null) return;
-    const trimmed = raw.trim();
+    const trimmed = raw;
     if (trimmed === '') {
       setCart(prev => prev.map(i =>
         `${i.productId}::${i.variantId || ''}` === key
@@ -874,19 +1052,43 @@ export default function Sales({
   // Money strip removed: the briefing card already shows today's takings.
   const showGuide = !hideGuide && !guideDismissed && !demoMode && (salesHistory || []).length === 0;
 
-  const handleCompleteSale = async () => {
+  const requestCompleteSale = () => {
+    if (isCompleting) return;
+    if (cart.length === 0) {
+      playError();
+      triggerToast('Add items to the cart first', 'error');
+      return;
+    }
+    setCheckoutState('idle');
+    setShowConfirmSale(true);
+  };
+  requestCompleteSaleRef.current = requestCompleteSale;
+
+  const closeConfirmSale = () => {
+    if (isCompleting) return;
+    setShowConfirmSale(false);
+    setCheckoutState('idle');
+  };
+
+  const handleCompleteSale = async (): Promise<ConfirmSaleResult> => {
     // Playable demo (#2): run the full checkout thrill, but save nothing —
     // the cart just clears with a success note instead of a real sale.
     if (demoMode) {
       if (cart.length === 0) { playError(); triggerToast('Add items to the cart first', 'error'); return false; }
+      setCheckoutState('saving');
       setCart([]);
       setCustomCashReceived('');
       setDiscount('');
       setCustomerName('');
       setIsMobileCartOpen(false);
+      setPendingRecovery(null);
+       await clearPending();
+       clearCheckoutDraft();
+       await clearActiveCheckoutDraft(effectiveDraftScope);
+       setCheckoutState('saved');
       playChargeFeedback();
       triggerToast('Demo sale done — not saved. Exit demo to sell for real.', 'success');
-      return true;
+      return { status: 'saved' };
     }
     if (isCompleting) return false;
     if (cart.length === 0) { playError(); triggerToast('Add items to the cart first', 'error'); return false; }
@@ -958,9 +1160,11 @@ export default function Sales({
       );
       if (missing.length > 0) {
         const names = missing.map(m => `${m.productName} ×${m.qtySold}`).join(', ');
-        const ok = window.confirm(
-          `Not covered by today's batch or automatic leftover: ${names}.\n\nLeftover carries automatically unless logged expired — so this is more than the tray holds, or an unlogged batch.\n\nOK = sell anyway (flagged for the boss) • Cancel = go log production first.`,
-        );
+        const ok = await confirmDialog({
+          title: 'Sell beyond batch',
+          message: `Not covered by today's batch or automatic leftover: ${names}.\n\nLeftover carries automatically unless logged expired — so this is more than the tray holds, or an unlogged batch.\n\nSell anyway = flagged for the boss • Cancel = go log production first.`,
+          confirmLabel: 'Sell anyway',
+        });
         if (!ok) {
           triggerToast('Sale paused — log Morning Production first', 'info');
           return false;
@@ -977,12 +1181,12 @@ export default function Sales({
       }
     } catch {}
 
-    setIsCompleting(true);
+    setCheckoutState('saving');
     const cashPaidNum = parseFloat(customCashReceived);
     // Underpaid-Cash guard: desktop/mobile buttons disable short-pay, but
     // QuickSale + F2 bypassed them. Block here so no path can sell at a loss.
     if (paymentMethod === 'Cash' && customCashReceived !== '' && !isNaN(cashPaidNum) && cashPaidNum < saleTotal) {
-      setIsCompleting(false);
+      setCheckoutState('error');
       playError();
       triggerToast(`Still need ${formatCurrency(saleTotal - cashPaidNum)} — collect it or lower the total`, 'error');
       return false;
@@ -994,7 +1198,7 @@ export default function Sales({
       const a = Math.round(parseFloat(splitLeg1Amount) || 0);
       const b = Math.round(saleTotal - a);
       if (!(saleTotal > 0 && a > 0 && b > 0 && splitLeg1Method !== splitLeg2Method)) {
-        setIsCompleting(false);
+        setCheckoutState('error');
         playError();
         triggerToast('Make both legs add up to the total', 'error');
         return false;
@@ -1008,10 +1212,19 @@ export default function Sales({
     if (paymentMethod === 'Cash' && !isNaN(cashPaidNum) && cashPaidNum >= saleTotal) {
       changeMsg = ` Change: ${formatCurrency(cashPaidNum - saleTotal)}`;
     }
-    let orderNumber = await nextOrderNumber();
+    const recoverySale = pendingMatchesCart ? pendingRecovery : null;
+    if (pendingRecovery && !recoverySale) {
+      setPendingRecovery(null);
+      clearPending();
+    }
+    let orderNumber: string | undefined = recoverySale?.orderNumber || (await nextOrderNumber()) || undefined;
     if (!orderNumber) orderNumber = localOrderNumber();
+    const saleId = recoverySale?.id || `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newSale: Sale = {
-      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, orderNumber, timestamp: new Date().toISOString(),
+      id: saleId,
+      clientWriteId: recoverySale?.clientWriteId || `${saleId}:checkout`,
+      orderNumber,
+      timestamp: recoverySale?.timestamp || new Date().toISOString(),
       items: itemsToSell, subtotal: saleSubtotal, tax, total: saleTotal, paymentMethod,
       splitTenders,
       customerName: customerName.trim() || undefined,
@@ -1019,7 +1232,31 @@ export default function Sales({
       staffName: staffName?.trim() || undefined,
       branch: tillBranch || undefined,
     };
-    onAddSale(newSale);
+    setPendingRecovery(newSale);
+    await savePending(newSale).catch(() => {});
+    let saveResult: SaleSaveResult | void;
+    try {
+      saveResult = await onAddSale(newSale);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save sale — your cart is still here. Try again.';
+      setCart(clampedItems);
+      setCheckoutState('error');
+      playError();
+      triggerToast(message, 'error');
+      return false;
+    }
+    if (saveResult?.status === 'failed') {
+      setPendingRecovery(null);
+      clearPending();
+      setCart(clampedItems);
+      setCheckoutState('error');
+      playError();
+      triggerToast(saveResult.error || 'Failed to save sale — your cart is still here. Try again.', 'error');
+      return false;
+    }
+    const saveStatus: 'saved' | 'queued' = saveResult?.status === 'queued' ? 'queued' : 'saved';
+    setPendingRecovery(null);
+    clearPending();
     try {
       localStorage.setItem('boss_pos_last_sale', JSON.stringify(itemsToSell));
       setLastSaleItems(itemsToSell);
@@ -1028,22 +1265,28 @@ export default function Sales({
     setCustomCashReceived('');
     setDiscount('');
     setCustomerName('');
-    setIsMobileCartOpen(false);
-    setIsCompleting(false);
+     setIsMobileCartOpen(false);
+     clearCheckoutDraft();
+     await clearActiveCheckoutDraft(effectiveDraftScope);
+     setCheckoutState(saveStatus);
+    const savedSale = saveResult?.sale || newSale;
+    setShowConfirmSale(false);
+    setReprintSale(savedSale);
     playChargeFeedback();
-    triggerToast(`${orderNumber} done!${changeMsg}`, 'success');
+    triggerToast(saveStatus === 'queued' ? `${orderNumber} queued — it will sync when online${changeMsg}` : `${orderNumber} saved!${changeMsg}`, 'success');
     if (undoTimer.current) clearTimeout(undoTimer.current);
     setUndoSaleId(newSale.id);
     undoTimer.current = setTimeout(() => setUndoSaleId(null), 10_000);
-    return true;
+    return { status: saveStatus, sale: savedSale };
   };
-  handleCompleteSaleRef.current = handleCompleteSale;
-
   // Save the current cart as a contractor quotation (not a sale). Syncs to
   // the server (offline-safe: the api layer queues and echoes); rolls back
   // on a real failure. Converting brings items back to ring the sale later.
+  const savingQuoteRef = useRef(false);
   const saveQuote = async () => {
+    if (savingQuoteRef.current) return;
     if (cart.length === 0) { triggerToast('Cart is empty — nothing to quote', 'error'); return; }
+    savingQuoteRef.current = true;
     const q: Quote = {
       id: `q-${Date.now()}`,
       customerName: customerName.trim(),
@@ -1062,12 +1305,16 @@ export default function Sales({
     } catch {
       setQuotes(prev => prev.filter(x => x.id !== q.id));
       triggerToast('Failed to save quote — not added', 'error');
+    } finally {
+      savingQuoteRef.current = false;
     }
   };
 
   const convertQuote = (q: Quote) => {
     // Quotes go stale (price changed since) — reprice live like parked carts.
     const { cart: fresh, changed } = reconcileCartPrices(q.items.map(i => ({ ...i })), catalog);
+    setPendingRecovery(null);
+    clearPending();
     setCart(fresh);
     setCustomerName(q.customerName);
     setDiscountType('fixed');
@@ -1079,6 +1326,9 @@ export default function Sales({
   // One-tap cash sale for street mode. Mirrors the core of handleCompleteSale
   // minus cart/discount/confirm/receipt — speed is the whole point.
   const streetSell = async (product: Product) => {
+    if (streetInFlight.current.has(product.id)) return;
+    streetInFlight.current.add(product.id);
+    try {
     // Demo guard: street taps must never write real sales either.
     if (demoMode) {
       setStreetCount(c => c + 1);
@@ -1099,17 +1349,43 @@ export default function Sales({
     };
     let orderNumber = await nextOrderNumber();
     if (!orderNumber) orderNumber = localOrderNumber();
+    const saleId = `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newSale: Sale = {
-      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, orderNumber, timestamp: new Date().toISOString(),
+      id: saleId, clientWriteId: `${saleId}:street`, orderNumber, timestamp: new Date().toISOString(),
       items: [item], subtotal: product.price, tax: 0, total: product.price, paymentMethod: 'Cash',
       staffName: staffName?.trim() || undefined,
       branch: tillBranch || undefined,
     };
-    onAddSale(newSale);
+    await savePending(newSale).catch(() => {});
+    setPendingRecovery(newSale);
+    let saveResult: SaleSaveResult | void;
+    try {
+      saveResult = await onAddSale(newSale);
+    } catch (err) {
+      clearPending();
+      setPendingRecovery(null);
+      const message = err instanceof Error ? err.message : 'Failed to save street sale';
+      triggerToast(message, 'error');
+      playError();
+      return;
+    }
+    if (saveResult?.status === 'failed') {
+      clearPending();
+      setPendingRecovery(null);
+      triggerToast(saveResult.error || 'Failed to save street sale', 'error');
+      playError();
+      return;
+    }
+    clearPending();
+    setPendingRecovery(null);
     setStreetCount(c => c + 1);
     setStreetTotal(t => t + product.price);
+    setReprintSale(saveResult?.sale || newSale);
     playChargeFeedback();
-    triggerToast(`${product.name} sold • ${formatCurrency(product.price)}`, 'success');
+    triggerToast(`${product.name} ${saveResult?.status === 'queued' ? 'queued' : 'sold'} • ${formatCurrency(product.price)}`, 'success');
+    } finally {
+      streetInFlight.current.delete(product.id);
+    }
   };
 
   const repeatLastSale = () => {
@@ -1119,6 +1395,8 @@ export default function Sales({
       return !!p && (p.isService || p.stockQty >= item.qty);
     });
     if (live.length === 0) { triggerToast("Last sale cannot repeat — those items are out of stock", 'error'); return; }
+    setPendingRecovery(null);
+    clearPending();
     setCart(live);
     if (live.length < lastSaleItems.length) triggerToast('Some items out of stock — added what is available', 'info');
   };
@@ -1300,23 +1578,171 @@ export default function Sales({
     </div>
   );
 
+  const renderPaymentButtons = (onDark: boolean, dense = false) => {
+    const methods: PayMethod[] = simpleTill
+      ? ['Cash', 'MTN MoMo', 'Airtel Money']
+      : ['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split'];
+    return (
+      <div className={`grid ${simpleTill ? 'grid-cols-3' : 'grid-cols-5'} gap-1.5`}>
+        {methods.map(name => (
+          <button key={name} type="button" onClick={() => { setPaymentMethod(name); setCustomCashReceived(''); }}
+            className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}${dense ? 'py-2.5' : 'py-3'} rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 ${dense ? 'min-h-[44px]' : 'min-h-[48px]'} ${
+              paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : `border-white/5 ${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} text-zinc-500`
+            }`}>
+            {name === 'Credit / Book' ? t(lang, 'credit') : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const renderCustomerField = (listId: string, onDark: boolean, dense = false) => (
+    <div className={`${dense ? 'space-y-1' : 'space-y-2'} ${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border border-white/5 p-3 rounded-2xl`}>
+      {!dense && (
+        <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
+          <User className="w-3.5 h-3.5" /> {paymentMethod === 'Credit / Book' ? `${t(lang, 'customerName')} *` : 'Customer name (optional)'}
+        </label>
+      )}
+      <input type="text" list={knownCustomers.length > 0 ? listId : undefined}
+        placeholder={paymentMethod === 'Credit / Book' ? t(lang, 'customerNameEx') : 'Regular? Enter name for reward'}
+        aria-label={paymentMethod === 'Credit / Book' ? t(lang, 'customerName') : 'Customer name (optional)'}
+        value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+        className={`w-full ${dense ? 'h-11' : 'h-11'} ${onDark ? 'bg-[#0A0A0A]' : 'bg-[#141414]'} border border-white/5 text-gold-light rounded-xl px-3 text-sm outline-none focus:border-gold-brand`} />
+      {showVipOffer && (
+        <button type="button" onClick={applyVip}
+          className={`w-full ${dense ? 'min-h-[44px]' : 'h-11'} rounded-xl bg-purple-950/40 border border-purple-600/50 text-purple-200 text-xs font-black uppercase tracking-wider hover:bg-purple-950/60 active:scale-[0.98] transition-all cursor-pointer`}>
+          ★ {matchedProfile?.name} — apply {matchedProfile?.discountPct}% regular discount
+        </button>
+      )}
+      {showLoyalty && (loyaltyDue ? (
+        <button type="button" onClick={applyLoyalty}
+          className={`w-full ${dense ? 'min-h-[44px]' : 'h-11'} rounded-xl bg-gold-brand/15 border border-gold-brand text-gold-brand text-xs font-black uppercase tracking-wider hover:bg-gold-brand/25 active:scale-[0.98] transition-all cursor-pointer`}>
+          ★ Visit {loyaltyPast + 1} — apply {loyaltyP}% regular reward
+        </button>
+      ) : (
+        <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Visit {loyaltyPast + 1} — reward in {loyaltyLeft}</p>
+      ))}
+    </div>
+  );
+
+  const renderCashField = (onDark: boolean, dense = false) => {
+    if (paymentMethod !== 'Cash') return null;
+    return (
+      <div className={`${dense ? 'p-3' : 'p-4'} ${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border border-white/5 rounded-2xl space-y-3 mt-2`}>
+        <div className="flex justify-between items-center gap-2">
+          <span className="text-xs text-zinc-400 font-bold uppercase">{t(lang, 'cashReceived')}</span>
+          <input type="number" min="0" inputMode="decimal" placeholder={t(lang, 'amount')} value={customCashReceived}
+            onChange={(e) => setCustomCashReceived(e.target.value)} aria-label={t(lang, 'cashReceived')}
+            className="w-28 bg-[#0A0A0A] border border-white/5 text-gold-brand font-black text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
+        </div>
+        {featsOn('quickCash') && (
+          <div className="flex flex-wrap gap-1.5">
+            {(() => {
+              if (total <= 0) return null;
+              const values = new Set<number>([total]);
+              [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) values.add(n); });
+              values.add(Math.ceil(total / 5000) * 5000);
+              return Array.from(values).filter(amount => amount >= total).sort((a, b) => a - b).slice(0, 4).map(amount => (
+                <button key={amount} type="button" onClick={() => setCustomCashReceived(String(amount))}
+                  aria-label={amount === total ? 'Exact amount' : `Customer gave ${amount.toLocaleString()}`}
+                  className={`px-3 min-h-[40px] text-xs font-black rounded-lg border transition-all cursor-pointer active:scale-95 ${
+                    parseFloat(customCashReceived) === amount ? 'bg-gold-brand text-black border-gold-brand' : `${onDark ? 'bg-[#0A0A0A]' : 'bg-[#141414]'} text-zinc-400 border-white/5`
+                  }`}>
+                  {amount === total ? t(lang, 'exact') : amount.toLocaleString()}
+                </button>
+              ));
+            })()}
+          </div>
+        )}
+        {customCashReceived && (
+          <div className="pt-1.5 border-t border-white/5 flex justify-between items-center">
+            {parseFloat(customCashReceived) >= total ? (
+              <><span className="text-xs font-semibold text-emerald-400">{t(lang, 'change')}</span><span className="text-sm font-bold text-emerald-400 tabular-nums">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
+            ) : (
+              <><span className="text-xs font-semibold text-amber-500">{t(lang, 'stillNeed')}</span><span className="text-sm font-bold text-amber-500 tabular-nums">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderDiscountField = (onDark: boolean, dense = false) => {
+    if (simpleTill) return null;
+    return (
+      <details className={`${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border border-white/5 p-3 rounded-2xl mt-2`}>
+        <summary className="text-xs text-zinc-400 font-bold uppercase cursor-pointer list-none flex items-center justify-between">
+          <span className="flex items-center gap-1.5"><Percent className="w-3.5 h-3.5" /> {t(lang, 'discount')}</span>
+          {discountNum > 0 && <span className="text-emerald-400">−{formatCurrency(discountNum)}</span>}
+        </summary>
+        <div className="mt-3 space-y-2">
+          <div className="flex bg-[#0A0A0A] rounded-lg border border-white/5 overflow-hidden">
+            <button type="button" onClick={() => setDiscountType('fixed')} className={`flex-1 py-2 text-[10px] font-bold uppercase ${discountType === 'fixed' ? 'bg-gold-brand text-black' : 'text-zinc-500'}`}>UGX</button>
+            <button type="button" onClick={() => setDiscountType('percent')} className={`flex-1 py-2 text-[10px] font-bold uppercase ${discountType === 'percent' ? 'bg-gold-brand text-black' : 'text-zinc-500'}`}>%</button>
+          </div>
+          <input type="number" min="0" placeholder={discountType === 'percent' ? '0%' : '0'} value={discount} onChange={(e) => setDiscount(e.target.value)}
+            aria-label={t(lang, 'discount')} className={`w-full ${dense ? 'h-11' : 'h-11'} ${onDark ? 'bg-[#0A0A0A]' : 'bg-[#141414]'} border border-white/5 text-gold-brand font-bold rounded-lg px-3 text-sm focus:outline-none focus:border-gold-brand`} />
+        </div>
+      </details>
+    );
+  };
+
+  const renderPaymentEditor = (onDark: boolean, listId: string, dense = false) => (
+    <div className="space-y-2">
+      {renderPaymentButtons(onDark, dense)}
+      {renderCustomerField(listId, onDark, dense)}
+      {renderDiscountField(onDark, dense)}
+      {renderCashField(onDark, dense)}
+      {paymentMethod === 'Split' && renderSplitEditor(onDark)}
+      {knownCustomers.length > 0 && (
+        <datalist id={listId}>
+          {knownCustomers.map(name => <option key={name} value={name} />)}
+        </datalist>
+      )}
+    </div>
+  );
+
+  const renderCheckoutFooter = (onDark: boolean, compact = false) => (
+    <div className={`${onDark ? 'bg-[#141414]' : 'bg-[#0A0A0A]'} border-t border-white/5 pt-4 space-y-3 shrink-0`}>
+      {discountNum > 0 && (
+        <div className="flex justify-between text-zinc-500 text-sm font-medium">
+          <span>{t(lang, 'subtotal')}</span><span className="line-through">{formatCurrency(subtotal)}</span>
+        </div>
+      )}
+      <div className="flex justify-between items-center">
+        <span className="text-[13px] font-semibold text-zinc-300">{t(lang, 'total')}</span>
+        <span className={`${compact ? 'text-xl' : 'text-2xl'} font-bold text-gold-brand font-display tabular-nums`}>{formatCurrency(total)}</span>
+      </div>
+      <button type="button" onClick={requestCompleteSale} disabled={isDisabled} title={isDisabled && disabledReason ? disabledReason : undefined}
+        className={`tour-complete-sale w-full ${compact ? 'h-12' : 'h-14'} rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${isDisabled ? 'bg-zinc-800 text-zinc-600 opacity-50 cursor-not-allowed' : 'bg-gold-brand text-black shadow-[0_4px_15px_rgba(255,204,0,0.25)]'}`}>
+        {cart.length === 0 ? t(lang, 'completeSale') : `${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
+      </button>
+      {isDisabled && disabledReason && <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>}
+      {!simpleTill && cart.length > 0 && (
+        <button type="button" onClick={saveQuote} className="w-full h-11 rounded-2xl text-xs font-black uppercase tracking-wider border border-white/10 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5">
+          <FileText className="w-4 h-4" /> Save as quote
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 relative min-w-0 overflow-x-hidden lg:h-[calc(100vh-140px)] lg:overflow-hidden pb-2" id="sales-tab-content">
       
       {/* LEFT COLUMN */}
       <div className="lg:col-span-8 flex flex-col h-full min-h-0 lg:overflow-hidden space-y-3">
-          <div className="flex flex-wrap gap-2 items-center">
-            <div className="relative basis-full min-w-0 sm:basis-auto sm:flex-1">
+          <div className="flex flex-nowrap gap-1.5 items-center">
+            <div className="relative flex-1 min-w-0">
             <input
               ref={searchRef}
               type="text"
               placeholder={t(lang, 'searchItems')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 lg:h-14 pl-11 pr-4 rounded-xl !text-base lg:!text-lg transition-all outline-none"
+               className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-11 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
               id="search-inventory-input"
             />
-            <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
           {/* Seller lives in the top bar now — no duplicate chip here. */}
           {/* Compact icon toolbar: Custom + Quick + Scan stay visible (daily
@@ -1340,8 +1766,9 @@ export default function Sales({
             <Barcode className="w-5 h-5" />
           </button>
           <div className="relative shrink-0">
-            <button onClick={() => setShowMoreActions(v => !v)}
+            <button type="button" onClick={() => setShowMoreActions(v => !v)}
               title="More actions" aria-label="More actions" aria-expanded={showMoreActions}
+              aria-haspopup="dialog" aria-controls="sales-more-actions"
               className="relative h-10 w-10 px-0 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 rounded-xl transition-all active:scale-95 cursor-pointer touch-target flex items-center justify-center"
               id="sell-more-actions-btn">
               <Ellipsis className="w-5 h-5" />
@@ -1351,8 +1778,16 @@ export default function Sales({
             </button>
             {showMoreActions && (
               <>
-                <div className="fixed inset-0 z-[60]" onClick={() => setShowMoreActions(false)} aria-hidden="true" />
-                <div className="absolute right-0 top-full mt-2 z-[61] w-56 bg-[#141414] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1">
+                <div className="fixed inset-0 z-[60]" onMouseDown={() => setShowMoreActions(false)} aria-hidden="true" />
+                <div
+                  ref={moreActionsRef}
+                  id="sales-more-actions"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="More sales actions"
+                  tabIndex={-1}
+                  className="absolute right-0 top-full mt-2 z-[61] w-56 bg-[#141414] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1"
+                >
                   {cart.length === 0 && lastSaleItems && lastSaleItems.length > 0 && (
                     <button onClick={() => { setShowMoreActions(false); repeatLastSale(); }}
                       className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
@@ -1423,6 +1858,22 @@ export default function Sales({
           </div>
         )}
 
+        {pendingRecovery && (
+          <div className="flex items-center justify-between gap-2 bg-amber-950/30 border border-amber-700/40 rounded-xl px-4 py-2" role="alert">
+            <p className="text-xs font-black text-amber-200 uppercase tracking-wider truncate">Unfinished sale found — review it</p>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={async () => {
+                if (cart.length > 0 && !(await confirmDialog({ title: 'Replace cart', message: 'Replace the current cart with the recovered sale?', confirmLabel: 'Replace' }))) return;
+                setCart(pendingRecovery.items);
+                setCustomerName(pendingRecovery.customerName || '');
+                setPaymentMethod(pendingRecovery.paymentMethod);
+                triggerToast('Recovered sale loaded — review the total, then complete it', 'info');
+              }} className="h-9 px-3 bg-amber-400 text-black rounded-lg text-[11px] font-black uppercase tracking-wider cursor-pointer">Review</button>
+              <button onClick={discardPendingRecovery} className="h-9 px-2 text-amber-200/70 hover:text-amber-100 text-[11px] font-bold uppercase cursor-pointer">Discard</button>
+            </div>
+          </div>
+        )}
+
         {demoMode && (
           <div className="flex items-center justify-between gap-2 bg-sky-950/30 border border-sky-800/40 rounded-xl px-4 min-h-[3rem] py-2" role="status">
             <p className="text-xs font-black text-sky-300 uppercase tracking-wider leading-snug">
@@ -1465,13 +1916,15 @@ export default function Sales({
         {/* Repeat + reprint moved into the ⋯ toolbar menu above (rarely used,
             so they no longer spend vertical screen on every sell). */}
         {reprintSale && (
-          <ReceiptModal
-            sale={reprintSale}
-            settings={settings || {} as StoreSettings}
-            formatCurrency={formatCurrency}
-            onClose={() => setReprintSale(null)}
-            triggerToast={triggerToast}
-          />
+          <div ref={receiptRef} role="dialog" aria-modal="true" aria-label="Receipt" tabIndex={-1}>
+            <ReceiptModal
+              sale={reprintSale}
+              settings={settings || {} as StoreSettings}
+              formatCurrency={formatCurrency}
+              onClose={() => setReprintSale(null)}
+              triggerToast={triggerToast}
+            />
+          </div>
         )}
 
         {/* Fast sellers strip — rush-hour one-tap selling */}
@@ -1652,7 +2105,7 @@ export default function Sales({
         ) : null}
 
         {/* Eatery home: the restaurant TODAY view (area operating surface) */}
-        {showEateryHome && (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') ? (
+        {showEateryHome && !showProduction && (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') ? (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3 pb-28 scrollbar-thin" id="eatery-home-scroll-container">
             <Suspense fallback={subManagerFallback}>
               <EateryHome products={products} productionRegisters={productionRegisters}
@@ -1760,7 +2213,9 @@ export default function Sales({
               <MorningProduction products={products} productionRegisters={productionRegisters}
                 sales={salesHistory} wastageLogs={wastageLogs}
                 onAddProduction={onAddProduction} onDeleteProduction={onDeleteProduction}
-                formatCurrency={formatCurrency} triggerToast={triggerToast} />
+                formatCurrency={formatCurrency} triggerToast={triggerToast}
+                availableBudget={ingredientBudgetToday}
+                onRequestTopUp={requestIngredientTopUp} />
             </Suspense>
           </div>
         ) : showBookings ? (
@@ -1908,7 +2363,7 @@ export default function Sales({
         <div className="boss-card p-4 flex flex-col h-full min-h-0" id="desktop-cart">
           <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4 shrink-0">
             <div className="flex items-center gap-2 text-gold-brand">
-              <ShoppingCart className="w-5 h-5" />
+            <ShoppingCart className="w-5 h-5" aria-hidden="true" />
               <h3 className="text-xs font-bold uppercase tracking-widest font-display text-white">
                 Sale ({cart.reduce((sum, item) => sum + item.qty, 0)} items)
               </h3>
@@ -1951,7 +2406,7 @@ export default function Sales({
             // the clipped column.
             <div className="mt-4 pt-4 border-t border-white/5 space-y-2 shrink-0 min-h-0 max-h-[42%] overflow-y-auto">
               <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
-              <div className="grid grid-cols-5 gap-1.5">
+      <div className={`grid ${simpleTill ? 'grid-cols-3' : 'grid-cols-5'} gap-1.5`}>
                 {/* Mistake 10 fix: one icon style, one neutral color — active state
                     carries meaning via border/gold, not 4 competing hues. */}
                 {[
@@ -1960,7 +2415,7 @@ export default function Sales({
                   { name: 'Airtel Money', label: 'Airtel', icon: <Smartphone className="w-4 h-4" /> },
                   { name: 'Credit / Book', label: t(lang, 'credit'), icon: <UserCheck className="w-4 h-4" /> },
                   { name: 'Split', label: 'Split', icon: <Split className="w-4 h-4" /> },
-                ].filter(opt => !simple || (opt.name !== 'Credit / Book' && opt.name !== 'Split')).map(opt => (
+                ].filter(opt => !simpleTill || (opt.name !== 'Credit / Book' && opt.name !== 'Split')).map(opt => (
                   <button key={opt.name} onClick={() => { setPaymentMethod(opt.name as any); setCustomCashReceived(''); }}
                     className={`${opt.name === 'Cash' ? 'tour-cash-btn ' : ''}flex flex-col items-center justify-center py-3 px-0.5 rounded-xl border text-xs font-semibold tracking-wide transition-all cursor-pointer min-h-[56px] touch-target ${
                       paymentMethod === opt.name ? 'border-gold-brand bg-gold-brand/15 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500 hover:border-white/10 hover:text-zinc-300'
@@ -2105,7 +2560,7 @@ export default function Sales({
             </div>
             {/* Mistake 15 fix: CTA is refined (not shouting ALL-CAPS black) and
                 carries the total price — user knows what they pay before tapping. */}
-            <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
+            <button onClick={requestCompleteSale} disabled={isDisabled}
               className={`tour-complete-sale w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
                 !isDisabled
                   ? 'bg-gold-brand text-black hover:bg-gold-medium shadow-[0_4px_15px_rgba(255,204,0,0.25)]'
@@ -2129,168 +2584,98 @@ export default function Sales({
       {/* MOBILE CART SHEET */}
       <div className="lg:hidden">
         {cart.length > 0 && !isMobileCartOpen && !isQuickSale && (
-          <button onClick={() => setIsMobileCartOpen(true)} id="mobile-cart-fab"
+          <button type="button" onClick={() => setIsMobileCartOpen(true)} id="mobile-cart-fab"
             key={cart.reduce((sum, item) => sum + item.qty, 0)}
             aria-label={`Open cart, ${cart.reduce((sum, item) => sum + item.qty, 0)} items, total ${formatCurrency(total)}`}
+            aria-haspopup="dialog" aria-controls="mobile-cart-sheet" aria-expanded={isMobileCartOpen}
             className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-[55] bg-gold-brand text-black font-black flex items-center justify-center gap-2 px-5 py-4 rounded-2xl shadow-2xl border-2 border-black/20 active:scale-95 transition-all min-h-[52px] cursor-pointer animate-fab-pop">
             <ShoppingCart className="w-5 h-5" />
             <span className="text-sm uppercase font-display font-black">Cart ({cart.reduce((sum, item) => sum + item.qty, 0)}) • {formatCurrency(total)}</span>
           </button>
         )}
-        {isMobileCartOpen && <div onClick={() => setIsMobileCartOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60]"></div>}
-        <div className={`fixed bottom-0 left-0 right-0 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 z-[70] max-h-[85vh] overflow-y-auto flex flex-col ${
-          isMobileCartOpen ? '' : 'hidden'
-        }`}>
+        {isMobileCartOpen && <div onMouseDown={() => setIsMobileCartOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60]" aria-hidden="true" />}
+        <div
+          ref={mobileCartRef}
+          id="mobile-cart-sheet"
+          role={isMobileCartOpen ? 'dialog' : undefined}
+          aria-modal={isMobileCartOpen ? 'true' : undefined}
+          aria-labelledby={isMobileCartOpen ? 'mobile-cart-title' : undefined}
+          tabIndex={isMobileCartOpen ? -1 : undefined}
+          className={`fixed bottom-0 left-0 right-0 bg-[#141414] border-t border-white/10 rounded-t-3xl p-5 z-[70] max-h-[85vh] overflow-y-auto flex flex-col ${
+            isMobileCartOpen ? '' : 'hidden'
+          }`}
+        >
           <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
-            <h3 className="text-sm font-bold text-zinc-100 tracking-wide font-display flex items-center gap-2">
-              <ShoppingCart className="w-4 h-4 text-gold-brand" /> {t(lang, 'checkout')}
+            <h3 id="mobile-cart-title" className="text-sm font-bold text-zinc-100 tracking-wide font-display flex items-center gap-2">
+              <ShoppingCart className="w-4 h-4 text-gold-brand" aria-hidden="true" /> {t(lang, 'checkout')}
             </h3>
             <div className="flex items-center gap-3">
               {!simpleTill && cart.length > 0 && (
                 <button onClick={parkCurrent} className="text-xs text-zinc-400 font-semibold hover:text-gold-brand cursor-pointer touch-target">Park</button>
               )}
-              <button onClick={() => setIsMobileCartOpen(false)} className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">{t(lang, 'closeBtn')}</button>
+              <button type="button" onClick={() => setIsMobileCartOpen(false)} aria-label={`Close ${t(lang, 'checkout')}`} data-dialog-initial-focus className="text-xs text-zinc-400 font-semibold hover:text-white cursor-pointer touch-target">{t(lang, 'closeBtn')}</button>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 min-h-[150px] max-h-[40vh]">
             {renderParkedRows()}
             {cart.map(item => renderCompactCartRow(item, false))}
           </div>
-          <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5">
-            <p className="text-xs text-zinc-500 font-semibold tracking-[0.08em]">{t(lang, 'payment').toUpperCase()}</p>
-            <div className="grid grid-cols-5 gap-1.5">
-              {(simple ? ['Cash', 'MTN MoMo', 'Airtel Money'] : ['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split']).map(name => (
-                <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
-                    className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-3 rounded-xl text-[10px] border font-semibold tracking-wide transition-all min-h-[48px] cursor-pointer active:scale-95 ${
-                    paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 bg-[#0A0A0A] text-zinc-500'
-                  }`}>
-                  {name === 'Credit / Book' ? t(lang, 'credit') : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
-                </button>
-              ))}
-            </div>
-            {paymentMethod === 'Credit / Book' ? (
-              <>
-              {knownCustomers.length > 0 && (
-                <datalist id="boss-cust-mobile">
-                  {knownCustomers.map(n => <option key={n} value={n} />)}
-                </datalist>
-              )}
-              <input type="text" list="boss-cust-mobile" placeholder={`${t(lang, 'customerName')} *`} value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
-              </>
-            ) : (
-              <input type="text" list="boss-cust-mobile" placeholder="Name? (regulars reward)" value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                className="w-full bg-[#0A0A0A] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
-            )}
-            {showVipOffer && (
-              <button onClick={applyVip}
-                className="w-full min-h-[48px] py-2 rounded-xl bg-purple-950/40 border border-purple-600/50 text-purple-200 text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer">
-                ★ {matchedProfile?.discountPct}% regular discount
-              </button>
-            )}
-            {showLoyalty && (loyaltyDue ? (
-              <button onClick={applyLoyalty}
-                className="w-full min-h-[48px] py-2 rounded-xl bg-gold-brand/15 border border-gold-brand text-gold-brand text-xs font-black uppercase tracking-wider active:scale-[0.98] transition-all cursor-pointer">
-                ★ Visit {loyaltyPast + 1} — {loyaltyP}% reward
-              </button>
-            ) : (
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider px-1">Visit {loyaltyPast + 1} — reward in {loyaltyLeft}</p>
-            ))}
-            {paymentMethod === 'Cash' && (
-              <div className="bg-[#0A0A0A] border border-white/5 p-4 rounded-2xl space-y-3 mt-2">
-                <input type="number" placeholder={t(lang, 'cashReceived')} value={customCashReceived}
-                  onChange={(e) => setCustomCashReceived(e.target.value)}
-                  className="w-full bg-[#141414] border border-white/5 text-gold-brand font-bold text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
-                {featsOn('quickCash') && (
-                <div className="flex flex-wrap gap-2">
-                  {(() => {
-                    if (total <= 0) return null;
-                    const s = new Set<number>();
-                    s.add(total);
-                    [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) s.add(n); });
-                    s.add(Math.ceil(total / 5000) * 5000);
-                    return Array.from(s).filter(a => a >= total).sort((a, b) => a - b).slice(0, 4).map(amt => (
-                      // Big tender buttons: thumbs hit these mid-rush, so they
-                      // fill the row instead of huddling as small chips.
-                      <button key={amt} onClick={() => setCustomCashReceived(String(amt))}
-                        aria-label={amt === total ? 'Exact amount' : `Customer gave ${amt.toLocaleString()}`}
-                        className={`flex-1 min-w-[72px] px-4 min-h-[52px] text-sm font-black rounded-xl border transition-all cursor-pointer active:scale-95 tabular-nums ${
-                          parseFloat(customCashReceived) === amt ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#141414] text-zinc-400 border-white/5'
-                        }`}>
-                        {amt === total ? t(lang, 'exact') : amt.toLocaleString()}
-                      </button>
-                    ));
-                  })()}
-                </div>
-                )}
-                {customCashReceived && (
-                  <div className="flex justify-between items-center">
-                      {parseFloat(customCashReceived) >= total ? (
-                        <><span className="text-xs text-emerald-400 font-semibold">{t(lang, 'change')}</span><span className="text-base font-bold text-emerald-400 tabular-nums">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
-                      ) : (
-                        <><span className="text-xs text-amber-400 font-semibold">{t(lang, 'stillNeed')}</span><span className="text-base font-bold text-amber-400 tabular-nums">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
-                      )}
-                  </div>
-                )}
-              </div>
-            )}
-            {paymentMethod === 'Split' && renderSplitEditor(false)}
+          {renderPaymentEditor(false, 'boss-cust-mobile', true)}
+          <div className="mt-4 sticky bottom-0 bg-[#141414] pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+            {renderCheckoutFooter(true, true)}
           </div>
-          {/* Improvement 2: sticky bottom action — total + CTA stay visible while
-              the sheet scrolls, so the cashier can act the moment they decide. */}
-          <div className="mt-4 pt-4 border-t border-white/5 space-y-3 sticky bottom-0 bg-[#141414] pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-            <div className="flex justify-between items-center">
-              <span className="text-[13px] font-semibold text-zinc-300">{t(lang, 'total')}</span>
-              <span className="text-2xl font-bold text-gold-brand font-display tabular-nums">{formatCurrency(total)}</span>
-            </div>
-            <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-              className={`tour-complete-sale w-full h-14 rounded-2xl text-[15px] font-bold tracking-wide transition-all active:scale-[0.98] cursor-pointer ${
-                !isDisabled
-                  ? 'bg-gold-brand text-black shadow-[0_4px_20px_rgba(255,204,0,0.3)]'
-                  : 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50'
-              }`}>
-              {cart.length === 0 ? t(lang, 'completeSale') : `${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
-            </button>
-            {isDisabled && disabledReason && (
-              <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>
-            )}
-            {!simpleTill && cart.length > 0 && (
-              <button onClick={saveQuote}
-                className="w-full h-11 rounded-2xl text-xs font-black uppercase tracking-wider border border-white/10 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5">
-                <FileText className="w-4 h-4" /> Save as quote
-              </button>
-            )}
-          </div>
+
         </div>
       </div>
 
       {/* Modals (seller editor removed — switching lives in the top bar) */}
-      <CustomChargeModal
-        isOpen={isCustomChargeOpen}
-        onClose={() => setIsCustomChargeOpen(false)}
-        onAdd={handleAddToCart}
-        onSave={onSaveCustomProduct}
-        defaultCategory={selectedCategory !== 'All' ? selectedCategory : undefined}
-        categories={categories}
-        triggerToast={triggerToast}
-      />
+      {isCustomChargeOpen && (
+        <div ref={customChargeRef} role="dialog" aria-modal="true" aria-label="Custom item" tabIndex={-1}>
+          <CustomChargeModal
+            isOpen={isCustomChargeOpen}
+            onClose={() => setIsCustomChargeOpen(false)}
+            onAdd={handleAddToCart}
+            onSave={onSaveCustomProduct}
+            defaultCategory={selectedCategory !== 'All' ? selectedCategory : undefined}
+            categories={categories}
+            triggerToast={triggerToast}
+          />
+        </div>
+      )}
 
-      <BarcodeScanner isOpen={isScannerOpen} onScan={handleBarcodeScanned} onClose={() => setIsScannerOpen(false)} />
+      {isScannerOpen && (
+        <div ref={scannerRef} role="dialog" aria-modal="true" aria-label="Barcode scanner" tabIndex={-1}>
+          <Suspense fallback={(
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black text-sm font-bold text-white" role="status" aria-live="polite">
+              Loading barcode scanner…
+            </div>
+          )}>
+            <BarcodeScanner isOpen={isScannerOpen} onScan={handleBarcodeScanned} onClose={() => setIsScannerOpen(false)} />
+          </Suspense>
+        </div>
+      )}
       <KeyboardShortcuts isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
 
       {/* Quick Sale Modal */}
       {isQuickSale && (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur-sm z-50 flex flex-col">
+        <div
+          ref={quickSaleRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="quick-sale-title"
+          tabIndex={-1}
+          className="fixed inset-0 bg-black/95 backdrop-blur-sm z-50 flex flex-col"
+        >
+          <h2 id="quick-sale-title" className="sr-only">Quick sale</h2>
           <div className="flex items-center gap-3 p-4 border-b border-white/5">
             <div className="relative flex-1">
-              <input type="text" placeholder={t(lang, 'searchAll')} value={quickSearchQuery} autoFocus
+              <input type="text" placeholder={t(lang, 'searchAll')} value={quickSearchQuery} data-dialog-initial-focus
                 onChange={(e) => setQuickSearchQuery(e.target.value)}
+                aria-label={t(lang, 'searchAll')}
                 className="w-full bg-zinc-900 border border-gold-brand/40 text-white h-12 pl-11 pr-4 rounded-xl !text-base outline-none focus:border-gold-brand" />
-              <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-gold-brand" />
+              <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-gold-brand" aria-hidden="true" />
             </div>
-            <button onClick={() => { setIsQuickSale(false); setQuickSearchQuery(''); }}
+            <button type="button" onClick={closeQuickSale} aria-label="Close quick sale"
               className="h-12 px-4 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-wider cursor-pointer">Close</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -2318,6 +2703,7 @@ export default function Sales({
                     cart={cart}
                     formatCurrency={formatCurrency}
                     onAddToCart={handleAddToCart}
+                   onOutOfStock={handleOutOfStock}
                   />
                 ));
               })()}
@@ -2331,7 +2717,7 @@ export default function Sales({
                 return count === 0 && quickSearchQuery ? (
                 <div className="p-6 text-center">
                   <p className="text-xs text-zinc-500 font-bold uppercase">No products match "{quickSearchQuery}"</p>
-                  <button onClick={() => { setIsQuickSale(false); setQuickSearchQuery(''); setIsCustomChargeOpen(true); }}
+                  <button onClick={() => { closeQuickSale(); setIsCustomChargeOpen(true); }}
                     className="mt-3 h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
                     Sell it as a custom item
                   </button>
@@ -2341,103 +2727,36 @@ export default function Sales({
             </div>
           </div>
           {cart.length > 0 && (
-            <div className="border-t border-white/5 p-4 space-y-3 bg-[#0A0A0A]">
+            <div id="quick-sale-footer" role="region" aria-label="Quick sale cart and checkout" className="border-t border-white/5 p-4 space-y-3 bg-[#0A0A0A] shrink-0 max-h-[68vh] overflow-y-auto">
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {cart.map(item => renderCompactCartRow(item, true))}
               </div>
-              <div className="grid grid-cols-5 gap-1.5">
-                {(simple ? ['Cash', 'MTN MoMo', 'Airtel Money'] : ['Cash', 'MTN MoMo', 'Airtel Money', 'Credit / Book', 'Split']).map(name => (
-                  <button key={name} onClick={() => { setPaymentMethod(name as PayMethod); setCustomCashReceived(''); }}
-                    className={`${name === 'Cash' ? 'tour-cash-btn ' : ''}py-2.5 rounded-xl text-[10px] border font-semibold tracking-wide transition-all cursor-pointer active:scale-95 min-h-[44px] ${
-                      paymentMethod === name ? 'border-gold-brand bg-gold-brand/10 text-gold-brand' : 'border-white/5 text-zinc-500'
-                    }`}>
-                    {name === 'Credit / Book' ? 'Credit' : name === 'MTN MoMo' ? 'MTN' : name === 'Airtel Money' ? 'Airtel' : name}
-                  </button>
-                ))}
-              </div>
-              {paymentMethod === 'Credit / Book' && (
-                <>
-                {knownCustomers.length > 0 && (
-                  <datalist id="boss-cust-quick">
-                    {knownCustomers.map(n => <option key={n} value={n} />)}
-                  </datalist>
-                )}
-                <input type="text" list="boss-cust-quick" placeholder={t(lang, 'customerNameEx')} value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  aria-label={t(lang, 'customerName')}
-                  className="w-full bg-[#141414] border border-white/5 text-gold-light rounded-xl h-11 px-3 text-sm outline-none focus:border-gold-brand" />
-                </>
-              )}
-              {paymentMethod === 'Cash' && (
-                <div className="bg-[#141414] border border-white/5 p-3 rounded-2xl space-y-2">
-                  <div className="flex justify-between items-center gap-2">
-                    <span className="text-xs text-zinc-400 font-bold uppercase">{t(lang, 'cashReceived')}</span>
-                    <input type="number" min="0" placeholder={t(lang, 'amount')} value={customCashReceived}
-                      onChange={(e) => setCustomCashReceived(e.target.value)}
-                      aria-label={t(lang, 'cashReceived')}
-                      className="w-28 bg-[#0A0A0A] border border-white/5 text-gold-brand font-black text-right rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-gold-brand h-11 tabular-nums" />
-                  </div>
-                  {featsOn('quickCash') && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {(() => {
-                        if (total <= 0) return null;
-                        const s = new Set<number>();
-                        s.add(total);
-                        [5000, 10000, 20000, 50000, 100000].forEach(n => { if (n > total) s.add(n); });
-                        s.add(Math.ceil(total / 5000) * 5000);
-                        return Array.from(s).filter(a => a >= total).sort((a, b) => a - b).slice(0, 4).map(amt => (
-                          <button key={amt} onClick={() => setCustomCashReceived(String(amt))}
-                            className={`px-3 py-1.5 text-xs font-black rounded-lg border transition-all min-h-[36px] cursor-pointer active:scale-95 ${
-                              parseFloat(customCashReceived) === amt ? 'bg-gold-brand text-black border-gold-brand' : 'bg-[#0A0A0A] text-zinc-400 border-white/5'
-                            }`}>
-                            {amt === total ? t(lang, 'exact') : amt.toLocaleString()}
-                          </button>
-                        ));
-                      })()}
-                    </div>
-                  )}
-                  {customCashReceived && (
-                    <div className="pt-1.5 border-t border-white/5 flex justify-between items-center">
-                      {parseFloat(customCashReceived) >= total ? (
-                        <><span className="text-xs text-emerald-400 font-bold uppercase">{t(lang, 'change')}</span><span className="text-sm font-black text-emerald-400 tabular-nums">{formatCurrency(parseFloat(customCashReceived) - total)}</span></>
-                      ) : (
-                        <><span className="text-xs text-amber-500 font-bold uppercase">{t(lang, 'stillNeed')}</span><span className="text-sm font-black text-amber-500 tabular-nums">{formatCurrency(total - parseFloat(customCashReceived))}</span></>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {paymentMethod === 'Split' && renderSplitEditor(true)}
-              <div className="flex justify-between items-center">
-                <span className="text-[13px] font-semibold text-zinc-300">Total</span>
-                <span className="text-xl font-bold text-gold-brand tabular-nums">{formatCurrency(total)}</span>
-              </div>
-              <button onClick={() => setShowConfirmSale(true)} disabled={isDisabled}
-                title={isDisabled && disabledReason ? disabledReason : undefined}
-                className="tour-complete-sale w-full h-12 bg-gold-brand text-black font-bold tracking-wide text-[15px] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-                {`${t(lang, 'completeSale')} • ${formatCurrency(total)}`}
-              </button>
-              {isDisabled && disabledReason && (
-                <p className="text-[11px] text-rose-400/90 font-medium text-center">{disabledReason}</p>
-              )}
-            </div>
-          )}
+              {renderPaymentEditor(true, 'boss-cust-quick', true)}
+              {renderCheckoutFooter(true, true)}
+
+        </div>
+      )}
         </div>
       )}
 
       {/* Other Modals */}
-      <ServiceQtyModal
-        product={serviceQtyProduct}
-        formatCurrency={formatCurrency}
-        onAdd={handleServiceQtyAdd}
-        onClose={() => setServiceQtyProduct(null)}
-      />
+      {serviceQtyProduct && (
+        <div ref={serviceQtyRef} role="dialog" aria-modal="true" aria-label={`Add ${serviceQtyProduct.name}`} tabIndex={-1}>
+          <ServiceQtyModal
+            product={serviceQtyProduct}
+            formatCurrency={formatCurrency}
+            onAdd={handleServiceQtyAdd}
+            onClose={() => setServiceQtyProduct(null)}
+          />
+        </div>
+      )}
 
       <ConfirmSaleModal
         isOpen={showConfirmSale}
-        onClose={() => setShowConfirmSale(false)}
+        onClose={closeConfirmSale}
         onConfirm={handleCompleteSale}
         isCompleting={isCompleting}
+        saveState={checkoutState}
         cart={cart}
         total={total}
         discountNum={discountNum}
@@ -2452,64 +2771,84 @@ export default function Sales({
         lang={lang}
       />
 
-      <CashTransferModal
-        isOpen={showTransfers}
-        onClose={() => setShowTransfers(false)}
-        formatCurrency={formatCurrency}
-        triggerToast={triggerToast}
-        categories={categories}
-      />
+      {showTransfers && (
+        <div ref={transfersRef} role="dialog" aria-modal="true" aria-label="Cash transfers" tabIndex={-1}>
+          <CashTransferModal
+            isOpen={showTransfers}
+            onClose={() => setShowTransfers(false)}
+            formatCurrency={formatCurrency}
+            triggerToast={triggerToast}
+            categories={categories}
+          />
+        </div>
+      )}
 
       {showCustomers && onSaveCustomer && onDeleteCustomer && (
-        <Customers
-          sales={salesHistory}
-          products={products}
-          customers={customers}
-          onSaveCustomer={onSaveCustomer}
-          onDeleteCustomer={onDeleteCustomer}
-          formatCurrency={formatCurrency}
-          triggerToast={triggerToast}
-          onClose={() => setShowCustomers(false)}
-        />
+        <div ref={customersRef} role="dialog" aria-modal="true" aria-label="Regular customers" tabIndex={-1}>
+          <Customers
+            sales={salesHistory}
+            products={products}
+            customers={customers}
+            onSaveCustomer={onSaveCustomer}
+            onDeleteCustomer={onDeleteCustomer}
+            formatCurrency={formatCurrency}
+            triggerToast={triggerToast}
+            onClose={() => setShowCustomers(false)}
+          />
+        </div>
       )}
-      <QuickExpenseModal
-        isOpen={showQuickExpense}
-        onClose={() => setShowQuickExpense(false)}
-        onAddExpense={onAddExpense || (() => {})}
-        products={products}
-        expenseCategories={expenseCategories}
-        formatCurrency={formatCurrency}
-        triggerToast={triggerToast}
-        onUpdateProduct={onUpdateProduct}
-      />
+      {showQuickExpense && (
+        <div ref={quickExpenseRef} role="dialog" aria-modal="true" aria-label="Log spending" tabIndex={-1}>
+          <QuickExpenseModal
+            isOpen={showQuickExpense}
+            onClose={() => setShowQuickExpense(false)}
+            onAddExpense={onAddExpense || (() => {})}
+            products={products}
+            expenseCategories={expenseCategories}
+            formatCurrency={formatCurrency}
+            triggerToast={triggerToast}
+            onUpdateProduct={onUpdateProduct}
+          />
+        </div>
+      )}
 
-      <ProfitAnalyzerModal
-        isOpen={showFoodCost}
-        onClose={() => setShowFoodCost(false)}
-        products={products}
-        cart={cart}
-        formatCurrency={formatCurrency}
-        orderDiscount={discountNum}
-      />
+      {showFoodCost && (
+        <div ref={foodCostRef} role="dialog" aria-modal="true" aria-label="Profit analyzer" tabIndex={-1}>
+          <ProfitAnalyzerModal
+            isOpen={showFoodCost}
+            onClose={() => setShowFoodCost(false)}
+            products={products}
+            cart={cart}
+            formatCurrency={formatCurrency}
+            orderDiscount={discountNum}
+          />
+        </div>
+      )}
 
       {/* Variant picker */}
       {variantProduct && variantProduct.variants && (
-        <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onClick={() => setVariantProduct(null)}>
-          <div className="bg-[#141414] w-full max-w-md rounded-t-3xl border border-white/10 p-5 animate-slide-up max-h-[70vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onMouseDown={() => setVariantProduct(null)} aria-hidden="true">
+          <div
+            ref={variantRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="variant-picker-title"
+            tabIndex={-1}
+            className="bg-[#141414] w-full max-w-md rounded-t-3xl border border-white/10 p-5 animate-slide-up max-h-[70vh] overflow-y-auto"
+          >
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 rounded-xl bg-amber-950/30 border border-amber-800/40 flex items-center justify-center text-amber-400">
-                  <ChefHat className="w-5 h-5" />
+                  <ChefHat className="w-5 h-5" aria-hidden="true" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white uppercase tracking-tight font-display">{variantProduct.name}</h3>
+                  <h3 id="variant-picker-title" className="text-base font-black text-white uppercase tracking-tight font-display">{variantProduct.name}</h3>
                   <p className="text-[10px] text-zinc-500 font-bold uppercase">{variantProduct.category} • choose a size/unit</p>
                 </div>
               </div>
-              <button onClick={() => setVariantProduct(null)}
+              <button type="button" onClick={() => setVariantProduct(null)} aria-label={`Close ${variantProduct.name} options`} data-dialog-initial-focus
                 className="p-1.5 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer touch-target">
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
             <div className="space-y-2">
@@ -2521,7 +2860,7 @@ export default function Sales({
                 </button>
               ))}
             </div>
-            <button onClick={() => setVariantProduct(null)}
+            <button type="button" onClick={() => setVariantProduct(null)}
               className="mt-4 w-full h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl cursor-pointer touch-target">
               Cancel
             </button>
@@ -2540,7 +2879,7 @@ export default function Sales({
             <div className="flex gap-2">
               <button onClick={() => setShowClearConfirm(false)}
                 className="flex-1 h-11 border border-zinc-800 text-zinc-400 font-bold text-xs rounded-xl uppercase tracking-wider cursor-pointer">Cancel</button>
-              <button onClick={() => { setCart([]); setShowClearConfirm(false); }}
+              <button onClick={() => { setPendingRecovery(null); clearPending(); setCart([]); setShowClearConfirm(false); }}
                 className="flex-1 h-11 bg-rose-600 text-white font-black text-xs rounded-xl uppercase tracking-widest cursor-pointer">Clear</button>
             </div>
           </div>

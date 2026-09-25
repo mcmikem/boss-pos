@@ -96,6 +96,66 @@ export function isPastClose(hours: ShopHours | undefined | null, now: Date = new
   }
 }
 
+// ---- Closing reminder: minutes left until the shop's closing time ----
+// Drives the sell-screen countdown bar. Same overnight-shift handling as
+// isPastClose: 18:00-02:00 shops see the countdown run past midnight.
+// Returns null when the owner hasn't set a lead time (reminders off) or the
+// shop has no closing time, or today is a day off.
+
+export interface CloseReminder {
+  minutesLeft: number; // can exceed 60 for early-morning shops
+  isToday: boolean; // closing time still ahead of us today
+}
+
+export function minutesUntilClose(
+  hours: ShopHours | undefined | null,
+  now: Date = new Date(),
+): number | null {
+  try {
+    if (isShopDayOff(hours, now)) return null;
+    const close = parseHM(hours?.closeTime);
+    if (close === null) return null;
+    const open = parseHM(hours?.openTime);
+    const t = now.getHours() * 60 + now.getMinutes();
+    const day = 24 * 60;
+    if (open === null || close > open) {
+      const left = close - t;
+      return left >= 0 ? left : left + day;
+    }
+    // Overnight shift: past midnight the close is later the same "shift".
+    const left = close - t;
+    return left >= 0 ? left : left + day;
+  } catch {
+    return null;
+  }
+}
+
+export function closeReminderState(
+  hours: ShopHours | undefined | null,
+  leadMinutes: number | undefined | null,
+  now: Date = new Date(),
+): CloseReminder | null {
+  const lead = Number(leadMinutes);
+  if (!Number.isFinite(lead) || lead <= 0) return null;
+  const minutesLeft = minutesUntilClose(hours, now);
+  if (minutesLeft === null) return null;
+  // Only nag inside the reminder window, and never the day after closing.
+  if (minutesLeft > lead) return null;
+  return { minutesLeft, isToday: minutesLeft >= 0 };
+}
+
+export function formatMinutesLeft(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  if (h >= 24) {
+    const days = Math.round(h / 24);
+    return days === 1 ? 'tomorrow' : `${days} days`;
+  }
+  return rem === 0 ? `${h} hr` : `${h} hr ${rem} min`;
+}
+
 // Alert tier for a product expiry: expired (passed), soon (within 30 days),
 // or ok. Services and dateless products are always ok.
 export function expiryStatus(expiryDate: string | undefined | null, todayKey?: string): 'expired' | 'soon' | 'ok' {

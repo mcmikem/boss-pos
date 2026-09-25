@@ -1,4 +1,4 @@
-import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote, CloseSummary } from './types';
 import type { CustomerProfile } from './utils/customers';
 import { stashSyncReview } from './utils/syncReview';
 
@@ -8,7 +8,7 @@ import { stashSyncReview } from './utils/syncReview';
 export function normalizeExpenses(rows: unknown): Expense[] {
   const list = Array.isArray(rows) ? rows : [];
   return list.map((r) => {
-    const e = r as Expense & { items?: unknown; staffname?: unknown };
+    const e = r as Expense & { items?: unknown; staffname?: unknown; client_write_id?: unknown };
     let items: ExpenseItem[] | undefined;
     try {
       const raw = typeof e.items === 'string' && e.items ? JSON.parse(e.items) : e.items;
@@ -22,7 +22,8 @@ export function normalizeExpenses(rows: unknown): Expense[] {
     } catch { /* legacy row without breakdown */ }
     // Server rows are snake_case (staffname); the till reads camelCase.
     const staffName = (e.staffName || (typeof e.staffname === 'string' ? e.staffname : '') || '').trim();
-    const out = { ...(e as Expense), ...(items ? { items } : {}), ...(staffName ? { staffName } : {}) };
+    const clientWriteId = e.clientWriteId || (typeof e.client_write_id === 'string' ? e.client_write_id : '');
+    const out = { ...(e as Expense), ...(items ? { items } : {}), ...(staffName ? { staffName } : {}), ...(clientWriteId ? { clientWriteId } : {}) };
     return out;
   });
 }
@@ -31,6 +32,13 @@ const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
 const CACHE_INDEX_KEY = 'boss_api_cache_keys';
 const TOKEN_KEY = 'boss_pos_token';
+// Staff identity (name + ROLE) lives in its own slot. The till PIN and the
+// staff PIN are different credentials unlocking different things: the till
+// PIN opens the device, the staff PIN says WHO is selling and grants a role.
+// Sharing one slot meant the till unlock silently downgraded a logged-in
+// manager to a plain till token, so every manager check started failing on a
+// device that was obviously signed in as the manager.
+const STAFF_TOKEN_KEY = 'boss_pos_staff_token';
 const OUTBOX_KEY = 'boss_pos_outbox';
 
 // Bounded fetch: dead WiFi / no-internet Android WebViews can hang a plain
@@ -49,17 +57,48 @@ function fetchTimeout(url: string, options: RequestInit, ms: number): Promise<Re
 }
 const WRITE_TIMEOUT_MS = 30000;
 const READ_TIMEOUT_MS = 15000;
+const CONTROL_PATHS = new Set([
+  '/api/export',
+  '/api/export/with-credentials',
+  '/api/restore',
+  '/api/restore/preflight',
+  '/api/backups/run',
+  '/api/backups/data',
+  '/api/backups/latest',
+]);
+const CONTROL_OFFLINE_MESSAGE = 'You are offline — backups and restores need a connection. Nothing was queued.';
+const CONTROL_UNREACHABLE_MESSAGE = 'Could not reach the server — nothing was queued. Check the connection and try again.';
+
+export function isControlPath(path: string): boolean {
+  return CONTROL_PATHS.has(path);
+}
+
+function controlFailure(err: unknown): unknown {
+  if (err instanceof ApiError && err.status > 0) return err;
+  return new ApiError(CONTROL_UNREACHABLE_MESSAGE, 0, 'CONTROL_UNREACHABLE');
+}
 
 // Error that carries the HTTP status + server error code so callers can react
 // to specific failures (e.g. 409 CONFLICT from multi-device product edits).
 export class ApiError extends Error {
   status: number;
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  traceId?: string;
+  constructor(message: string, status: number, code?: string, traceId?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.traceId = traceId;
+  }
+}
+
+function responseTraceId(res: unknown): string | undefined {
+  try {
+    const value = (res as { headers?: { get?: (name: string) => string | null } })?.headers?.get?.('X-Request-Id');
+    return value ? String(value) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -90,6 +129,25 @@ function nextWriteSeq(): number {
   }
 }
 
+export function newClientWriteId(): string {
+  return `${getDeviceId()}:${nextWriteSeq()}`;
+}
+
+function withWriteId<T extends object>(obj: T): T & { clientWriteId: string } {
+  if ((obj as { clientWriteId?: unknown }).clientWriteId) return obj as T & { clientWriteId: string };
+  return { ...obj, clientWriteId: newClientWriteId() };
+}
+
+let unlockGraceUntil = 0;
+
+export function markUnlocked(): void {
+  unlockGraceUntil = Date.now() + 25_000;
+}
+
+export function inUnlockGrace(): boolean {
+  return Date.now() < unlockGraceUntil;
+}
+
 export function getAuthToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY);
@@ -111,8 +169,31 @@ export function setAuthToken(token: string | null): void {
   } catch {}
 }
 
+export function getStaffToken(): string | null {
+  try {
+    return localStorage.getItem(STAFF_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStaffToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(STAFF_TOKEN_KEY, token);
+    else localStorage.removeItem(STAFF_TOKEN_KEY);
+  } catch {}
+}
+
+export function clearAllTokens(): void {
+  setAuthToken(null);
+  setStaffToken(null);
+}
+
+// The staff token wins when present: it is the more specific credential and
+// carries the role the server authorises against. A till token on its own is
+// the legacy single-seller case.
 function getAuthHeader(): string {
-  const t = getAuthToken();
+  const t = getStaffToken() || getAuthToken();
   return t ? `Bearer ${t}` : '';
 }
 
@@ -125,7 +206,28 @@ export function emitAuthRevoked(detail?: { path?: string; reason?: string }): vo
   } catch {}
 }
 
-interface OutboxEntry {
+export type WriteStatus = 'saved' | 'queued';
+
+export interface WriteResult<T> {
+  data: T;
+  status: WriteStatus;
+}
+
+interface WriteMeta {
+  status: WriteStatus;
+}
+
+export type OutboxSyncStatus = 'queued' | 'sending' | 'retrying' | 'blocked_auth' | 'synced' | 'failed';
+
+export interface OutboxEntity {
+  type: string;
+  id?: string;
+  label?: string;
+  branch?: string;
+  tillId?: string;
+}
+
+export interface OutboxEntry {
   id: string;
   path: string;
   method: string;
@@ -133,6 +235,34 @@ interface OutboxEntry {
   queuedAt: number;
   deviceId?: string;
   seq?: number;
+  status: OutboxSyncStatus;
+  syncStatus?: OutboxSyncStatus;
+  statusAt?: number;
+  completedAt?: number;
+  attempts?: number;
+  lastError?: string;
+  nextRetryAt?: number;
+  entity?: OutboxEntity;
+  entityType?: string;
+  entityId?: string;
+  entityLabel?: string;
+  reviewKind?: 'conflict' | 'stock' | 'refused';
+  reviewSummary?: string;
+  reviewAt?: number;
+}
+
+export type OutboxSyncItem = OutboxEntry;
+export type SyncItem = OutboxEntry;
+
+export interface OutboxCounts {
+  total: number;
+  pending: number;
+  queued: number;
+  sending: number;
+  retrying: number;
+  blockedAuth: number;
+  synced: number;
+  failed: number;
 }
 
 export interface OutboxFlushReport {
@@ -148,106 +278,336 @@ export interface OutboxFlushReport {
   remaining: number;
   authFailed: boolean;
   networkFailed: boolean;
+  counts?: OutboxCounts;
+}
+
+const OUTBOX_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_TERMINAL_ITEMS = 500;
+const MAX_AUTO_ATTEMPTS = 5;
+const SENDING_RECOVERY_MS = 2 * 60 * 1000;
+const OUTBOX_STATUSES: OutboxSyncStatus[] = ['queued', 'sending', 'retrying', 'blocked_auth', 'synced', 'failed'];
+
+function entityFor(path: string, method: string, body: string): OutboxEntity {
+  let parsed: Record<string, unknown> = {};
+  try {
+    const value = JSON.parse(body || '{}') as unknown;
+    if (value && typeof value === 'object' && !Array.isArray(value)) parsed = value as Record<string, unknown>;
+  } catch {}
+  const segment = path.split('/').filter(Boolean)[1] || 'change';
+  const type = segment.replace(/s$/, '') || 'change';
+  const id = typeof parsed.id === 'string' && parsed.id
+    ? parsed.id
+    : typeof parsed.clientWriteId === 'string' ? parsed.clientWriteId : undefined;
+  const label = typeof parsed.name === 'string' && parsed.name
+    ? parsed.name
+    : typeof parsed.description === 'string' && parsed.description
+      ? parsed.description
+      : typeof parsed.orderNumber === 'string' && parsed.orderNumber
+        ? parsed.orderNumber
+        : typeof parsed.customerName === 'string' && parsed.customerName
+          ? parsed.customerName
+          : undefined;
+  let branch = typeof parsed.branch === 'string' ? parsed.branch : undefined;
+  if (!branch) {
+    try { branch = localStorage.getItem('boss_pos_branch') || undefined; } catch {}
+  }
+  let tillId: string | undefined;
+  try { tillId = localStorage.getItem('boss_pos_till_id') || localStorage.getItem('boss_pos_device_id') || undefined; } catch {}
+  return { type, id, label, branch, tillId, method } as OutboxEntity & { method: string };
+}
+
+function normalizeOutboxEntry(value: unknown): OutboxEntry | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.id !== 'string' || !row.id || typeof row.path !== 'string' || typeof row.method !== 'string') return null;
+  const body = typeof row.body === 'string' ? row.body : (() => {
+    try { return JSON.stringify(row.body ?? {}); } catch { return '{}'; }
+  })();
+  const statusValue = row.status ?? row.syncStatus;
+  const status = OUTBOX_STATUSES.includes(statusValue as OutboxSyncStatus) ? statusValue as OutboxSyncStatus : 'queued';
+  const entity = row.entity && typeof row.entity === 'object'
+    ? row.entity as OutboxEntity
+    : entityFor(row.path, row.method.toUpperCase(), body);
+  const normalizedEntity = {
+    ...entity,
+    type: typeof entity.type === 'string' && entity.type ? entity.type : entityFor(row.path, row.method.toUpperCase(), body).type,
+    id: typeof entity.id === 'string' ? entity.id : undefined,
+    label: typeof entity.label === 'string' ? entity.label : undefined,
+  };
+  return {
+    id: row.id,
+    path: row.path,
+    method: row.method.toUpperCase(),
+    body,
+    queuedAt: Number.isFinite(Number(row.queuedAt)) ? Number(row.queuedAt) : Date.now(),
+    deviceId: typeof row.deviceId === 'string' ? row.deviceId : undefined,
+    seq: Number.isFinite(Number(row.seq)) ? Number(row.seq) : undefined,
+    status,
+    syncStatus: status,
+    statusAt: Number.isFinite(Number(row.statusAt)) ? Number(row.statusAt) : (Number.isFinite(Number(row.queuedAt)) ? Number(row.queuedAt) : Date.now()),
+    completedAt: Number.isFinite(Number(row.completedAt)) ? Number(row.completedAt) : undefined,
+    attempts: Number.isFinite(Number(row.attempts)) ? Math.max(0, Number(row.attempts)) : 0,
+    lastError: typeof row.lastError === 'string' ? row.lastError : undefined,
+    nextRetryAt: Number.isFinite(Number(row.nextRetryAt)) ? Number(row.nextRetryAt) : undefined,
+    entity: normalizedEntity,
+    entityType: typeof row.entityType === 'string' ? row.entityType : normalizedEntity.type,
+    entityId: typeof row.entityId === 'string' ? row.entityId : normalizedEntity.id,
+    entityLabel: typeof row.entityLabel === 'string' ? row.entityLabel : normalizedEntity.label,
+    reviewKind: row.reviewKind === 'conflict' || row.reviewKind === 'stock' || row.reviewKind === 'refused' ? row.reviewKind : undefined,
+    reviewSummary: typeof row.reviewSummary === 'string' ? row.reviewSummary : undefined,
+    reviewAt: Number.isFinite(Number(row.reviewAt)) ? Number(row.reviewAt) : undefined,
+  };
+}
+
+function normalizeOutboxEntries(value: unknown): OutboxEntry[] {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { return []; }
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const mirror = parsed as { version?: unknown; entries?: unknown };
+    if (mirror.version === 2 && Array.isArray(mirror.entries)) parsed = mirror.entries;
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(normalizeOutboxEntry).filter((entry): entry is OutboxEntry => !!entry);
 }
 
 function getOutbox(): OutboxEntry[] {
-  try {
-    return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
-  } catch {
-    return [];
-  }
+  try { return normalizeOutboxEntries(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch { return []; }
 }
 
-function saveOutbox(entries: OutboxEntry[]): void {
+let localOutboxRevision = 0;
+
+function writeLocalOutbox(entries: OutboxEntry[]): void {
   try {
-    localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries));
+    const raw = localStorage.getItem(OUTBOX_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { version?: unknown; revision?: unknown };
+        if (parsed.version === 2 && Number.isFinite(Number(parsed.revision))) localOutboxRevision = Math.max(localOutboxRevision, Number(parsed.revision));
+      } catch {}
+    }
+    const revision = Math.max(Date.now(), localOutboxRevision + 1);
+    localStorage.setItem(OUTBOX_KEY, JSON.stringify({ version: 2, revision, entries }));
+    localOutboxRevision = revision;
     try { window.dispatchEvent(new Event('boss-pos-outbox-updated')); } catch {}
   } catch {}
-  // Mirror to IndexedDB async (bypasses 5MB quota) — fire-and-forget
-  import('./utils/outboxIdb').then(m => m.idbOutboxSet(JSON.stringify(entries)).catch(()=>{})).catch(()=>{});
 }
 
-function enqueue(path: string, method: string, body: string): void {
-  const entry: OutboxEntry = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+async function persistOutbox(entries: OutboxEntry[]): Promise<void> {
+  const normalized = entries.map(normalizeOutboxEntry).filter((entry): entry is OutboxEntry => !!entry);
+  await updateOutbox(current => mergeOutboxSnapshot(normalized, current));
+}
+
+async function updateOutbox(mutator: (entries: OutboxEntry[]) => OutboxEntry[]): Promise<OutboxEntry[]> {
+  let m: typeof import('./utils/outboxIdb');
+  try {
+    m = await import('./utils/outboxIdb');
+  } catch {
+    const next = mutator(getOutbox());
+    writeLocalOutbox(next);
+    return next;
+  }
+  const next = await m.idbOutboxUpdate(entries => mutator(normalizeOutboxEntries(entries)));
+  return normalizeOutboxEntries(next);
+}
+
+async function enqueue(path: string, method: string, body: string): Promise<void> {
+  const now = Date.now();
+  const entry = normalizeOutboxEntry({
+    id: `${now}-${Math.random().toString(36).slice(2)}`,
     path,
     method,
     body,
-    queuedAt: Date.now(),
+    queuedAt: now,
     deviceId: getDeviceId(),
     seq: nextWriteSeq(),
+    status: 'queued',
+    statusAt: now,
+    attempts: 0,
+  });
+  if (!entry) return;
+  await updateOutbox(entries => [...entries, entry]);
+}
+
+function isActionable(entry: OutboxEntry): boolean {
+  return entry.status === 'queued' || entry.status === 'retrying' || entry.status === 'blocked_auth';
+}
+
+function countsFor(entries: OutboxEntry[]): OutboxCounts {
+  const counts: OutboxCounts = {
+    total: entries.length,
+    pending: 0,
+    queued: 0,
+    sending: 0,
+    retrying: 0,
+    blockedAuth: 0,
+    synced: 0,
+    failed: 0,
   };
-  const list = getOutbox();
-  list.push(entry);
-  saveOutbox(list);
+  for (const entry of entries) {
+    if (entry.status === 'queued') counts.queued++;
+    if (entry.status === 'sending') counts.sending++;
+    if (entry.status === 'retrying') counts.retrying++;
+    if (entry.status === 'blocked_auth') counts.blockedAuth++;
+    if (entry.status === 'synced') counts.synced++;
+    if (entry.status === 'failed') counts.failed++;
+  }
+  counts.pending = counts.queued + counts.sending + counts.retrying + counts.blockedAuth;
+  return counts;
 }
 
 export function outboxCount(): number {
-  return getOutbox().length;
+  return countsFor(getOutbox()).pending;
 }
 
 export async function outboxCountAsync(): Promise<number> {
-  try {
-    const m = await import('./utils/outboxIdb');
-    return await m.idbOutboxCount();
-  } catch { return outboxCount(); }
+  return countsFor(await peekOutboxAsync()).pending;
 }
 
-// Replay queued offline writes. Returns how many were flushed. On auth errors
-// the entry is kept so offline work is never silently lost — an expired token
-// is re-issued on the next online unlock, and the flush will then succeed.
-// 404 responses count as flushed: the server DELETEs are idempotent now, and a
-// 404 from an already-drained replay must not wedge the outbox forever.
-// A 409 CONFLICT (a product edit that lost the race to a newer edit on another
-// device) is also dropped — retrying forever can't change the outcome, and the
-// newest version already won on the server. Dropped entries are stashed in the
-// sync review queue (utils/syncReview) so nothing vanishes silently; the
-// caller is told so it can warn.
+export function outboxCounts(): OutboxCounts {
+  return countsFor(getOutbox());
+}
+
+export async function outboxCountsAsync(): Promise<OutboxCounts> {
+  return countsFor(await peekOutboxAsync());
+}
+
+export const getOutboxCounts = outboxCounts;
+export const getOutboxCountsAsync = outboxCountsAsync;
+
 export function peekOutbox(): OutboxEntry[] {
   return getOutbox();
 }
 
 export async function peekOutboxAsync(): Promise<OutboxEntry[]> {
+  let entries: OutboxEntry[];
   try {
     const m = await import('./utils/outboxIdb');
-    const j = await m.idbOutboxGet();
-    return JSON.parse(j);
-  } catch { return getOutbox(); }
+    entries = normalizeOutboxEntries(await m.idbOutboxGet());
+  } catch {
+    entries = getOutbox();
+  }
+  const cutoff = Date.now() - SENDING_RECOVERY_MS;
+  if (!entries.some(entry => entry.status === 'sending' && (entry.statusAt || entry.queuedAt) <= cutoff)) return entries;
+  return updateOutbox(current => current.map(entry => (
+    entry.status === 'sending' && (entry.statusAt || entry.queuedAt) <= cutoff
+      ? mark(entry, 'retrying', entry.lastError || 'Sync interrupted')
+      : entry
+  )));
 }
+
+export async function listOutboxItemsAsync(): Promise<OutboxEntry[]> {
+  return peekOutboxAsync();
+}
+
+export const listSyncItemsAsync = listOutboxItemsAsync;
+export const listOutboxItems = peekOutbox;
+export const listSyncItems = peekOutbox;
 
 export function clearOutbox(): void {
-  saveOutbox([]);
-  import('./utils/outboxIdb').then(m => m.idbOutboxSet('[]').catch(()=>{})).catch(()=>{});
+  writeLocalOutbox([]);
+  void import('./utils/outboxIdb').then(m => m.idbOutboxSet('[]')).catch(() => {});
 }
 
-// Drop a single queued change (per-row control in Settings → queue). The
-// rest of the queue is untouched and still replays on the next sync.
+export async function clearOutboxAsync(): Promise<void> {
+  await updateOutbox(() => []);
+}
+
 export function dropOutboxEntry(id: string): void {
-  saveOutbox(getOutbox().filter(e => e.id !== id));
+  const next = getOutbox().filter(entry => entry.id !== id);
+  writeLocalOutbox(next);
+  void updateOutbox(entries => entries.filter(entry => entry.id !== id)).catch(() => {});
+}
+
+export async function dropOutboxEntryAsync(id: string): Promise<void> {
+  await updateOutbox(entries => entries.filter(entry => entry.id !== id));
+}
+
+export const dismissOutboxEntry = dropOutboxEntry;
+export const dismissOutboxEntryAsync = dropOutboxEntryAsync;
+export const dismissSyncItem = dropOutboxEntry;
+export const dismissSyncItemAsync = dropOutboxEntryAsync;
+
+export async function retryOutboxEntry(id: string): Promise<OutboxEntry | null> {
+  let found: OutboxEntry | null = null;
+  await updateOutbox(entries => entries.map(entry => {
+    if (entry.id !== id) return entry;
+    found = {
+      ...entry,
+      status: 'queued',
+      syncStatus: 'queued',
+      statusAt: Date.now(),
+      attempts: 0,
+      lastError: undefined,
+      nextRetryAt: undefined,
+      reviewKind: undefined,
+      reviewSummary: undefined,
+      reviewAt: undefined,
+    };
+    return found;
+  }));
+  return found;
+}
+
+export const retryOutboxEntryAsync = retryOutboxEntry;
+export const retrySyncItem = retryOutboxEntry;
+export const retrySyncItemAsync = retryOutboxEntry;
+
+function trimOutbox(entries: OutboxEntry[]): OutboxEntry[] {
+  const cutoff = Date.now() - OUTBOX_RETENTION_MS;
+  const terminal = entries.filter(entry => entry.status === 'synced' || entry.status === 'failed');
+  const terminalToKeep = terminal.filter(entry => (entry.completedAt || entry.statusAt || entry.queuedAt) >= cutoff).slice(-MAX_TERMINAL_ITEMS);
+  const terminalIds = new Set(terminalToKeep.map(entry => entry.id));
+  return entries
+    .filter(entry => !terminal.some(item => item.id === entry.id) || terminalIds.has(entry.id))
+    .sort((a, b) => a.queuedAt - b.queuedAt);
+}
+
+function mark(entry: OutboxEntry, status: OutboxSyncStatus, error?: string): OutboxEntry {
+  const now = Date.now();
+  return {
+    ...entry,
+    status,
+    syncStatus: status,
+    statusAt: now,
+    lastError: error,
+    nextRetryAt: status === 'retrying' ? now + 5000 : undefined,
+    completedAt: status === 'synced' || status === 'failed' ? now : undefined,
+  };
+}
+
+function addReview(entry: OutboxEntry, kind: 'conflict' | 'stock' | 'refused', summary: string): OutboxEntry {
+  const now = Date.now();
+  return { ...entry, reviewKind: kind, reviewSummary: summary, reviewAt: now };
+}
+
+function mergeOutboxSnapshot(snapshot: OutboxEntry[], current: OutboxEntry[]): OutboxEntry[] {
+  const byId = new Map(current.map(entry => [entry.id, entry]));
+  for (const entry of snapshot) {
+    if (byId.has(entry.id)) byId.set(entry.id, entry);
+  }
+  return trimOutbox([...byId.values()]);
 }
 
 export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
-  let list: OutboxEntry[] = getOutbox();
-  try {
-    const m = await import('./utils/outboxIdb');
-    const j = await m.idbOutboxGet();
-    const idbList = JSON.parse(j) as OutboxEntry[];
-    if (idbList.length > list.length) list = idbList;
-    else if (idbList.length === list.length && idbList.length > 0) list = idbList;
-  } catch {}
-  const salesQueued = list.filter(entry => entry.path === '/api/sales' && entry.method === 'POST').length;
-  if (list.length === 0) {
+  const list = await peekOutboxAsync();
+  const active = list.filter(isActionable);
+  const salesQueued = active.filter(entry => entry.path === '/api/sales' && entry.method === 'POST').length;
+  if (active.length === 0) {
     return {
       attempted: 0, flushed: 0, sent: 0, salesQueued: 0, salesSent: 0,
-      salesDropped: 0, conflicts: 0, dropped: 0, reviewAdded: 0, remaining: 0,
-      authFailed: false, networkFailed: false,
+      salesDropped: 0, conflicts: 0, dropped: 0, reviewAdded: 0, remaining: countsFor(list).pending,
+      authFailed: false, networkFailed: false, counts: countsFor(list),
     };
   }
   if (!getAuthToken()) {
+    const blocked = list.map(entry => isActionable(entry) ? mark(entry, 'blocked_auth', 'Authentication required') : entry);
+    await persistOutbox(trimOutbox(blocked));
     return {
-      attempted: list.length, flushed: 0, sent: 0, salesQueued, salesSent: 0,
+      attempted: active.length, flushed: 0, sent: 0, salesQueued, salesSent: 0,
       salesDropped: 0, conflicts: 0, dropped: 0, reviewAdded: 0,
-      remaining: list.length, authFailed: false, networkFailed: false,
+      remaining: countsFor(blocked).pending, authFailed: true, networkFailed: false, counts: countsFor(blocked),
     };
   }
   let sent = 0;
@@ -260,9 +620,16 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
   let sawAuthFailure = false;
   let sawNetworkFailure = false;
   let firstAuthPath = '';
-  const remaining: OutboxEntry[] = [];
-  for (let idx = 0; idx < list.length; idx++) {
-    const entry = list[idx];
+  const updated = new Map<string, OutboxEntry>();
+  const save = async (entry: OutboxEntry) => {
+    updated.set(entry.id, entry);
+    await persistOutbox(mergeOutboxSnapshot([...updated.values()], await peekOutboxAsync()));
+  };
+
+  for (let idx = 0; idx < active.length; idx++) {
+    const source = active[idx];
+    const entry = mark({ ...source, attempts: (source.attempts || 0) + 1 }, 'sending');
+    await save(entry);
     const isSale = entry.path === '/api/sales' && entry.method === 'POST';
     try {
       const res = await fetchTimeout(`${BASE}${entry.path}`, {
@@ -274,81 +641,91 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
         sent++;
         if (isSale) salesSent++;
         flushed++;
+        await save(mark(entry, 'synced'));
         continue;
       }
       if (res.status === 404) {
-        if (isSale) {
-          dropped++;
-          salesDropped++;
-          reviewAdded++;
-          try { stashSyncReview('refused', entry); } catch {}
-        } else if (entry.method === 'DELETE') {
-          // Deleting something already gone is idempotent success.
+        if (entry.method === 'DELETE') {
           sent++;
+          flushed++;
+          await save(mark(entry, 'synced'));
         } else {
           dropped++;
+          if (isSale) salesDropped++;
+          flushed++;
+          const review = stashSyncReview('refused', entry);
           reviewAdded++;
-          try { stashSyncReview('refused', entry); } catch {}
+          await save(addReview(mark(entry, 'failed', 'HTTP 404'), 'refused', review.summary));
         }
-        flushed++;
         continue;
       }
       if (res.status === 401) {
         sawAuthFailure = true;
         if (!firstAuthPath) firstAuthPath = entry.path;
-        remaining.push(entry);
+        await save(mark(entry, 'blocked_auth', 'Authentication required'));
         continue;
       }
       if (res.status === 409) {
-        const body = await res.json().catch(() => ({}));
-        if (body.code === 'CONFLICT') {
-          conflicts++;
-          reviewAdded++;
-          if (isSale) salesDropped++;
-          flushed++;
-          try { stashSyncReview('conflict', entry); } catch {}
-          continue;
-        }
-        if (body.code === 'INSUFFICIENT_STOCK') {
-          dropped++;
-          reviewAdded++;
-          if (isSale) salesDropped++;
-          flushed++;
-          try { stashSyncReview('stock', entry); } catch {}
-          continue;
-        }
-        // Unknown 409: the server refused for a reason we don't understand —
-        // it will never succeed on retry, so review it instead of looping.
-        dropped++;
-        reviewAdded++;
+        const body = await res.json().catch(() => ({})) as { code?: string };
+        if (body.code === 'CONFLICT') conflicts++;
         if (isSale) salesDropped++;
+        dropped++;
         flushed++;
-        try { stashSyncReview('conflict', entry); } catch {}
+        const kind = body.code === 'INSUFFICIENT_STOCK' ? 'stock' : 'conflict';
+        const review = stashSyncReview(kind, entry);
+        reviewAdded++;
+        await save(addReview(mark(entry, 'failed', body.code || 'Conflict'), kind, review.summary));
         continue;
       }
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         await res.json().catch(() => ({}));
         dropped++;
-        reviewAdded++;
         if (isSale) salesDropped++;
         flushed++;
-        try { stashSyncReview('refused', entry); } catch {}
+        const review = stashSyncReview('refused', entry);
+        reviewAdded++;
+        await save(addReview(mark(entry, 'failed', `HTTP ${res.status}`), 'refused', review.summary));
         continue;
       }
-      remaining.push(entry);
+      const retryError = `HTTP ${res.status}`;
+      if ((entry.attempts || 0) >= MAX_AUTO_ATTEMPTS) {
+        dropped++;
+        if (isSale) salesDropped++;
+        const review = stashSyncReview('refused', entry);
+        reviewAdded++;
+        await save(addReview(mark(entry, 'failed', retryError), 'refused', review.summary));
+      } else {
+        sawNetworkFailure = true;
+        await save(mark(entry, 'retrying', retryError));
+      }
     } catch (err) {
       const isNetwork = err instanceof TypeError;
-      remaining.push(entry);
+      const message = err instanceof Error ? err.message : 'Network error';
+      if (!isNetwork && (entry.attempts || 0) < MAX_AUTO_ATTEMPTS) {
+        sawNetworkFailure = true;
+        await save(mark(entry, 'retrying', message));
+      } else if ((entry.attempts || 0) >= MAX_AUTO_ATTEMPTS) {
+        const review = stashSyncReview('refused', entry);
+        reviewAdded++;
+        if (isSale) salesDropped++;
+        dropped++;
+        await save(addReview(mark(entry, 'failed', message), 'refused', review.summary));
+      } else {
+        await save(mark(entry, 'retrying', message));
+      }
       if (isNetwork) {
         sawNetworkFailure = true;
-        for (let j = idx + 1; j < list.length; j++) remaining.push(list[j]);
         break;
       }
     }
   }
-  saveOutbox(remaining);
+
+  const current = await peekOutboxAsync();
+  await persistOutbox(mergeOutboxSnapshot([...updated.values()], current));
+  const finalList = await peekOutboxAsync();
+  const finalCounts = countsFor(finalList);
   if (sawAuthFailure) {
-    setAuthToken(null);
+    clearAllTokens();
     emitAuthRevoked(firstAuthPath ? { path: firstAuthPath } : undefined);
   }
   if (sawNetworkFailure) {
@@ -356,17 +733,13 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
   }
   if (flushed > 0) clearRelatedCaches('/api');
   if (conflicts > 0) {
-    try {
-      window.dispatchEvent(new CustomEvent('boss-pos-sync-conflict', { detail: conflicts }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent('boss-pos-sync-conflict', { detail: conflicts })); } catch {}
   }
   if (dropped > 0) {
-    try {
-      window.dispatchEvent(new CustomEvent('boss-pos-sync-dropped', { detail: dropped }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent('boss-pos-sync-dropped', { detail: dropped })); } catch {}
   }
   return {
-    attempted: list.length,
+    attempted: active.length,
     flushed,
     sent,
     salesQueued,
@@ -375,15 +748,14 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
     conflicts,
     dropped,
     reviewAdded,
-    remaining: remaining.length,
+    remaining: finalCounts.pending,
     authFailed: sawAuthFailure,
     networkFailed: sawNetworkFailure,
+    counts: finalCounts,
   };
 }
 
 export async function flushOutbox(): Promise<number> {
-  // Back-compat: number of entries the server actually ACCEPTED (sent), not
-  // merely processed — dropped/conflicted rows must never read as "synced".
   return (await flushOutboxDetailed()).sent;
 }
 
@@ -474,21 +846,31 @@ export function uploadImage(file: File | Blob): Promise<string> {
     }, 45000);
     xhr.onload = () => {
       window.clearTimeout(timer);
+      const traceIdHeader = (() => {
+        try {
+          const header = xhr.getResponseHeader('X-Request-Id');
+          return header || undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      let traceId = traceIdHeader;
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
           if (data.url) return resolve(data.url as string);
         } catch {}
-        return reject(new ApiError('Unexpected upload response', xhr.status));
+        return reject(new ApiError('Unexpected upload response', xhr.status, undefined, traceId));
       }
       let message = `Upload failed (${xhr.status})`;
       let code: string | undefined;
       try {
-        const data = JSON.parse(xhr.responseText) as { error?: string; code?: string };
+        const data = JSON.parse(xhr.responseText) as { error?: string; code?: string; traceId?: string };
         if (data.error) message = data.error;
         code = data.code;
+        if (data.traceId) traceId = data.traceId;
       } catch {}
-      reject(new ApiError(message, xhr.status, code));
+      reject(new ApiError(message, xhr.status, code, traceId));
     };
     xhr.onerror = () => {
       window.clearTimeout(timer);
@@ -510,7 +892,7 @@ export async function revokeAllSessions(): Promise<boolean> {
     headers: { Authorization: getAuthHeader() },
   }, WRITE_TIMEOUT_MS);
   if (!res.ok) throw new Error('Failed to log out all devices');
-  setAuthToken(null);
+  clearAllTokens();
   return true;
 }
 
@@ -608,10 +990,29 @@ function clearRelatedCaches(path: string): void {
   saveCacheKeys(keys);
 }
 
-async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number }): Promise<T> {
-  const isRead = !options || !options.method || options.method === 'GET';
+function clearAllCaches(): void {
+  const keys = getCacheKeys();
+  for (const key of keys) localStorage.removeItem(key);
+  try { localStorage.removeItem(cacheKey('/api/boot')); } catch {}
+  saveCacheKeys(new Set());
+}
 
-  if (isRead) {
+// The till re-mints its token in the background right after unlock. Requests
+// that land before it finishes get a 401; wait briefly instead of failing.
+async function waitForTokenMint(): Promise<void> {
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (getAuthToken()) return;
+    if (!inUnlockGrace()) return;
+  }
+}
+
+async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number }, writeMeta?: WriteMeta): Promise<T> {
+  const isRead = !options || !options.method || options.method === 'GET';
+  const isControl = isControlPath(path);
+
+  if (isRead && !isControl) {
     const hit = getCacheMeta<T>(path);
     if (hit) {
       // Expired: serve the stale copy immediately and refresh in the background
@@ -625,17 +1026,25 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
     } else if (!navigator.onLine) {
       throw new Error('Offline and no cached data');
     }
+  } else if (isRead && isControl && !navigator.onLine) {
+    throw new ApiError(CONTROL_OFFLINE_MESSAGE, 0, 'OFFLINE_CONTROL');
   }
 
   // Idempotency + write versioning: every create/update body carries a stable
   // client_write_id derived from (device, seq) so an offline outbox replay can't
   // double-insert and the write order is deterministic per device. The deviceId
   // rides along so the server could cross-device order later.
-  if (!isRead && options?.method && (options.method === 'POST' || options.method === 'PUT')) {
+  if (!isRead && !isControl && options?.method && (options.method === 'POST' || options.method === 'PUT')) {
     let parsed: Record<string, unknown> = {};
     try { parsed = (options.body as string) ? JSON.parse(options.body as string) : {}; } catch {}
     if (!parsed.clientWriteId) parsed.clientWriteId = `${getDeviceId()}:${nextWriteSeq()}`;
     parsed.deviceId = getDeviceId();
+    if (!parsed.branch && (path === '/api/sales' || path === '/api/expenses' || path === '/api/stock-purchases')) {
+      try {
+        const branch = localStorage.getItem('boss_pos_branch');
+        if (branch) parsed.branch = branch;
+      } catch {}
+    }
     options = { ...options, body: JSON.stringify(parsed) };
   }
 
@@ -644,9 +1053,14 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
   // Also invalidate the list/boot caches so an optimistic delete/update can't
   // be resurrected by stale cache on the next boot (deleted sale reappears).
   if (!isRead && !navigator.onLine) {
+    if (isControl) throw new ApiError(CONTROL_OFFLINE_MESSAGE, 0, 'OFFLINE_CONTROL');
     const body = (options && (options.body as string)) || '';
-    enqueue(path, options?.method || 'POST', body);
+    if (writeMeta) writeMeta.status = 'queued';
+    await enqueue(path, options?.method || 'POST', body);
     try { clearRelatedCaches(path); } catch {}
+    // The optimistic echo is the ONLY record of this write until the outbox
+    // flushes. Returning it plainly means a caller that reads the response can
+    // tell the customer "saved" vs "will sync", instead of both looking saved.
     try {
       return JSON.parse(body) as T;
     } catch {
@@ -660,6 +1074,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
   try {
     const maxAttempts = isRead ? 1 : 3;
     let lastErr: unknown;
+    let revokeRetried = false;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetchTimeout(`${BASE}${path}`, {
@@ -669,18 +1084,36 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
       if (!res.ok) {
         let message = `API error: ${res.status}`;
         let code: string | undefined;
+        let traceId = responseTraceId(res);
         try {
           const body = await res.json().catch(() => ({}));
           if (body.error) message = body.error;
           if (body.code) code = body.code;
+          if (body.traceId) traceId = String(body.traceId);
         } catch {}
         if (res.status === 401 && path.startsWith('/api/') && getAuthToken()) {
-          // Revoked/expired token: drop it and re-lock the till (outbox is kept —
-          // it replays after the next online unlock mints a fresh token). Only
-          // fires when a token was actually present — a wrong PIN on the lock
-          // screen is also a 401 and must NOT be treated as a global revoke.
-          setAuthToken(null);
-          emitAuthRevoked({ path });
+          if (inUnlockGrace() && !revokeRetried) {
+            // Freshly unlocked, slow network: the background re-mint may not
+            // have landed. Wait for it once, then decide.
+            revokeRetried = true;
+            try { await waitForTokenMint(); } catch {}
+          }
+          if (getStaffToken() && getAuthToken()) {
+            // The staff credential is the likelier stale one (it is the
+            // specific token the server may have revoked). Drop just it and
+            // fall back to the till token rather than re-locking the device.
+            setStaffToken(null);
+          } else if (!getAuthToken()) {
+            clearAllTokens();
+            emitAuthRevoked({ path });
+          } else {
+            // A valid token is already in place — this 401 was transient
+            // (a request that raced the mint). Don't punish the cashier.
+            revokeRetried = false;
+          }
+        }
+        if (res.status === 403 && code === 'MANAGER_REQUIRED') {
+          try { window.dispatchEvent(new CustomEvent('boss-pos-manager-required', { detail: { path } })); } catch {}
         }
         const transientStatus =
           res.status === 502 || res.status === 503 || res.status === 504 ||
@@ -689,19 +1122,20 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
           await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
           continue;
         }
-        throw new ApiError(message, res.status, code);
+        throw new ApiError(message, res.status, code, traceId);
       }
       const data = await res.json();
 
       if (isRead) {
-        if (!options || !options.fresh || options.store) {
+        if (!isControl && (!options || !options.fresh || options.store)) {
           const ttl = typeof options?.store === 'number' ? options.store : undefined;
           setCache(path, data, ttl);
         }
       }
 
       if (!isRead) {
-        clearRelatedCaches(path);
+        if (path === '/api/restore') clearAllCaches();
+        else clearRelatedCaches(path);
       }
 
       return data;
@@ -722,6 +1156,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
   }
   throw lastErr;
   } catch (err) {
+    if (isControl) throw controlFailure(err);
     if (isRead) {
       // Any network/server failure (flaky 3G, dropped WiFi, expired token)
       // falls back to last-known data instead of erroring out.
@@ -741,7 +1176,8 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
         err.status === 504 ||
         (err.status === 500 && /temporarily unavailable|Database temporarily/i.test(err.message)));
     if (!navigator.onLine || err instanceof TypeError || isTransientApiError) {
-      enqueue(path, options?.method || 'POST', body);
+      if (writeMeta) writeMeta.status = 'queued';
+      await enqueue(path, options?.method || 'POST', body);
       try { clearRelatedCaches(path); } catch {}
       try {
         return JSON.parse(body) as T;
@@ -753,11 +1189,62 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
   }
 }
 
+export async function apiWrite<T>(path: string, options: RequestInit): Promise<WriteResult<T>> {
+  const meta: WriteMeta = { status: 'saved' };
+  const data = await api<T>(path, options, meta);
+  return { data, status: meta.status };
+}
+
+export interface BulkProductUpdate {
+  id: string;
+  stockQty: number;
+  expectedUpdatedAt?: string;
+}
+
+export interface BulkProductUpdateResult {
+  id: string;
+  status: 'saved' | 'conflict' | 'missing' | 'failed';
+  stockQty?: number;
+  updatedAt?: string;
+  error?: string;
+  product?: Product;
+}
+
+export interface BulkProductUpdateResponse {
+  results: BulkProductUpdateResult[];
+  saved: number;
+  conflicts: number;
+  failed: number;
+  queued?: boolean;
+  pending?: number;
+}
+
+export interface ProductListParams {
+  limit?: number;
+  offset?: number;
+}
+
 export const productApi = {
-  list: () => api<Product[]>('/api/products'),
+  list: (params: ProductListParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params.offset !== undefined) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return api<Product[]>(`/api/products${q ? `?${q}` : ''}`);
+  },
   create: (p: Product) => api<Product>('/api/products', { method: 'POST', body: JSON.stringify(p) }),
   update: (p: Product) => api<Product>(`/api/products/${p.id}`, { method: 'PUT', body: JSON.stringify(p) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/products/${id}`, { method: 'DELETE' }),
+  bulkUpdateStocktake: async (updates: BulkProductUpdate[]): Promise<BulkProductUpdateResponse> => {
+    const result = await api<BulkProductUpdateResponse | { updates: BulkProductUpdate[] }>('/api/products/bulk', {
+      method: 'PUT',
+      body: JSON.stringify({ updates }),
+    });
+    if ('updates' in result) {
+      return { results: [], saved: 0, conflicts: 0, failed: 0, queued: true, pending: updates.length };
+    }
+    return result;
+  },
 };
 
 export const supplierApi = {
@@ -769,8 +1256,15 @@ export const supplierApi = {
 
 export const supplierPriceApi = {
   list: () => api<SupplierPrice[]>('/api/supplier-prices'),
-  upsert: (supplierId: string, productId: string, price: number) =>
-    api<SupplierPrice>('/api/supplier-prices', { method: 'PUT', body: JSON.stringify({ supplierId, productId, price }) }),
+  upsert: (
+    supplierId: string,
+    productId: string,
+    price: number,
+    meta: { purchaseQty?: number; purchaseUnit?: string; normalizedUnit?: string } = {},
+  ) => api<SupplierPrice>('/api/supplier-prices', {
+    method: 'PUT',
+    body: JSON.stringify({ supplierId, productId, price, ...meta }),
+  }),
   remove: (id: string) => api<{ success: boolean }>(`/api/supplier-prices/${id}`, { method: 'DELETE' }),
 };
 
@@ -781,96 +1275,244 @@ export const staffApi = {
   update: (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) =>
     api<StaffMember>(`/api/staff/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
   verify: (id: string, pin: string) =>
-    api<StaffMember & { ok: boolean }>('/api/staff/verify', { method: 'POST', body: JSON.stringify({ id, pin }) }),
+    api<StaffMember & { ok: boolean; token?: string }>('/api/staff/verify', { method: 'POST', body: JSON.stringify({ id, pin }) }),
 };
 
+export interface SaleListParams {
+  from?: string;
+  to?: string;
+  branch?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export type SaleCreateInput = Sale & { override?: boolean; allowOverCap?: boolean };
+
+const createSaleWithStatus = (s: SaleCreateInput) => apiWrite<Sale>('/api/sales', { method: 'POST', body: JSON.stringify(s) });
+
 export const saleApi = {
-  list: () => api<Sale[]>('/api/sales'),
-  create: (s: Sale) => api<Sale>('/api/sales', { method: 'POST', body: JSON.stringify(s) }),
+  list: (params: SaleListParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.from) qs.set('from', params.from);
+    if (params.to) qs.set('to', params.to);
+    if (params.branch) qs.set('branch', params.branch);
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params.offset !== undefined) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return api<Sale[]>(`/api/sales${q ? `?${q}` : ''}`);
+  },
+  createWithStatus: createSaleWithStatus,
+  create: async (s: SaleCreateInput) => (await createSaleWithStatus(s)).data,
   remove: (id: string) => api<{ success: boolean }>(`/api/sales/${id}`, { method: 'DELETE' }),
   refund: (id: string) => api<{ success: boolean }>(`/api/sales/${id}/refund`, { method: 'POST' }),
 };
 
+export interface ExpenseListParams {
+  from?: string;
+  to?: string;
+  branch?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export const expenseApi = {
-  list: () => api<Expense[]>('/api/expenses').then((rows) => normalizeExpenses(rows)),
-  create: (e: Expense) => api<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(e) }).then((row) => normalizeExpenses([row])[0] || e),
+  list: (params: ExpenseListParams = {}) => {
+    const qs = new URLSearchParams();
+    if (params.from) qs.set('from', params.from);
+    if (params.to) qs.set('to', params.to);
+    if (params.branch) qs.set('branch', params.branch);
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params.offset !== undefined) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return api<Expense[]>(`/api/expenses${q ? `?${q}` : ''}`).then((rows) => normalizeExpenses(rows));
+  },
+  create: (e: Expense) => api<Expense>('/api/expenses', { method: 'POST', body: JSON.stringify(withWriteId(e)) }).then((row) => normalizeExpenses([row])[0] || e),
   remove: (id: string) => api<{ success: boolean }>(`/api/expenses/${id}`, { method: 'DELETE' }),
+};
+
+export interface StockPurchaseInput {
+  productId: string;
+  quantity: number;
+  unitCost: number;
+  description?: string;
+  category?: string;
+  source?: string;
+  branch?: string;
+  staffName?: string;
+  id?: string;
+  clientWriteId?: string;
+}
+
+export interface StockPurchaseResult {
+  duplicate?: boolean;
+  product: Pick<Product, 'id' | 'name' | 'stockQty'>;
+  expense: Expense;
+}
+
+export const stockPurchaseApi = {
+  create: (purchase: StockPurchaseInput) => api<StockPurchaseResult>('/api/stock-purchases', {
+    method: 'POST',
+    body: JSON.stringify(withWriteId(purchase)),
+  }),
 };
 
 export const creditPaymentApi = {
   list: () => api<CreditPayment[]>('/api/credit-payments'),
-  create: (p: CreditPayment) => api<CreditPayment>('/api/credit-payments', { method: 'POST', body: JSON.stringify(p) }),
+  create: (p: CreditPayment) => api<CreditPayment>('/api/credit-payments', { method: 'POST', body: JSON.stringify(withWriteId(p)) }),
+};
+
+export interface CreditLimitRow {
+  customerKey: string;
+  customerName: string;
+  limit: number;
+  tillOutstanding: number;
+  bookOutstanding: number;
+  outstanding: number;
+  updatedAt?: string;
+}
+
+export interface CreditLimitOverview {
+  rows: CreditLimitRow[];
+  totalOutstanding: number;
+}
+
+export const creditLimitApi = {
+  overview: () => api<CreditLimitOverview>('/api/credit-limits'),
+  save: (customerName: string, cap: number) => api<{ customerKey: string; customerName: string; cap: number; updatedAt: string }>('/api/credit-limits', {
+    method: 'PUT',
+    body: JSON.stringify({ customerName, cap }),
+  }),
+  remove: (customerKey: string) => api<{ success: boolean }>(`/api/credit-limits/${encodeURIComponent(customerKey)}`, { method: 'DELETE' }),
 };
 
 export const cashTransferApi = {
   list: () => api<CashTransfer[]>('/api/cash-transfers'),
-  create: (t: CashTransfer) => api<CashTransfer>('/api/cash-transfers', { method: 'POST', body: JSON.stringify(t) }),
+  create: (t: CashTransfer) => api<CashTransfer>('/api/cash-transfers', { method: 'POST', body: JSON.stringify(withWriteId(t)) }),
   settle: (id: string) => api<{ success: boolean }>(`/api/cash-transfers/${id}/settle`, { method: 'PUT' }),
 };
 
 export const tailoringOrderApi = {
   list: () => api<TailoringOrder[]>('/api/tailoring-orders'),
-  create: (o: TailoringOrder) => api<TailoringOrder>('/api/tailoring-orders', { method: 'POST', body: JSON.stringify(o) }),
+  create: (o: TailoringOrder) => api<TailoringOrder>('/api/tailoring-orders', { method: 'POST', body: JSON.stringify(withWriteId(o)) }),
   update: (o: TailoringOrder) => api<TailoringOrder>(`/api/tailoring-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/tailoring-orders/${id}`, { method: 'DELETE' }),
 };
 
 export const designOrderApi = {
   list: () => api<DesignOrder[]>('/api/design-orders'),
-  create: (o: DesignOrder) => api<DesignOrder>('/api/design-orders', { method: 'POST', body: JSON.stringify(o) }),
+  create: (o: DesignOrder) => api<DesignOrder>('/api/design-orders', { method: 'POST', body: JSON.stringify(withWriteId(o)) }),
   update: (o: DesignOrder) => api<DesignOrder>(`/api/design-orders/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/design-orders/${id}`, { method: 'DELETE' }),
 };
 
 export const bookingApi = {
   list: () => api<Booking[]>('/api/bookings'),
-  create: (o: Booking) => api<Booking>('/api/bookings', { method: 'POST', body: JSON.stringify(o) }),
+  create: (o: Booking) => api<Booking>('/api/bookings', { method: 'POST', body: JSON.stringify(withWriteId(o)) }),
   update: (o: Booking) => api<Booking>(`/api/bookings/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/bookings/${id}`, { method: 'DELETE' }),
 };
 
 export const repairJobApi = {
   list: () => api<RepairJob[]>('/api/repair-jobs'),
-  create: (o: RepairJob) => api<RepairJob>('/api/repair-jobs', { method: 'POST', body: JSON.stringify(o) }),
+  create: (o: RepairJob) => api<RepairJob>('/api/repair-jobs', { method: 'POST', body: JSON.stringify(withWriteId(o)) }),
   update: (o: RepairJob) => api<RepairJob>(`/api/repair-jobs/${o.id}`, { method: 'PUT', body: JSON.stringify(o) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/repair-jobs/${id}`, { method: 'DELETE' }),
 };
 
 export const quoteApi = {
   list: () => api<Quote[]>('/api/quotes'),
-  create: (o: Quote) => api<Quote>('/api/quotes', { method: 'POST', body: JSON.stringify(o) }),
+  create: (o: Quote) => api<Quote>('/api/quotes', { method: 'POST', body: JSON.stringify(withWriteId(o)) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/quotes/${id}`, { method: 'DELETE' }),
 };
 
 export const customerApi = {
   list: () => api<CustomerProfile[]>('/api/customers'),
-  create: (c: CustomerProfile) => api<CustomerProfile>('/api/customers', { method: 'POST', body: JSON.stringify(c) }),
+  create: (c: CustomerProfile) => api<CustomerProfile>('/api/customers', { method: 'POST', body: JSON.stringify(withWriteId(c)) }),
   update: (c: CustomerProfile) => api<CustomerProfile>(`/api/customers/${c.id}`, { method: 'PUT', body: JSON.stringify(c) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/customers/${id}`, { method: 'DELETE' }),
 };
 
+export type CreditEatInput = CreditEat & { override?: boolean; allowOverCap?: boolean };
+
 export const creditEatApi = {
   list: () => api<CreditEat[]>('/api/credit-eats'),
-  create: (e: CreditEat) => api<CreditEat>('/api/credit-eats', { method: 'POST', body: JSON.stringify(e) }),
+  create: (e: CreditEatInput) => api<CreditEat>('/api/credit-eats', { method: 'POST', body: JSON.stringify(withWriteId(e)) }),
   pay: (id: string, amount: number) => api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify({ amount }) }),
 };
 
 export const productionRegisterApi = {
   list: () => api<ProductionRegister[]>('/api/production-register'),
-  create: (p: ProductionRegister) => api<ProductionRegister>('/api/production-register', { method: 'POST', body: JSON.stringify(p) }),
+  create: (p: ProductionRegister) => api<ProductionRegister>('/api/production-register', { method: 'POST', body: JSON.stringify(withWriteId(p)) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/production-register/${id}`, { method: 'DELETE' }),
 };
 
 export const wastageLogApi = {
   list: () => api<WastageLog[]>('/api/wastage-log'),
-  create: (w: WastageLog) => api<WastageLog>('/api/wastage-log', { method: 'POST', body: JSON.stringify(w) }),
+  create: (w: WastageLog) => api<WastageLog>('/api/wastage-log', { method: 'POST', body: JSON.stringify(withWriteId(w)) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/wastage-log/${id}`, { method: 'DELETE' }),
 };
 
 export const momoTransferApi = {
   list: () => api<MomoTransfer[]>('/api/momo-transfers'),
-  create: (t: MomoTransfer) => api<MomoTransfer>('/api/momo-transfers', { method: 'POST', body: JSON.stringify(t) }),
+  create: (t: MomoTransfer) => api<MomoTransfer>('/api/momo-transfers', { method: 'POST', body: JSON.stringify(withWriteId(t)) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/momo-transfers/${id}`, { method: 'DELETE' }),
+};
+
+export const closeSessionApi = {
+  current: () => api<{ id: string; businessDate: string; status: string } | null>('/api/close-sessions/current', { fresh: true }),
+  reopen: (id: string, reason: string) => api<unknown>(`/api/close-sessions/${id}/reopen`, { method: 'POST', body: JSON.stringify({ reason }) }),
+};
+
+export const closeSummaryApi = {
+  send: (body: {
+    businessDate: string;
+    branch?: string;
+    channel?: 'in_app' | 'whatsapp';
+    recipientRole?: 'owner' | 'manager';
+    recipientId?: string;
+    recipientName?: string;
+    headline: string;
+    body: string;
+    totals?: Record<string, number>;
+    clientWriteId?: string;
+  }) => api<CloseSummary & { duplicate?: boolean }>('/api/close-summaries', { method: 'POST', body: JSON.stringify(body) }),
+  inbox: (scope: 'recipient' | 'all' = 'recipient') => api<{ scope: string; count: number; rows: CloseSummary[] }>(`/api/close-summaries?scope=${scope}`, { fresh: true }),
+  markRead: (id: string) => api<CloseSummary & { duplicate?: boolean }>(`/api/close-summaries/${id}/read`, { method: 'POST', body: '{}' }),
+  markShared: (id: string, via = 'whatsapp') => api<CloseSummary>(`/api/close-summaries/${id}/shared`, { method: 'POST', body: JSON.stringify({ via }) }),
+};
+
+export interface HandoverSummaryRecipient {
+  key: string;
+  destination: 'float' | 'cash' | 'owner' | 'manager' | 'bank';
+  recipientId: string | null;
+  recipientName: string;
+  total: number;
+  count: number;
+  awaiting: number;
+  received: number;
+}
+
+export interface HandoverSummary {
+  range: { from: string | null; to: string | null; branch: string | null };
+  totals: Record<string, number>;
+  awaitingConfirmation: number;
+  confirmed: number;
+  noReceiptNeeded: number;
+  count: number;
+  byRecipient: HandoverSummaryRecipient[];
+}
+
+export const handoverApi = {
+  pending: () => api<{ actor: { id: string | null; name: string; role: string }; count: number; rows: MomoTransfer[] }>('/api/money-handover/pending', { fresh: true }),
+  confirm: (id: string, note?: string) => api<MomoTransfer & { duplicate?: boolean }>(`/api/money-handover/${id}/confirm`, { method: 'POST', body: JSON.stringify({ note: note || '' }) }),
+  summary: (params?: { from?: string; to?: string; branch?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.branch) q.set('branch', params.branch);
+    const qs = q.toString();
+    return api<HandoverSummary>(`/api/money-handover/summary${qs ? `?${qs}` : ''}`, { fresh: true });
+  },
 };
 
 export const settingsApi = {
@@ -966,6 +1608,7 @@ export function primeCache(path: string, data: unknown, ttlMs = 24 * 60 * 60 * 1
 export interface SummaryResult {
   from: string | null;
   to: string | null;
+  branch: string | null;
   salesCount: number;
   revenue: number;
   designRevenue: number;
@@ -982,11 +1625,12 @@ export interface SummaryResult {
 }
 
 export const summaryApi = {
-  list: (from?: string, to?: string, bucket?: 'hourly' | 'daily') => {
+  list: (from?: string, to?: string, bucket?: 'hourly' | 'daily', branch?: string) => {
     const qs = new URLSearchParams();
     if (from) qs.set('from', from);
     if (to) qs.set('to', to);
     if (bucket) qs.set('bucket', bucket);
+    if (branch) qs.set('branch', branch);
     const q = qs.toString();
     return api<SummaryResult>(`/api/summary${q ? `?${q}` : ''}`);
   },
@@ -997,16 +1641,172 @@ export interface AuditEntry {
   at: string;
   action: string;
   detail: string;
+  actorId?: string;
+  actorName?: string;
+  actorRole?: string;
+  metadata?: Record<string, unknown>;
+  requestId?: string;
+}
+
+export interface AuditSearchQuery {
+  q?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface AuditSearchResult {
+  entries: AuditEntry[];
+  nextCursor: string | null;
+  total: number;
+}
+
+function headerValue(res: unknown, name: string): string | null {
+  try {
+    return (res as { headers?: { get?: (n: string) => string | null } })?.headers?.get?.(name) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJson<T>(path: string, ms: number): Promise<{ data: T; response: unknown }> {
+  const res = await fetchTimeout(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } }, ms);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const body = (data || {}) as { error?: string; code?: string; traceId?: string };
+    throw new ApiError(body.error || `API error: ${res.status}`, res.status, body.code, body.traceId || responseTraceId(res));
+  }
+  return { data: data as T, response: res };
+}
+
+export async function searchAudit(query: AuditSearchQuery = {}): Promise<AuditSearchResult> {
+  const qs = new URLSearchParams();
+  if (query.q) qs.set('q', String(query.q).slice(0, 120));
+  if (query.action) qs.set('action', String(query.action).slice(0, 120));
+  if (query.from) qs.set('from', String(query.from).slice(0, 40));
+  if (query.to) qs.set('to', String(query.to).slice(0, 40));
+  if (query.limit) qs.set('limit', String(query.limit));
+  if (query.cursor) qs.set('cursor', String(query.cursor));
+  const { data, response } = await fetchJson<AuditEntry[]>(`/api/audit?${qs.toString()}`, READ_TIMEOUT_MS);
+  const total = parseInt(headerValue(response, 'X-Total-Count') || '0', 10);
+  return {
+    entries: Array.isArray(data) ? data : [],
+    nextCursor: headerValue(response, 'X-Next-Cursor'),
+    total: Number.isFinite(total) ? total : 0,
+  };
 }
 
 export const auditApi = {
   list: (limit = 100) => api<AuditEntry[]>(`/api/audit?limit=${limit}`, { fresh: true }),
+  search: searchAudit,
 };
 
+export interface ReadyReport {
+  status: 'ready' | 'degraded';
+  build: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  database: { configured: boolean; ok: boolean; latencyMs: number; error: string | null };
+  traceId?: string;
+}
+
+export const supportApi = {
+  ready: async (): Promise<{ ok: boolean; report: ReadyReport | null; traceId?: string }> => {
+    try {
+      const res = await fetchTimeout(`${BASE}/api/ready`, { headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() } }, READ_TIMEOUT_MS);
+      const body = await res.json().catch(() => null) as ReadyReport | null;
+      if (!body || typeof body.status !== 'string') return { ok: res.ok, report: null, traceId: responseTraceId(res) };
+      return { ok: res.ok && body.status === 'ready', report: body, traceId: body.traceId || responseTraceId(res) };
+    } catch (err) {
+      return { ok: false, report: null, traceId: err instanceof ApiError ? err.traceId : undefined };
+    }
+  },
+};
+
+export interface PortableTableMeta {
+  rows: number;
+  checksum: string;
+}
+
+export interface PortableExport {
+  formatVersion?: number;
+  appVersion?: string;
+  exportedAt?: string;
+  generator?: string;
+  shop?: { id?: string; tenantId?: string; name?: string; build?: string };
+  scope?: Record<string, unknown>;
+  redaction?: { mode?: string; includesCredentials?: boolean; excludedSettings?: string[]; excludesStaffPinHashes?: boolean; imageBytesIncluded?: boolean };
+  tables?: Record<string, PortableTableMeta>;
+  checksum?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  createdAt: string;
+  formatVersion: number;
+  checksum: string;
+  rowCounts: Record<string, number>;
+}
+
+export interface BackupRunResult {
+  success: boolean;
+  records?: number;
+  backup?: BackupSnapshot;
+  error?: string;
+  code?: string;
+}
+
+export interface RestoreCollision {
+  table: string;
+  incoming: number;
+  columns: number;
+  overwrite: number;
+  insert: number;
+  sample: string[];
+}
+
+export interface RestorePreflight {
+  success: boolean;
+  dryRun: boolean;
+  mode: 'merge';
+  formatVersion: number;
+  appVersion: string | null;
+  exportedAt: string | null;
+  shop: { incoming: PortableExport['shop'] | null; local: { id: string; name: string }; matches: boolean; override: boolean };
+  checks: { envelope: boolean; payloadChecksum: string; tables: number; rejectedRows: Record<string, number> };
+  rows: Record<string, number>;
+  collisions: RestoreCollision[];
+  totals: { tables: number; incoming: number; overwrite: number; insert: number; rejected: number; skippedSettings: number };
+  skipped: { settings: Record<string, string> };
+  assets: { referenced: number; missing: number };
+  warnings: string[];
+  restored?: Record<string, number>;
+  rowsWritten?: number;
+  partial?: boolean;
+  errors?: { table: string; error: string }[];
+}
+export function backupTableRows(payload: PortableExport | null | undefined, table: string): number {
+  if (!payload) return 0;
+  const meta = payload.tables?.[table];
+  if (meta && Number.isFinite(Number(meta.rows))) return Number(meta.rows);
+  const rows = payload.data ? payload.data[table] : (payload as Record<string, unknown>)[table];
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+export function backupRowTotal(payload: PortableExport | null | undefined): number {
+  if (!payload) return 0;
+  if (payload.tables) return Object.values(payload.tables).reduce<number>((sum, meta) => sum + (Number(meta?.rows) || 0), 0);
+  return Object.values<unknown>(payload.data || payload).reduce<number>((sum, value) => sum + (Array.isArray(value) ? value.length : 0), 0);
+}
+
 export const backupsApi = {
-  latest: () => api<{ createdAt: string | null }>('/api/backups/latest', { fresh: true }),
-  data: () => api<{ data: Record<string, unknown> | null }>('/api/backups/data', { fresh: true }),
-  run: () => api<{ success: boolean }>('/api/backups/run', { method: 'POST' }),
+  latest: () => api<{ id: string | null; createdAt: string | null }>('/api/backups/latest', { fresh: true }),
+  data: () => api<{ id: string | null; createdAt: string | null; data: PortableExport | null }>('/api/backups/data', { fresh: true }),
+  run: () => api<BackupRunResult>('/api/backups/run', { method: 'POST' }),
 };
 
 export const reconcileApi = {
@@ -1015,9 +1815,10 @@ export const reconcileApi = {
 };
 
 export const exportApi = {
-  download: () => api<Record<string, unknown>>('/api/export', { fresh: true }),
+  download: () => api<PortableExport>('/api/export', { fresh: true }),  downloadWithCredentials: () => api<PortableExport>('/api/export/with-credentials', { fresh: true }),
 };
 
 export const restoreApi = {
-  restore: (data: Record<string, unknown>) => api<{ success: boolean; restored: Record<string, number> }>('/api/restore', { method: 'POST', body: JSON.stringify(data) }),
+  preflight: (data: PortableExport | Record<string, unknown>) => api<RestorePreflight>('/api/restore/preflight', { method: 'POST', body: JSON.stringify(data) }),
+  restore: (data: PortableExport | Record<string, unknown>) => api<RestorePreflight>('/api/restore', { method: 'POST', body: JSON.stringify(data) }),
 };

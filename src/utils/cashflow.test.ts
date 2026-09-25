@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { computeDayCash, findMissingProduction, prevDayKey, buildTheftFlags, tenderByCategory, momoExpensesByCategory, openingPhoneFor } from './cashflow';
 
 describe('computeDayCash', () => {
-  it('flags money collected but never moved nor kept as capital', () => {
+  it('calls undecided drawer money "still to assign", not a theft flag', () => {
     const r = computeDayCash({
       category: 'Eatery',
       dayKey: '2026-09-12',
@@ -14,10 +14,14 @@ describe('computeDayCash', () => {
       cashOut: 0,
       ownerOut: 0,
     });
-    // 10k + 50k - 5k - 0 - 10k = 45k missing
+    // 10k + 50k - 5k = 55k expected; assigned 10k capital; 45k undecided.
+    expect(r.expectedInDrawer).toBe(55000);
+    expect(r.assigned).toBe(10000);
+    expect(r.unassigned).toBe(45000);
     expect(r.unaccounted).toBe(45000);
-    expect(r.status).toBe('missing');
-    expect(r.message).toMatch(/NOT moved/);
+    expect(r.status).toBe('unassigned');
+    expect(r.message).toMatch(/still to assign/);
+    expect(r.message).not.toMatch(/FLAG|unaccounted/);
   });
 
   it('balances when every shilling has a home', () => {
@@ -32,7 +36,52 @@ describe('computeDayCash', () => {
       cashOut: 5000,
       ownerOut: 10000,
     });
-    expect(r.unaccounted).toBe(0);
+    expect(r.unassigned).toBe(0);
+    expect(r.status).toBe('balanced');
+  });
+
+  it('excludes phone tender from the drawer equation', () => {
+    const r = computeDayCash({
+      category: 'Eatery',
+      dayKey: '2026-09-12',
+      openingCapital: 0,
+      closingCapital: 0,
+      collected: 50000,
+      phoneCollected: 40000,
+      drawerExpenses: 0,
+      floatOut: 0,
+      cashOut: 0,
+      ownerOut: 0,
+    });
+    expect(r.cashSales).toBe(10000);
+    expect(r.expectedInDrawer).toBe(10000);
+  });
+
+  it('reports variance only once a human has counted', () => {
+    const base = {
+      category: 'Eatery', dayKey: '2026-09-12',
+      openingCapital: 10000, closingCapital: 10000,
+      collected: 50000, drawerExpenses: 5000,
+      floatOut: 0, cashOut: 0, ownerOut: 0,
+    };
+    expect(computeDayCash(base).variance).toBeNull();
+    expect(computeDayCash({ ...base, countedCash: 55000 }).variance).toBe(0);
+    const short = computeDayCash({ ...base, countedCash: 52000 });
+    expect(short.variance).toBe(-3000);
+    expect(short.status).toBe('variance');
+    expect(short.message).toMatch(/short/);
+  });
+
+  it('a correct count clears the unassigned nag even with money still in the drawer', () => {
+    const r = computeDayCash({
+      category: 'Eatery', dayKey: '2026-09-12',
+      openingCapital: 10000, closingCapital: 10000,
+      collected: 50000, drawerExpenses: 5000,
+      floatOut: 0, cashOut: 0, ownerOut: 0,
+      countedCash: 55000,
+    });
+    expect(r.unassigned).toBe(45000);
+    expect(r.variance).toBe(0);
     expect(r.status).toBe('balanced');
   });
 
@@ -65,7 +114,7 @@ describe('computeDayCash', () => {
       bankOut: 30000,
     });
     expect(r.movedOut).toBe(50000);
-    expect(r.unaccounted).toBe(0);
+    expect(r.unassigned).toBe(0);
     expect(r.status).toBe('balanced');
   });
 
@@ -81,7 +130,7 @@ describe('computeDayCash', () => {
       cashOut: 0,
       ownerOut: 0,
     });
-    expect(r.unaccounted).toBe(0);
+    expect(r.unassigned).toBe(0);
     expect(r.status).toBe('balanced');
   });
 });
@@ -140,20 +189,35 @@ describe('buildTheftFlags close gating (Library 7k case)', () => {
     expect(flags.filter((f) => f.kind === 'unaccounted')).toHaveLength(0);
   });
 
-  it('points phone money to float after close (warn, never critical)', () => {
+  it('points phone money to float after close (warn, never a drawer flag)', () => {
     const flags = buildTheftFlags(base({ pastClose: true }) as never);
-    const u = flags.filter((f) => f.kind === 'unaccounted');
+    // Phone money must never read as drawer-missing:
+    expect(flags.filter((f) => f.kind === 'unaccounted')).toHaveLength(0);
+    const u = flags.filter((f) => f.kind === 'momo');
     expect(u).toHaveLength(1);
     expect(u[0].severity).toBe('warn');
     expect(u[0].title).toMatch(/phone money/);
   });
 
-  it('cash still missing stays critical after close', () => {
+    it('never says "unaccounted" or "FLAG" in any drawer message', () => {
+      const cases = [
+        { openingCapital: 10000, closingCapital: 10000, collected: 50000, drawerExpenses: 5000, floatOut: 0, cashOut: 0, ownerOut: 0 },
+        { openingCapital: 10000, closingCapital: 10000, collected: 50000, drawerExpenses: 5000, floatOut: 0, cashOut: 0, ownerOut: 0, countedCash: 52000 },
+        { openingCapital: 0, closingCapital: 0, collected: 10000, drawerExpenses: 0, floatOut: 15000, cashOut: 0, ownerOut: 0 },
+      ];
+      for (const over of cases) {
+        const r = computeDayCash({ category: 'Eatery', dayKey: '2026-09-12', ...over });
+        expect(r.message).not.toMatch(/unaccounted|FLAG|missing|theft/i);
+      }
+    });
+
+    it('cash still sitting in the drawer reads as a decision, not a critical flag', () => {
     const flags = buildTheftFlags(base({ pastClose: true, sales: [saleOn('Cash')] }) as never);
     const u = flags.filter((f) => f.kind === 'unaccounted');
     expect(u).toHaveLength(1);
-    expect(u[0].severity).toBe('critical');
-    expect(u[0].title).toMatch(/unaccounted/);
+    expect(u[0].severity).toBe('warn');
+    expect(u[0].title).toMatch(/still to assign/);
+    expect(u[0].title).not.toMatch(/unaccounted/);
   });
 });
 
@@ -256,5 +320,32 @@ describe('openingPhoneFor (running sente zesimu)', () => {
 
   it('opens at zero with no history', () => {
     expect(openingPhoneFor([], prods() as never, [], [], '2026-09-21').get('Library') || 0).toBe(0);
+  });
+});
+
+describe('canonical tender math (audit #28)', () => {
+  it('excludes phone tender from the physical drawer equation', () => {
+    const r = computeDayCash({
+      category: 'Library', dayKey: '2026-09-21',
+      openingCapital: 0, closingCapital: 0,
+      collected: 7000, phoneCollected: 7000,
+      drawerExpenses: 0, floatOut: 0, cashOut: 0, ownerOut: 0,
+    });
+    // Empty drawer + 7000 on the phone = balanced drawer, not missing cash.
+    expect(r.unaccounted).toBe(0);
+    expect(r.status).toBe('balanced');
+  });
+
+  it('still tracks cash waiting in the drawer alongside phone sales', () => {
+    const r = computeDayCash({
+      category: 'Eatery', dayKey: '2026-09-21',
+      openingCapital: 0, closingCapital: 0,
+      collected: 12000, phoneCollected: 7000,
+      drawerExpenses: 0, floatOut: 0, cashOut: 0, ownerOut: 0,
+    });
+    // Only the 5000 cash side can be undecided; phone is a separate bucket.
+    expect(r.unaccounted).toBe(5000);
+    expect(r.unassigned).toBe(5000);
+    expect(r.status).toBe('unassigned');
   });
 });

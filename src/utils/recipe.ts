@@ -1,6 +1,89 @@
 import type { Product, Recipe, RecipeIngredient, SupplierPrice } from '../types';
 
-export const RECIPE_UNITS = ['kg', 'g', 'pcs', 'litres', 'ml', 'cups', 'tsp', 'tbsp'];
+export const RECIPE_UNITS = ['kg', 'g', 'mg', 'pcs', 'litres', 'ml', 'cups', 'tsp', 'tbsp'];
+
+type UnitDimension = 'mass' | 'volume' | 'count';
+
+type UnitBase = {
+  dimension: UnitDimension;
+  factor: number;
+  canonical: string;
+  container?: boolean;
+};
+
+const UNIT_BASES: Record<string, UnitBase> = {
+  kg: { dimension: 'mass', factor: 1, canonical: 'kg' },
+  kgs: { dimension: 'mass', factor: 1, canonical: 'kg' },
+  g: { dimension: 'mass', factor: 0.001, canonical: 'kg' },
+  mg: { dimension: 'mass', factor: 0.000001, canonical: 'kg' },
+  l: { dimension: 'volume', factor: 1, canonical: 'l' },
+  litre: { dimension: 'volume', factor: 1, canonical: 'l' },
+  litres: { dimension: 'volume', factor: 1, canonical: 'l' },
+  liter: { dimension: 'volume', factor: 1, canonical: 'l' },
+  liters: { dimension: 'volume', factor: 1, canonical: 'l' },
+  ml: { dimension: 'volume', factor: 0.001, canonical: 'l' },
+  pcs: { dimension: 'count', factor: 1, canonical: 'pcs' },
+  pc: { dimension: 'count', factor: 1, canonical: 'pcs' },
+  piece: { dimension: 'count', factor: 1, canonical: 'pcs' },
+  pieces: { dimension: 'count', factor: 1, canonical: 'pcs' },
+  each: { dimension: 'count', factor: 1, canonical: 'pcs' },
+  dozen: { dimension: 'count', factor: 12, canonical: 'pcs' },
+  pack: { dimension: 'count', factor: 1, canonical: 'pack', container: true },
+  packs: { dimension: 'count', factor: 1, canonical: 'pack', container: true },
+  packet: { dimension: 'count', factor: 1, canonical: 'pack', container: true },
+  packets: { dimension: 'count', factor: 1, canonical: 'pack', container: true },
+  bag: { dimension: 'count', factor: 1, canonical: 'bag', container: true },
+  bags: { dimension: 'count', factor: 1, canonical: 'bag', container: true },
+  bottle: { dimension: 'count', factor: 1, canonical: 'bottle', container: true },
+  bottles: { dimension: 'count', factor: 1, canonical: 'bottle', container: true },
+  tin: { dimension: 'count', factor: 1, canonical: 'tin', container: true },
+  tins: { dimension: 'count', factor: 1, canonical: 'tin', container: true },
+};
+
+export interface PurchaseUnitConversion {
+  valid: boolean;
+  unitCost: number;
+  targetUnit: string;
+  targetQuantity: number;
+  reason?: string;
+}
+
+function unitBase(value: unknown): UnitBase | null {
+  const key = String(value || '').trim().toLowerCase().replace(/[.-]/g, '');
+  return UNIT_BASES[key] || null;
+}
+
+export function convertPurchasePrice(
+  price: number,
+  purchaseQty: number,
+  purchaseUnit: string,
+  targetUnit: string,
+): PurchaseUnitConversion {
+  const target = String(targetUnit || '').trim().toLowerCase();
+  const from = unitBase(purchaseUnit);
+  const to = unitBase(target);
+  const numericPrice = Number(price);
+  const numericQty = Number(purchaseQty);
+  if (!Number.isFinite(numericPrice) || numericPrice < 0) return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Invalid purchase price' };
+  if (!Number.isFinite(numericQty) || numericQty <= 0) return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Purchase quantity must be positive' };
+  if (!from || !to) return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Unknown unit' };
+  if (from.dimension !== to.dimension) return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Incompatible units' };
+  if ((from.container || to.container) && from.canonical !== to.canonical) {
+    return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Pack size must be entered before conversion' };
+  }
+  const targetQuantity = numericQty * from.factor / to.factor;
+  const unitCost = numericPrice / targetQuantity;
+  if (!Number.isFinite(unitCost) || !Number.isFinite(targetQuantity) || targetQuantity <= 0) {
+    return { valid: false, unitCost: 0, targetUnit: target, targetQuantity: 0, reason: 'Invalid conversion' };
+  }
+  return { valid: true, unitCost, targetUnit: target, targetQuantity };
+}
+
+export function supplierPriceForUnit(quote: SupplierPrice, targetUnit?: string): PurchaseUnitConversion {
+  const target = targetUnit || quote.normalizedUnit || 'pcs';
+  const source = quote.purchaseUnit || quote.normalizedUnit || target;
+  return convertPurchasePrice(quote.price, quote.purchaseQty ?? 1, source, target);
+}
 
 export interface RecipeCalc {
   ingredientCosts: number[];
@@ -18,6 +101,7 @@ export interface RecipeSupplierMatch {
   ingredient: RecipeIngredient;
   product: Product;
   quote: SupplierPrice;
+  unitCost: number;
 }
 
 export interface RecipeSupplierUpdate {
@@ -89,11 +173,15 @@ export function recipeSupplierMatches(
   const matches: RecipeSupplierMatch[] = [];
   for (const ingredient of recipe.ingredients) {
     const candidates = ingredientProductCandidates(ingredient, products, recipeProduct.id);
-    const matched = candidates
-      .map(product => ({ product, quote: preferredSupplierQuote(product, quotes) }))
-      .find(candidate => candidate.quote !== null);
-    if (matched?.quote) {
-      matches.push({ ingredient, product: matched.product, quote: matched.quote });
+    const targetUnit = ingredient.unit || 'pcs';
+    for (const product of candidates) {
+      const quote = preferredSupplierQuote(product, quotes);
+      if (!quote) continue;
+      const conversion = supplierPriceForUnit(quote, targetUnit);
+      if (conversion.valid) {
+        matches.push({ ingredient, product, quote, unitCost: conversion.unitCost });
+        break;
+      }
     }
   }
   return matches;
@@ -106,10 +194,11 @@ function applyRecipeMatches(recipeProduct: Product, matches: RecipeSupplierMatch
   const ingredients = recipe.ingredients.map(ingredient => {
     const match = matches.find(candidate => candidate.ingredient === ingredient);
     if (!match) return ingredient;
-    const price = Number(match.quote.price);
-    if (ingredient.unitCost === price && ingredient.productId === match.product.id) return ingredient;
+    const price = match.unitCost;
+    const unitCostUnit = ingredient.unit || 'pcs';
+    if (ingredient.unitCost === price && ingredient.productId === match.product.id && ingredient.unitCostUnit === unitCostUnit) return ingredient;
     changedIngredients++;
-    return { ...ingredient, unitCost: price, productId: match.product.id };
+    return { ...ingredient, unitCost: price, unitCostUnit, productId: match.product.id };
   });
   if (changedIngredients === 0) {
     return { product: recipeProduct, matchedIngredients: matches.length, changedIngredients: 0 };
@@ -149,7 +238,15 @@ export function applySupplierPricesToRecipes(
       changedIngredients += update.changedIngredients;
       changedRecipes++;
     }
-    for (const match of matches) sourcePrices.set(match.product.id, Number(match.quote.price));
+    for (const match of matches) {
+      const hasPack = match.quote.purchaseQty !== undefined || match.quote.purchaseUnit !== undefined;
+      if (match.product.stockUnit) {
+        const conversion = supplierPriceForUnit(match.quote, match.product.stockUnit);
+        if (conversion.valid) sourcePrices.set(match.product.id, conversion.unitCost);
+      } else if (!hasPack) {
+        sourcePrices.set(match.product.id, Number(match.quote.price));
+      }
+    }
   }
 
   let changedProductCosts = 0;

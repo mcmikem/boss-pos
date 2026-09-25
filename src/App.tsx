@@ -6,10 +6,11 @@ import {
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
-import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCount, peekOutbox, clearOutbox, dropOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi,   normalizeExpenses, ApiError, type BootData, type AuditEntry, type OutboxFlushReport } from './api';
+import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig, SaleSaveResult } from './types';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
+import { checkoutDraftScopeKey, readCheckoutDraftSync, loadActiveCheckoutDraft, saveActiveCheckoutDraft, clearActiveCheckoutDraft, type CheckoutDraftScope } from './utils/checkoutDraft';
 import { t } from './utils/i18n';
 import { momoFeeFor } from './utils/fees';
 import { supplierWhatsAppUrl } from './utils/suppliers';
@@ -21,17 +22,18 @@ import { downloadBlob } from './utils/download';
 import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
-import { isPastClose } from './utils/dates';
+import { isPastClose, middayStamp } from './utils/dates';
 import { readSyncReview, clearSyncReview, buildReconnectReport, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
-import { initSentry } from './utils/sentry';
+import { readClientErrorLog, supportSummary, type ClientErrorRecord } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
+import { confirmDialog, promptDialog } from './components/Dialog';
 import PinGate from './components/PinGate';
 import SettingHelp from './components/SettingHelp';
 import MorningBrief from './components/MorningBrief';
@@ -45,6 +47,8 @@ const Inventory = lazyRetry(() => import('./components/Inventory'));
 const Analytics = lazyRetry(() => import('./components/Analytics'));
 const Expenses = lazyRetry(() => import('./components/Expenses'));
 const CategoryRegister = lazyRetry(() => import('./components/CategoryRegister'));
+const HandoverPrompt = lazyRetry(() => import('./components/HandoverPrompt'));
+const CloseReminderBar = lazyRetry(() => import('./components/CloseReminderBar'));
 const Sales = lazyRetry(() => import('./components/Sales'));
 
 const THEMES_LIST: AppTheme[] = [
@@ -152,7 +156,7 @@ function removeDeletedExpense(id: string): void {
 // stops background boot-pulls from overwriting unsaved local taps.
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
-  'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features',
+  'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features','ownerName','closeReminderLeadMin','closeReminderSound','closeSummaryAuto',
   'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs',
 ]);
 function serializeSettings(s: StoreSettings): string {
@@ -443,10 +447,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [showStaffSwitcher, setShowStaffSwitcher] = useState(false);
   const [staffVerifying, setStaffVerifying] = useState(false);
   const [staffVerifyError, setStaffVerifyError] = useState<string | null>(null);
+  const draftScope = useMemo<CheckoutDraftScope>(() => ({ branch: tillBranch, tillId: activeStaffId || 'device' }), [tillBranch, activeStaffId]);
+  const draftScopeKey = checkoutDraftScopeKey(draftScope);
 
   // Role gates. Zero staff rows = legacy behavior: everything open, manager
   // PIN prompts as before. Once staff exist, cashiers sell + expenses only.
   const staffConfigured = staffList.length > 0;
+  // Money handed to a person that this device's staff member still has to
+  // confirm. Drives the full-screen "did you receive this?" prompt.
+  const [pendingHandoffs, setPendingHandoffs] = useState<MomoTransfer[]>([]);
+  const [handoffSummary, setHandoffSummary] = useState<HandoverSummary | null>(null);
   const activeStaff = activeStaffOf(staffList, activeStaffId);
   const activeRole = activeStaff?.role || null;
   const isManager = isManagerRole(activeRole, staffConfigured);
@@ -472,7 +482,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       return saved ? JSON.parse(saved) : DEFAULT_EXPENSE_CATEGORIES;
     } catch { return DEFAULT_EXPENSE_CATEGORIES; }
   });
-  const [cart, setCart] = useState<SaleItem[]>([]);
+  const [cart, setCartState] = useState<SaleItem[]>(() => {
+    try { return readCheckoutDraftSync(draftScope)?.cart || []; } catch { return []; }
+  });
+  const cartRevision = useRef(0);
+  const setCart = useCallback((value: SaleItem[] | ((current: SaleItem[]) => SaleItem[])) => {
+    cartRevision.current += 1;
+    setCartState(current => typeof value === 'function' ? value(current) : value);
+  }, []);
+  const cartHydrated = useRef(false);
+  const [cartDraftReady, setCartDraftReady] = useState(false);
 
   const [isQuickSale, setIsQuickSale] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -484,17 +503,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   });
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [outboxCountsState, setOutboxCountsState] = useState<OutboxCounts>({ total: 0, pending: 0, queued: 0, sending: 0, retrying: 0, blockedAuth: 0, synced: 0, failed: 0 });
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [showAudit, setShowAudit] = useState(false);
   const [auditFilter, setAuditFilter] = useState('');
+  const [supportReport, setSupportReport] = useState<ReadyReport | null>(null);
+  const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>([]);
   const [updatingApp, setUpdatingApp] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [efrisForm, setEfrisForm] = useState<EfrisConfig | null>(null);
   const [efrisToken, setEfrisToken] = useState('');
   const [efrisHasToken, setEfrisHasToken] = useState(false);
   const [efrisSaving, setEfrisSaving] = useState(false);
-  const [outboxPreview, setOutboxPreview] = useState<{ id: string; path: string; method: string; age: string }[]>([]);
+  const [outboxPreview, setOutboxPreview] = useState<OutboxEntry[]>([]);
   // Offline writes the server refused (conflict / sold out / rejected): kept
   // in plain language so the owner can re-enter what matters.
   const [syncReview, setSyncReview] = useState<SyncReviewItem[]>([]);
@@ -512,6 +534,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setToastType(type);
     setToastAction(action);
   };
+
+  const refreshOutboxState = useCallback(async () => {
+    try {
+      const [items, counts] = await Promise.all([listOutboxItemsAsync(), outboxCountsAsync()]);
+      setOutboxPreview(items.slice(-20).reverse());
+      setOutboxCountsState(counts);
+      setPendingCount(counts.pending);
+    } catch {}
+  }, []);
 
   const formatSyncedAgo = (ts: number) => {
     const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -650,7 +681,6 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  useEffect(() => { initSentry(); }, []);
   // Boot: try open-mode auth, migrate an existing client PIN, then load data.
   // Offline-first: old Androids report navigator.onLine=true on dead WiFi, so we
   // NEVER trust it to decide the offline path. If this device has been used
@@ -766,14 +796,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       busy = true;
       try {
         // Flush any queued offline writes first so they land before we pull.
-        const pending = outboxCount();
+        const pending = await outboxCountAsync();
         if (pending > 0) {
           const n = await flushOutbox();
           if (n > 0) triggerToast(`Synced ${n} offline change(s)`, 'success');
         }
         const d = await bootApi.get();
         applyBootData(d);
-        setPendingCount(outboxCount());
+        await refreshOutboxState();
       } catch {} finally {
         busy = false;
       }
@@ -790,7 +820,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', onFocus);
     };
-  }, [authState, applyBootData]);
+  }, [authState, applyBootData, refreshOutboxState]);
 
   // SSE instant sync — fetch streaming with Authorization header (no ?token= leak)
   useEffect(() => {
@@ -837,6 +867,44 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return () => { closed = true; try { controller?.abort(); } catch {} };
   }, [authState, applyBootData]);
 
+  // Handovers addressed to this staff member. Re-checked whenever the till
+  // boots or the SSE stream reports activity, so a handover raised on another
+  // phone surfaces here within seconds.
+  const refreshPendingHandoffs = useCallback(async () => {
+    if (authState !== 'ready' || !activeStaff) return;
+    try {
+      const res = await handoverApi.pending();
+      setPendingHandoffs(res.rows || []);
+    } catch {}
+  }, [authState, activeStaff]);
+
+  useEffect(() => {
+    refreshPendingHandoffs();
+  }, [refreshPendingHandoffs, momoTransfers.length]);
+
+  // Running totals for the owner/manager money board.
+  const refreshHandoverSummary = useCallback(async () => {
+    if (authState !== 'ready' || !isManager) return;
+    try {
+      setHandoffSummary(await handoverApi.summary());
+    } catch {}
+  }, [authState, isManager]);
+
+  useEffect(() => {
+    refreshHandoverSummary();
+  }, [refreshHandoverSummary, momoTransfers.length]);
+
+  const confirmHandoff = useCallback(async (id: string) => {
+    try {
+      await handoverApi.confirm(id);
+      triggerToast('Receipt confirmed — recorded against your name', 'success');
+      refreshPendingHandoffs();
+      refreshHandoverSummary();
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message.slice(0, 110) : 'Could not confirm', 'error');
+    }
+  }, [refreshPendingHandoffs, refreshHandoverSummary, triggerToast]);
+
   // PWA install prompt capture (preventDefault keeps it for our own button).
   useEffect(() => {
     const h = (e: Event) => { e.preventDefault(); setInstallPrompt(e); };
@@ -868,15 +936,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   // Refresh the offline-pending badge + "Synced" pill every 30s.
   useEffect(() => {
-    const iv = setInterval(() => setPendingCount(outboxCount()), 30_000);
-    // Keep badge honest after any flush that mutates the queue
-    const onStorage = () => setPendingCount(outboxCount());
+    const iv = setInterval(() => { void refreshOutboxState(); }, 30_000);
+    const onStorage = () => { void refreshOutboxState(); };
+    void refreshOutboxState();
     window.addEventListener('boss-pos-outbox-updated', onStorage);
     return () => {
       clearInterval(iv);
       window.removeEventListener('boss-pos-outbox-updated', onStorage);
     };
-  }, []);
+  }, [refreshOutboxState]);
 
   // Timed alerts via the notification bell (NOT on every PIN unlock).
   // Rule: same product may only notify once per 24h; unlocks never re-fire.
@@ -941,12 +1009,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (!isSettingsOpen) return;
     const load = async () => {
       try {
-        const list = peekOutbox();
-        const fmt = (queuedAt: number) => {
-          const m = Math.round((Date.now() - queuedAt)/60000);
-          return m < 1 ? 'now' : m < 60 ? `${m}m` : `${Math.round(m/60)}h`;
-        };
-        setOutboxPreview(list.slice(0, 8).map(e => ({ id: e.id, path: e.path, method: e.method, age: fmt(e.queuedAt) })));
+        const list = await listOutboxItemsAsync();
+        setOutboxPreview(list.slice(-20).reverse());
+        const counts = await outboxCountsAsync();
+        setOutboxCountsState(counts);
+        setPendingCount(counts.pending);
       } catch {}
       try { setSyncReview(readSyncReview()); } catch {}
     };
@@ -980,7 +1047,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try { setSyncReview(readSyncReview()); } catch {}
     triggerToast(`${n} offline change(s) couldn't be saved (e.g. sold out) — kept in Settings → Needs review.`, 'error');
     fetchAllData();
-    setPendingCount(outboxCount());
+    void refreshOutboxState();
   };
   useEffect(() => {
     window.addEventListener('boss-pos-sync-dropped', onSyncDropped);
@@ -1002,6 +1069,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     };
     window.addEventListener('boss-pos-auth-revoked', onRevoked);
     return () => window.removeEventListener('boss-pos-auth-revoked', onRevoked);
+  }, []);
+
+  useEffect(() => {
+    const onManagerRequired = () => {
+      triggerToast('Manager approval required — switch to a manager account.', 'error', {
+        label: 'Switch seller',
+        onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+      });
+    };
+    window.addEventListener('boss-pos-manager-required', onManagerRequired);
+    return () => window.removeEventListener('boss-pos-manager-required', onManagerRequired);
   }, []);
 
   useEffect(() => {
@@ -1045,12 +1123,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         if (r.flushed > 0) {
           reportReconnect(r);
           fetchAllData();
-        } else if (outboxCount() > 0 && hadToken && stillHasToken) {
-          // Non-auth failure at this point is either network (offline event would have fired)
-          // or permanent drop. Don't spam "Re-unlock" — silent retry + badge is enough.
-          // User can Force sync in Settings for details.
+        } else if ((await outboxCountAsync()) > 0 && hadToken && stillHasToken) {
         }
-        setPendingCount(outboxCount());
+        await refreshOutboxState();
       } catch {
         // Swallow — transient, will retry on next interval
       }
@@ -1062,7 +1137,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [refreshOutboxState]);
 
   // Flush pending offline writes on every unlock/boot too. The browser
   // `online` event is unreliable on old Android, so queued writes may
@@ -1078,10 +1153,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           reportReconnect(r);
           fetchAllData();
         }
-        setPendingCount(outboxCount());
+        await refreshOutboxState();
       } catch {}
     })();
-  }, [authState]);
+  }, [authState, refreshOutboxState]);
 
   // Persist settings (skip the very first render so we never clobber server
   // values with defaults before the real settings finish loading). Debounced so
@@ -1158,9 +1233,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     staffPromptedRef.current = true;
     if (localStorage.getItem('boss_pos_staff_prompted') === '1') return;
     setTimeout(() => {
-      const name = window.prompt('Who is selling? (cashier name — asked once for this phone)');
-      if (name && name.trim()) setStaffName(name.trim());
-      localStorage.setItem('boss_pos_staff_prompted', '1');
+      promptDialog({ title: 'Who is selling?', message: 'Cashier name — asked once for this phone', placeholder: 'e.g. Amina' }).then(name => {
+        if (name) setStaffName(name);
+        try { localStorage.setItem('boss_pos_staff_prompted', '1'); } catch {}
+      });
     }, 700);
   }, [authState, staffName, staffConfigured]);
 
@@ -1178,24 +1254,50 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, [authState, activeTab, activeRole, staffConfigured, cashierDoors]);
 
   useEffect(() => {
-    localStorage.setItem('boss_pos_cart', JSON.stringify(cart));  }, [cart]);
+    if (!cartHydrated.current) return;
+    const timer = setTimeout(() => {
+      const write = cart.length > 0
+        ? saveActiveCheckoutDraft({ cart }, draftScope)
+        : clearActiveCheckoutDraft(draftScope);
+      void write.catch(() => {});
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [cart, draftScope]);
 
   useEffect(() => {
-    if (loading) return;
-    const cached = localStorage.getItem('boss_pos_cart');
-    if (cached) {
-      try {
-        const restored: SaleItem[] = JSON.parse(cached);
-        // Variant-aware: a line priced from a variant keeps the variant price;
-        // only genuine catalog price changes rewrite the cart.
+    let cancelled = false;
+    cartHydrated.current = false;
+    setCartDraftReady(false);
+    const synchronous = readCheckoutDraftSync(draftScope);
+    if (synchronous) setCart(synchronous.cart);
+    const revision = cartRevision.current;
+    void loadActiveCheckoutDraft(draftScope).then((record) => {
+      if (cancelled) return;
+      if (cartRevision.current === revision) {
+        const restored = record?.cart || [];
         const { cart: validated, changed } = reconcileCartPrices(restored, products);
         setCart(validated);
-        if (changed) {
-          triggerToast('Cart prices updated to match current product pricing', 'info');
-        }
-      } catch {}
-    }
-  }, [loading, products]);
+        if (changed) triggerToast('Cart prices updated to match current product pricing', 'info');
+      }
+      cartHydrated.current = true;
+      setCartDraftReady(true);
+    }).catch(() => {
+      if (cancelled) return;
+      if (cartRevision.current === revision) setCart([]);
+      cartHydrated.current = true;
+      setCartDraftReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [draftScopeKey]);
+
+  useEffect(() => {
+    if (!cartDraftReady) return;
+    setCart(current => {
+      const { cart: validated, changed } = reconcileCartPrices(current, products);
+      if (changed) triggerToast('Cart prices updated to match current product pricing', 'info');
+      return validated;
+    });
+  }, [cartDraftReady, products]);
 
   // Idle re-lock
   useEffect(() => {
@@ -1234,6 +1336,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (local && !local.startsWith('fb_')) {
       try {
         if (await verifyPinAgainstHash(pin, local)) {
+          markUnlocked();
           setAuthState('ready');
           fetchAllData().catch(() => {});
           // Background re-mint (short timeout so dead WiFi never blocks).
@@ -1250,6 +1353,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try {
       const data = await authVerify(pin, 8000);
       localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+      markUnlocked();
       setAuthState('ready');
       fetchAllData().catch(() => {});
       return;
@@ -1277,7 +1381,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleForceSync = async () => {
     try {
       const n = await flushOutbox();
-      const left = outboxCount();
+      const left = await outboxCountAsync();
+      await refreshOutboxState();
       setPendingCount(left);
       if (n > 0) {
         triggerToast(`Force-synced ${n} change(s)`, 'success');
@@ -1289,21 +1394,27 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleExportData = async () => {    try {
+  const handleExportData = async () => {
+    try {
       const data = await exportApi.download();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const slug = (settings.shopName || 'pos').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-      const ok = downloadBlob(blob, `${slug}-backup-${new Date().toISOString().slice(0, 10)}.json`);
-      triggerToast(ok ? 'Backup downloaded' : 'Download failed on this device', ok ? 'success' : 'error');
-    } catch {
-      triggerToast('Failed to export data', 'error');
+      const stamp = String(data.exportedAt || new Date().toISOString()).slice(0, 10);
+      const ok = downloadBlob(blob, `${slug}-backup-${stamp}-v${data.formatVersion || 1}.json`);
+      const records = backupRowTotal(data);
+      triggerToast(
+        ok ? `Backup downloaded — ${records} records (PINs and provider tokens excluded)` : 'Download failed on this device',
+        ok ? 'success' : 'error',
+      );
+    } catch (err) {
+      triggerToast((err as { message?: string })?.message || 'Failed to export data', 'error');
     }
   };
 
   const restoreInputRef = useRef<HTMLInputElement>(null);
 
   const handleRevokeAll = async () => {
-    if (!confirm('Log out on ALL devices (including this one)? You will need the PIN to log back in.')) return;
+    if (!(await confirmDialog({ title: 'Log out everywhere', message: 'Log out on ALL devices (including this one)? You will need the PIN to log back in.', confirmLabel: 'Log out', danger: true }))) return;
     try {
       await revokeAllSessions();
       emitAuthRevoked({ reason: 'revoke-all' });
@@ -1315,14 +1426,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleRunBackupNow = async () => {
     try {
       const res = await backupsApi.run();
-      if (res.success) {
-        setLastBackupAt(new Date().toISOString());
-        triggerToast('Backup saved to server', 'success');
+      if (res?.success && res.backup?.createdAt) {
+        setLastBackupAt(res.backup.createdAt);
+        triggerToast(`Backup ${res.backup.id} saved · ${new Date(res.backup.createdAt).toLocaleString()} (${res.records ?? 0} records)`, 'success');
       } else {
-        triggerToast('Backup could not run right now', 'error');
+        triggerToast(res?.error || 'Backup could not run right now — nothing was saved', 'error');
       }
-    } catch {
-      triggerToast('Backup failed', 'error');
+    } catch (err) {
+      triggerToast((err as { message?: string })?.message || 'Backup failed', 'error');
     }
   };
 
@@ -1336,6 +1447,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     sheetsApi.status().then(setSheetStatus).catch(() => setSheetStatus(null));
     efrisApi.config().then((c) => { setEfrisForm(c.config); setEfrisHasToken(c.hasToken); setEfrisToken(''); }).catch(() => {});
   }, [isSettingsOpen]);
+
+  const refreshSupport = useCallback(async () => {
+    try { setClientErrors(readClientErrorLog()); } catch { setClientErrors([]); }
+    const probe = await supportApi.ready();
+    setSupportReport(probe.report);
+  }, []);
+
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    void refreshSupport();
+  }, [isSettingsOpen, refreshSupport]);
 
   const handleTestSheets = async () => {
     if (!settings.sheetsUrl || !/^https:\/\//.test(settings.sheetsUrl)) {
@@ -1420,16 +1542,48 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const handleRestoreData = async (file: File | undefined) => {
     if (!file) return;
-    if (!confirm(`Restore from ${file.name}? This replaces matching records with the backup. Continue?`)) return;
+    let parsed: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(await file.text());
-      const res = await restoreApi.restore(parsed);
-      const n = res.restored || {};
-      const total = Object.values(n).reduce((a, b) => a + (b || 0), 0);
-      triggerToast(`Restored ${total} record(s). Reloading data…`, 'success');
-      await fetchAllData();
+      parsed = JSON.parse(await file.text());
     } catch {
-      triggerToast('Restore failed — is this a valid backup file?', 'error');
+      triggerToast('That file is not readable JSON — pick the .json backup file', 'error');
+      return;
+    }
+    let pre: RestorePreflight;
+    try {
+      pre = await restoreApi.preflight(parsed);
+    } catch (err) {
+      triggerToast((err as { message?: string })?.message || 'Could not check that backup file', 'error');
+      return;
+    }
+    if (!pre?.success) {
+      triggerToast('That backup cannot be restored here — nothing was written', 'error');
+      return;
+    }
+    const from = String(pre.exportedAt ? new Date(pre.exportedAt).toLocaleString() : 'an older untimed snapshot');
+    const where = pre.shop.matches ? 'this shop' : `another shop (${pre.shop.local.name})`;
+    const collisions = pre.collisions.filter(c => c.overwrite > 0);
+    const summary = collisions.length
+      ? `${collisions.slice(0, 3).map(c => `${c.overwrite} ${c.table}`).join(', ')}${collisions.length > 3 ? '…' : ''}`
+      : 'none — everything is new';
+    if (!(await confirmDialog({
+      title: 'Restore backup',
+      message: `${pre.totals.incoming} record(s) from "${pre.shop.incoming?.name || 'unknown shop'}" (taken ${from}) will be merged into ${where}. ${pre.totals.overwrite} existing record(s) will be overwritten: ${summary}. Nothing is deleted, and PINs, tokens, order counters and backup flags stay as they are.${pre.assets.missing ? ` ${pre.assets.missing} product photo(s) are not on this server and will stay missing.` : ''} Continue?`,
+      confirmLabel: 'Merge now',
+      danger: true,
+    }))) return;
+    try {
+      const res = await restoreApi.restore(parsed);
+      const total = Object.values(res.restored || {}).reduce((a, b) => a + (b || 0), 0);
+      if (res.partial || (res.errors && res.errors.length)) {
+        triggerToast(`Restore partly failed (${res.errors?.map(e => e.table).join(', ')}) — ${total} record(s) landed`, 'error');
+      } else {
+        triggerToast(`Merged ${total} record(s) (${res.totals.overwrite} overwritten, ${res.totals.insert} new). Reloading data…`, 'success');
+      }
+      clearProductsCache();
+      await fetchAllData();
+    } catch (err) {
+      triggerToast(`Restore failed: ${(err as { message?: string })?.message || 'server refused the file'}`, 'error');
     }
   };
 
@@ -1516,22 +1670,32 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddSale = async (newSale: Sale) => {
-    setSales(prev => [newSale, ...prev]);
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const soldItem = newSale.items.find(item => item.productId === prod.id);
-        if (soldItem && !prod.isService) {
-          return { ...prod, stockQty: Math.max(0, prod.stockQty - soldItem.qty) };
+  const inflightSales = useRef(new Map<string, Promise<SaleSaveResult>>());
+  const handleAddSale = async (newSale: Sale): Promise<SaleSaveResult> => {
+    const inflight = inflightSales.current.get(newSale.id);
+    if (inflight) return inflight;
+    const run = (async (): Promise<SaleSaveResult> => {
+    const alreadyKnown = sales.some(s => s.id === newSale.id);
+    const soldQty = (productId: string) => newSale.items
+      .filter(item => item.productId === productId)
+      .reduce((sum, item) => sum + item.qty, 0);
+    if (!alreadyKnown) {
+      setSales(prev => [newSale, ...prev]);
+      setProducts(prevProducts => prevProducts.map(prod => {
+        const qty = soldQty(prod.id);
+        if (qty > 0 && !prod.isService) {
+          return { ...prod, stockQty: Math.max(0, prod.stockQty - qty) };
         }
         return prod;
-      });
-    });
+      }));
+    }
     try {
-      await saleApi.create(newSale);
-      // MoMo cut: MTN/Airtel take a percentage off the top. Book it as its
-      // own expense so profit stays honest. Silent when off or dust — the
-      // sale itself must never depend on the fee booking.
+      const result = await saleApi.createWithStatus(newSale);
+      const savedSale = result.data;
+      const mergedSale = { ...newSale, ...savedSale, id: newSale.id };
+      setSales(prev => prev.some(s => s.id === newSale.id)
+        ? prev.map(s => s.id === newSale.id ? mergedSale : s)
+        : [mergedSale, ...prev]);
       const fee = momoFeeFor(newSale.total, settings.momoFeePct, newSale.paymentMethod);
       if (fee > 0) {
         if (!expenseCategories.includes('MoMo Fees')) {
@@ -1545,30 +1709,39 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           category: 'MoMo Fees',
         });
       }
+      return {
+        status: result.status,
+        sale: { ...newSale, ...savedSale, id: newSale.id },
+      };
     } catch (err) {
-      // Real server failure (not offline — offline writes are queued and would
-      // have returned optimistic success). Roll the sale and its stock effect
-      // back so the UI never shows an unsaved sale.
-      setSales(prev => prev.filter(s => s.id !== newSale.id));
-      setProducts(prevProducts => {
-        return prevProducts.map(prod => {
-          const soldItem = newSale.items.find(item => item.productId === prod.id);
-          if (soldItem && !prod.isService) {
-            return { ...prod, stockQty: prod.stockQty + soldItem.qty };
+      if (!alreadyKnown) {
+        setSales(prev => prev.filter(s => s.id !== newSale.id));
+        setProducts(prevProducts => prevProducts.map(prod => {
+          const qty = soldQty(prod.id);
+          if (qty > 0 && !prod.isService) {
+            return { ...prod, stockQty: prod.stockQty + qty };
           }
           return prod;
-        });
-      });
+        }));
+      }
+      let message = 'Failed to save sale — not recorded. Refresh stock and retry.';
       if (err instanceof ApiError && err.code === 'INSUFFICIENT_STOCK') {
-        triggerToast('Not enough stock — another till just sold the last one. Stock refreshed, try again.', 'error');
+        message = 'Not enough stock — another till just sold the last one. Stock refreshed, try again.';
         fetchAllData();
       } else if (err instanceof ApiError && err.status === 401) {
-        triggerToast('Not logged in — re-enter PIN and retry.', 'error');
+        message = 'Not logged in — re-enter PIN and retry.';
       } else if (err instanceof ApiError && err.message) {
-        triggerToast(err.message.slice(0, 120), 'error');
-      } else {
-        triggerToast('Failed to save sale — not recorded. Refresh stock and retry.', 'error');
+        message = err.message.slice(0, 120);
       }
+      triggerToast(message, 'error');
+      return { status: 'failed', sale: newSale, error: message };
+    }
+    })();
+    inflightSales.current.set(newSale.id, run);
+    try {
+      return await run;
+    } finally {
+      inflightSales.current.delete(newSale.id);
     }
   };
 
@@ -1580,7 +1753,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (!settings.hasPin) return true;
     const managerPin = localStorage.getItem('boss_pos_manager_pin');
     if (managerOnly && managerPin && /^\d{4}$/.test(managerPin)) {
-      const pin = window.prompt(message);
+      const pin = await promptDialog({ title: 'Manager PIN', message, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'Enter the 4-digit manager PIN.' });
       if (!pin) return false;
       if (pin === managerPin) return true;
       // Allow main PIN as fallback if manager not set correctly
@@ -1591,7 +1764,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
     const hash = localStorage.getItem('boss_pos_pin');
     if (!hash || hash.startsWith('fb_')) return true;
-    const pin = window.prompt(message);
+    const pin = await promptDialog({ title: 'Till PIN', message, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'Enter the 4-digit till PIN.' });
     if (!pin) return false;
     if (await verifyPinAgainstHash(pin, hash)) return true;
     triggerToast('Wrong PIN — action cancelled', 'error');
@@ -1603,7 +1776,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     const sale = sales.find(s => s.id === saleId);
     if (!sale || sale.refunded) return;
     if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
-    if (!confirm(`Delete ${sale.orderNumber} (${formatCurrency(sale.total)}) for good? The items go back into stock and it disappears from reports.`)) return;
+    if (!(await confirmDialog({ title: 'Delete sale', message: `Delete ${sale.orderNumber} (${formatCurrency(sale.total)}) for good? The items go back into stock and it disappears from reports.`, confirmLabel: 'Delete', danger: true }))) return;
     // Tombstone FIRST so a stale boot cache can never resurrect it.
     addDeletedSale(saleId);
     try { logVoidDay(saleId); } catch {}
@@ -1684,7 +1857,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           .filter(Boolean)
           .join(', ')
       : '';
-    if (!window.confirm(`Return ${label}?\n\n${sale.orderNumber} will be refunded and re-rung without ${clamped.length > 1 ? 'them' : 'it'}.`)) return;
+    if (!(await confirmDialog({ title: 'Return items', message: `Return ${label}?\n\n${sale.orderNumber} will be refunded and re-rung without ${clamped.length > 1 ? 'them' : 'it'}.`, confirmLabel: 'Return', danger: true }))) return;
     const refunded = await handleRefundSale(saleId);
     if (!refunded) return;
     if (kept.length === 0) return;
@@ -1732,7 +1905,67 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     await handleRefundSale(saleId, true);
   };
 
+  const inflightExpenses = useRef(new Map<string, Promise<void>>());
+  // Reopening a day must clear the server's close session as well, or every
+  // write keeps being rejected after the till's own record is gone.
+  const handleReopenDay = async () => {
+    try {
+      const session = await closeSessionApi.current();
+      if (session?.id && session.status === 'closed') {
+        await closeSessionApi.reopen(session.id, 'Reopened from the till to keep trading');
+        triggerToast('Books reopened for today', 'success');
+      }
+    } catch (err) {
+      if (err instanceof ApiError && (err.code === 'CLOSE_SESSION_NOT_FOUND' || err.status === 404)) return;
+      triggerToast('Could not reopen the books on the server — check the connection', 'error');
+    }
+  };
+
+  // What the till has left for tomorrow's production: the capital set aside at
+  // close, minus the batches already logged today. This is the number the
+  // kitchen works against, so the drawer never quietly over-commits.
+  const ingredientBudgetToday = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const setAside = Math.max(0, Number(settings.eodCapital?.Eatery || 0) + Math.max(0, Number(settings.eodCapital?.Drinks || 0)));
+    if (setAside <= 0) return undefined;
+    const spent = productionRegisters
+      .filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === today)
+      .reduce((sum, p) => sum + (p.total || 0), 0);
+    return Math.max(0, setAside - spent);
+  }, [settings.eodCapital, productionRegisters]);
+
+  // A batch that overspends the set-aside money still has to be funded. Record
+  // the top-up as a real movement (to float / owner / manager) so the drawer
+  // reconciliation stays honest instead of quietly going negative.
+  const handleIngredientTopUp = async (amount: number, reason: string) => {
+    const amt = Math.max(0, Math.round(amount));
+    const who = activeStaff?.name || staffName || 'Till';
+    try {
+      await handleAddMomoTransfer({
+        id: `mt-topup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        category: 'Eatery',
+        amount: amt || 1,
+        comment: `Ingredient top-up — ${reason}`.slice(0, 200),
+        createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
+        to: 'float',
+        sentBy: who,
+      });
+      if (amt > 0) {
+        setSettings(prev => ({
+          ...prev,
+          eodCapital: { ...(prev.eodCapital || {}), Eatery: Math.max(0, Number(prev.eodCapital?.Eatery || 0) + amt) },
+        }));
+      }
+      triggerToast('Ingredient top-up recorded', 'success');
+    } catch {
+      triggerToast('Could not record the top-up — try from Close day → Money moved', 'error');
+    }
+  };
+
   const handleAddExpense = async (newExpense: Expense) => {
+    const inflight = inflightExpenses.current.get(newExpense.id);
+    if (inflight) return inflight;
+    const run = (async () => {
     // Stamp who recorded it (clocked-in seller wins) + default source drawer.
     const who = activeStaff?.name || staffName;
     const stamped = {
@@ -1742,10 +1975,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         ? {}
         : { source: 'drawer' }),
     } as Expense;
-    setExpenses(prev => [stamped, ...prev]);
+    setExpenses(prev => prev.some(e => e.id === stamped.id)
+      ? prev.map(e => e.id === stamped.id ? stamped : e)
+      : [stamped, ...prev]);
     try { await expenseApi.create(stamped); } catch {
       setExpenses(prev => prev.filter(e => e.id !== newExpense.id));
       triggerToast('Failed to save expense — not added', 'error');
+    }
+    })();
+    inflightExpenses.current.set(newExpense.id, run);
+    try {
+      await run;
+    } finally {
+      inflightExpenses.current.delete(newExpense.id);
     }
   };
 
@@ -1845,6 +2087,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffVerifyError(null);
     try {
       const s = await staffApi.verify(id, pin);
+      if (s.token) setStaffToken(s.token);
+      markUnlocked();
       const prevName = activeStaff?.name || staffName || '';
       setActiveStaffId(s.id);
       try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
@@ -1852,9 +2096,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setShowStaffSwitcher(false);
       // Shift handover: count the drawer as it changes hands (optional, skippable).
       if (prevName && prevName !== s.name) {
-        const raw = window.prompt(`Handover ${prevName} → ${s.name}.
-Count the drawer now (UGX)? Empty = skip.`, '');
-        if (raw !== null && raw.trim() !== '') {
+        const raw = await promptDialog({ title: 'Shift handover', message: `Handover ${prevName} → ${s.name}.\nCount the drawer now (UGX)? Empty = skip.`, defaultValue: '', inputMode: 'numeric', placeholder: '0 = skip', confirmLabel: 'Count' });
+        if (raw !== null && raw !== '') {
           const amt = Math.max(0, Math.round(parseFloat(raw) || 0));
           try {
             const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
@@ -1875,11 +2118,10 @@ Count the drawer now (UGX)? Empty = skip.`, '');
     }
   };
 
-  const handleSwitchStaff = () => {
-    // Legacy tills (no staff rows): free-text seller name, as before.
+  const handleSwitchStaff = async () => {
     if (!staffConfigured) {
-      const name = window.prompt('Who is selling? (cashier name for this phone)');
-      if (name && name.trim()) setStaffName(name.trim());
+      const name = await promptDialog({ title: 'Who is selling?', message: 'Cashier name for this phone', placeholder: 'e.g. Amina' });
+      if (name) setStaffName(name);
       return;
     }
     setStaffVerifyError(null);
@@ -1947,20 +2189,45 @@ Count the drawer now (UGX)? Empty = skip.`, '');
     }
   };
 
+  // A closed business day is a real, common cause here: the till locks the
+  // books on Close day, so credit entries after that are rejected by design.
+  const creditSaveFailure = (err: unknown, eater: CreditEat): string => {
+    const e = err as { message?: string; code?: string };
+    if (e?.code === 'SESSION_CLOSED') return 'That day\u2019s books are closed — reopen the day to change it';
+    if (e?.code === 'CREDIT_LIMIT_EXCEEDED') return `${eater.customerName} is over their credit limit — a manager must approve it`;
+    if (e?.code === 'TOTAL_MISMATCH') return 'Quantity and price do not match the total — check the numbers';
+    if (e?.code === 'INVALID_AMOUNT' || e?.code === 'INVALID_CREDIT_RECORD') return 'Enter a price and an item for the credit';
+    if (e?.code === 'MANAGER_REQUIRED') return 'Only a manager can do that — ask them to sign in';
+    if (/timeout|fetch failed|Failed to fetch|Load failed/i.test(String(e?.message || ''))) {
+      return 'No connection — the credit is queued and will sync when you are back online';
+    }
+    return `Failed to save credit entry — not added${e?.message ? ` (${String(e.message).slice(0, 80)})` : ''}`;
+  };
+
   const handleAddCreditEat = async (newEat: CreditEat) => {
     setCreditEats(prev => [newEat, ...prev]);
-    try { await creditEatApi.create(newEat); } catch {
+    try {
+      await creditEatApi.create(newEat);
+    } catch (err) {
+      // Queued writes come back as a success-shaped result, so a throw here is
+      // a real rejection. Offline first-try goes through enqueue() and never
+      // throws, which is why this branch is safe to surface.
       setCreditEats(prev => prev.filter(c => c.id !== newEat.id));
-      triggerToast('Failed to save credit entry — not added', 'error');
+      triggerToast(creditSaveFailure(err, newEat), 'error');
     }
   };
 
   const handlePayCreditEat = async (id: string, amount: number) => {
     const prev = creditEats.find(c => c.id === id);
     const next = { ...(prev as CreditEat), paidAmount: (prev?.paidAmount || 0) + amount, paid: (prev?.paidAmount || 0) + amount >= (prev?.total || 0) };
+    // Book collections are cash in hand too — record a payment leg so close
+    // totals and the ledger see them (saleId namespaced, never collides).
+    const leg: CreditPayment = { id: `cp-${Date.now()}`, saleId: `book:${id}`, amount, createdAt: new Date().toISOString() };
     setCreditEats(cs => cs.map(c => c.id === id ? next : c));
+    setCreditPayments(prevPs => [leg, ...prevPs]);
     try { await creditEatApi.pay(id, amount); } catch {
       if (prev) setCreditEats(cs => cs.map(c => c.id === id ? prev : c));
+      setCreditPayments(prevPs => prevPs.filter(p => p.id !== leg.id));
       triggerToast('Failed to sync payment to server', 'error');
     }
   };
@@ -2289,14 +2556,19 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             categories={categories}
             staffName={activeStaff?.name || staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
-            staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
-            tillBranch={tillBranch}
-            productionRegisters={productionRegisters}
+             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
+             tillBranch={tillBranch}
+             draftScope={draftScope}
+             cartDraftReady={cartDraftReady}
+             productionRegisters={productionRegisters}
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+
+            ingredientBudgetToday={ingredientBudgetToday}
+            onRecordIngredientTopUp={handleIngredientTopUp}
             hideMoney={!!settings.blindClose && !isManager}
             simple={isSimpleNav}
             hideGuide={tourVisible}
@@ -2367,14 +2639,17 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             onDeleteMomoTransfer={handleDeleteMomoTransfer}
             staffName={staffName || undefined}
             shopName={settings.shopName}
+            ownerName={settings.ownerName || ''}
+            staff={staffList}
             eodCapital={settings.eodCapital}
             onSetEodCapital={(cat, value) => setSettings(prev => ({ ...prev, eodCapital: { ...(prev.eodCapital || {}), [cat]: value } }))}
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
+            onReopenDay={handleReopenDay}
             lang={settings.language}
             onPrintClose={() => printDailyClose(new Date().toISOString().slice(0, 10), sales, expenses, products)}
             onSendClose={() => {
-              const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
+              const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
               if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
               window.open(url, '_blank', 'noopener');
             }}
@@ -2434,14 +2709,18 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             categories={categories}
             staffName={activeStaff?.name || staffName} setStaffName={setStaffName}
             onSaveCustomProduct={handleSaveCustomProduct}
-            staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
-            tillBranch={tillBranch}
-            productionRegisters={productionRegisters}
+             staffConfigured={staffConfigured} onOpenStaffSwitcher={handleSwitchStaff}
+             tillBranch={tillBranch}
+             draftScope={draftScope}
+             cartDraftReady={cartDraftReady}
+             productionRegisters={productionRegisters}
             onAddProduction={handleAddProduction} onDeleteProduction={handleDeleteProduction}
             salesHistory={sales} wastageLogs={wastageLogs}
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+            ingredientBudgetToday={ingredientBudgetToday}
+            onRecordIngredientTopUp={handleIngredientTopUp}
             hideMoney={!!settings.blindClose && !isManager}
             simple={isSimpleNav}
             hideGuide={tourVisible}
@@ -2504,9 +2783,9 @@ Count the drawer now (UGX)? Empty = skip.`, '');
         '--color-gold-light': THEME_MAP.get(settings.themeId)?.light ?? '#ffedc3',
       } as Record<string, string>}
     >
-      <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center gap-2 px-3 sm:px-4 py-3 h-16 w-full">
+      <header className="bg-[#141414] border-b border-white/5 sticky top-0 z-50 flex justify-between items-center gap-2 px-3 sm:px-4 py-2 h-14 w-full overflow-hidden">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <h1 className="text-sm sm:text-base md:text-lg font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[110px] min-[400px]:max-w-[150px] sm:max-w-none shrink-0">
+          <h1 className="text-xs sm:text-sm md:text-base font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[90px] min-[400px]:max-w-[130px] sm:max-w-none shrink-0">
             {settings.shopName}
           </h1>
           {!isOnline && (
@@ -2519,7 +2798,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
           </span>
           {pendingCount > 0 ? (
             <span className="text-[8px] bg-amber-950/40 text-amber-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-amber-500/30" title={`${pendingCount} unsynced change(s)`}>
-              {pendingCount} unsynced
+              {pendingCount}<span className="hidden sm:inline"> unsynced</span>
             </span>
           ) : lastSyncedAt ? (
             <span className="hidden md:inline-block text-[8px] bg-emerald-950/40 text-emerald-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-emerald-500/30" title="Latest server sync time">
@@ -2537,13 +2816,13 @@ Count the drawer now (UGX)? Empty = skip.`, '');
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {installPrompt && (
             <button onClick={() => { runInstallPrompt(); }}
-              className="h-8 px-2.5 sm:px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer shrink-0">
+              className="h-7 px-2 sm:px-3 bg-gold-brand text-black font-black text-[10px] rounded-lg uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer shrink-0">
               Install<span className="hidden sm:inline"> app</span>
             </button>
           )}
           <button onClick={handleSwitchStaff} title={staffConfigured ? 'Switch seller (PIN-checked)' : 'Who is selling'}
             aria-label={staffConfigured ? `Switch seller, currently ${activeStaff?.name || staffName || 'unset'}` : 'Set seller name'}
-            className="flex items-center gap-1.5 h-8 px-2 sm:px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer min-w-0">
+            className="flex items-center gap-1.5 h-7 px-2 sm:px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer min-w-0">
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeStaff ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
             <span className="max-w-[64px] min-[400px]:max-w-[90px] sm:max-w-[120px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
             {staffConfigured && <span className="hidden sm:inline text-[8px] text-zinc-600 shrink-0">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
@@ -2553,16 +2832,33 @@ Count the drawer now (UGX)? Empty = skip.`, '');
             const next = theme === 'light' ? 'dark' : 'light';
             setTheme(next);
             try { localStorage.setItem(THEME_KEY, next); } catch {}
-          }} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} aria-label="Toggle dark mode">
+          }} className="p-1.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} aria-label="Toggle dark mode">
             {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
           </button>
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
+          <button onClick={() => setIsSettingsOpen(true)} className="p-1.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0" title="Settings" id="settings-gear-btn">
             <Settings className="w-4 h-4" />
           </button>
         </div>
       </header>
 
       <main className="flex-1 px-4 pt-4 pb-[calc(5rem+env(safe-area-inset-bottom))] max-w-7xl mx-auto w-full">
+        <CloseReminderBar
+          hours={settings}
+          leadMinutes={settings.closeReminderLeadMin}
+          soundOn={settings.closeReminderSound !== false}
+          onStartClose={() => setActiveTab('registers')}
+          onDismiss={() => {}}
+        />
+        {pendingHandoffs.length > 0 && (
+          <HandoverPrompt
+            pending={pendingHandoffs}
+            summary={handoffSummary}
+            currentStaffName={activeStaff?.name || staffName}
+            formatCurrency={formatCurrency}
+            onConfirm={confirmHandoff}
+            onDismiss={() => {}}
+          />
+        )}
         {!isOnline && (
           <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-950/25 px-4 py-3 mb-4 flex items-center gap-3">
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" aria-hidden="true" />
@@ -2911,7 +3207,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                   <option value="General Store">General Store</option>
                 </select>
                 {settings.vibe !== 'General Store' && (
-                  <button onClick={() => {
+                  <button onClick={async () => {
                     const presets: Record<string, { cats: string[]; tailoring?: boolean; design?: boolean }> = {
                       'Eatery & Food': { cats: ['Eatery', 'Drinks'] },
                       'Phone & Accessories': { cats: ['Phones', 'Accessories', 'Airtime'] },
@@ -2919,7 +3215,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     };
                     const preset = presets[settings.vibe];
                     if (!preset) return;
-                    if (!window.confirm(`Set this shop up for ${settings.vibe}?\n\nCategories become: ${preset.cats.join(', ')}.\nYour products stay — recategorize them in Stock afterwards.`)) return;
+                    if (!(await confirmDialog({ title: 'Set up shop', message: `Set this shop up for ${settings.vibe}?\n\nCategories become: ${preset.cats.join(', ')}.\nYour products stay — recategorize them in Stock afterwards.`, confirmLabel: 'Set up' }))) return;
                     try { localStorage.removeItem(NO_DRINKS_KEY); } catch {}
                     setCategories(preset.cats);
                     if (preset.tailoring) setSettings(prev => ({ ...prev, showTailoring: true }));
@@ -2974,6 +3270,58 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </div>
                 <p className="text-[10px] text-zinc-600">Close-out flags fire {settings.closeTime ? `after ${settings.closeTime}` : 'anytime until you set a closing time'}.</p>
               </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  Closing reminder
+                  <SettingHelp label="Closing reminder" text="How long before your closing time the till starts reminding the cashier to close the day. Set the pace that suits your business — leave it off if you close at different times each day." />
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[[0, 'Off'], [15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '60 min']].map(([mins, label]) => {
+                    const value = Number(mins);
+                    const active = (settings.closeReminderLeadMin || 0) === value;
+                    return (
+                      <button key={String(mins)} onClick={() => setSettings(prev => ({ ...prev, closeReminderLeadMin: value }))}
+                        className={`h-11 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-95 border ${
+                          active ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/5 text-zinc-400 hover:text-zinc-200'
+                        }`}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between gap-2 mt-1">
+                  <p className="text-[10px] text-zinc-600 font-bold uppercase">
+                    {settings.closeReminderLeadMin
+                      ? `The sell screen counts down and reminds ${settings.closeReminderLeadMin} min before ${settings.closeTime || 'close'}.`
+                      : 'No reminder — the till never nudges the cashier.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <button onClick={() => setSettings(prev => ({ ...prev, closeReminderSound: !prev.closeReminderSound }))}
+                    className={`flex-1 h-11 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-95 border ${
+                      settings.closeReminderSound !== false ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/5 text-zinc-400'
+                    }`}>
+                    Sound
+                  </button>
+                  <button onClick={() => setSettings(prev => ({ ...prev, closeSummaryAuto: prev.closeSummaryAuto !== false }))}
+                    className={`flex-1 h-11 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-95 border ${
+                      settings.closeSummaryAuto !== false ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/5 text-zinc-400'
+                    }`}>
+                    Auto owner summary
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  Owner
+                  <SettingHelp label="Owner" text="The name shown when money is handed to the owner. Every shop sets its own — nothing is hardcoded." />
+                </label>
+                <input type="text" value={settings.ownerName || ''}
+                  onChange={(e) => setSettings(prev => ({ ...prev, ownerName: e.target.value.slice(0, 60) || undefined }))}
+                  placeholder="e.g. the owner of this shop"
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                <p className="text-[10px] text-zinc-600">Shown as "Given to Owner (name)" when recording a handover.</p>
+              </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
                   <LayoutGrid className="w-3.5 h-3.5 text-gold-brand" /> Branches
@@ -2999,8 +3347,8 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                           <span key={b} className="flex items-center gap-1.5 bg-[#0A0A0A] border border-white/10 rounded-lg pl-2.5 pr-1.5 py-1 text-[11px] font-bold text-zinc-200">
                             {b}
                             <button
-                              onClick={() => {
-                                if (!confirm(`Delete branch "${b}"? Old sales keep the name, new sales can't use it.`)) return;
+                              onClick={async () => {
+                                if (!(await confirmDialog({ title: 'Delete branch', message: `Delete branch "${b}"? Old sales keep the name, new sales can't use it.`, confirmLabel: 'Delete', danger: true }))) return;
                                 setSettings(prev => ({ ...prev, branches: (prev.branches || []).filter(x => x !== b) }));
                                 if (tillBranch === b) setTillBranch('');
                                 triggerToast(`Deleted branch "${b}"`, 'info');
@@ -3013,8 +3361,8 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                           </span>
                         ))}
                         <button
-                          onClick={() => {
-                            if (!confirm('Clear ALL branches? Tills fall back to main shop.')) return;
+                          onClick={async () => {
+                            if (!(await confirmDialog({ title: 'Clear branches', message: 'Clear ALL branches? Tills fall back to main shop.', confirmLabel: 'Clear all', danger: true }))) return;
                             setSettings(prev => ({ ...prev, branches: [] }));
                             setTillBranch('');
                             triggerToast('All branches cleared', 'info');
@@ -3213,10 +3561,9 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title="Toggle role">
                           {s.role === 'manager' ? 'MGR' : 'CSH'}
                         </button>
-                        <button onClick={() => {
-                          const pin = window.prompt(`New 4-digit PIN for ${s.name}:`);
-                          if (pin && /^\d{4}$/.test(pin)) handleUpdateStaff(s.id, { pin });
-                          else if (pin) triggerToast('PIN must be 4 digits', 'error');
+                        <button onClick={async () => {
+                          const pin = await promptDialog({ title: 'Reset staff PIN', message: `New 4-digit PIN for ${s.name}:`, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
+                          if (pin) handleUpdateStaff(s.id, { pin });
                         }} className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title="Reset PIN">PIN</button>
                         <button onClick={() => handleUpdateStaff(s.id, { active: !s.active })}
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title={s.active ? 'Disable' : 'Enable'}>
@@ -3354,7 +3701,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     onChange={(e) => setSettings(prev => ({ ...prev, ownerPhone: e.target.value.replace(/\D/g, '').slice(0, 12) || undefined }))}
                     className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
                   <button onClick={() => {
-                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses), activeStaff?.name || staffName || undefined));
+                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
                     if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
                     window.open(url, '_blank', 'noopener');
                   }} className="w-full h-10 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60">
@@ -3392,15 +3739,14 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const newPin = prompt(settings.hasPin ? 'Enter new 4-digit PIN:' : 'Set a 4-digit PIN:');
-                    if (newPin && /^\d{4}$/.test(newPin)) { try { await handleSetPin(newPin); } catch { triggerToast('Failed to save PIN', 'error'); } }
-                    else if (newPin) { triggerToast('PIN must be 4 digits', 'error'); }
+                    const newPin = await promptDialog({ title: settings.hasPin ? 'Change till PIN' : 'Set till PIN', message: settings.hasPin ? 'Enter new 4-digit PIN:' : 'Set a 4-digit PIN:', secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
+                    if (newPin) { try { await handleSetPin(newPin); } catch { triggerToast('Failed to save PIN', 'error'); } }
                   }}
                     className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
                     {settings.hasPin ? 'Change PIN' : 'Set PIN'}
                   </button>
                   {settings.hasPin && (
-                    <button onClick={async () => { if (confirm('Remove PIN security?')) { try { await handleSetPin(''); } catch { triggerToast('Failed to remove PIN', 'error'); } } }}
+                    <button onClick={async () => { if (await confirmDialog({ title: 'Remove PIN', message: 'Remove PIN security?', confirmLabel: 'Remove', danger: true })) { try { await handleSetPin(''); } catch { triggerToast('Failed to remove PIN', 'error'); } } }}
                       className="h-10 px-3 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
                       Remove
                     </button>
@@ -3418,8 +3764,8 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <p className="text-[10px] text-zinc-600">Solo seller glued to the till? 30–60 min nags less. Shared phone? Keep 10. PIN is still required on load.</p>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const m = prompt(localStorage.getItem('boss_pos_manager_pin') ? 'Enter new MANAGER 4-digit PIN:' : 'Set MANAGER 4-digit PIN (for voids/refunds):');
-                    if (m && /^\d{4}$/.test(m)) {
+                    const m = await promptDialog({ title: 'Manager PIN', message: localStorage.getItem('boss_pos_manager_pin') ? 'Enter new MANAGER 4-digit PIN:' : 'Set MANAGER 4-digit PIN (for voids/refunds):', secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
+                    if (m) {
                       try { localStorage.setItem('boss_pos_manager_pin', m); } catch {}
                       try { await fetch('/api/settings', { method:'PUT', headers:{'Content-Type':'application/json', Authorization: `Bearer ${getAuthToken()}`}, body: JSON.stringify({ managerPin: m }) }); } catch {}
                       triggerToast('Manager PIN set', 'success');
@@ -3534,59 +3880,65 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 </button>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const before = outboxCount();
+                    const before = await outboxCountAsync();
                     const n = await flushOutbox();
-                    setPendingCount(outboxCount());
+                    await refreshOutboxState();
+                    const after = await outboxCountAsync();
                     if (n > 0) triggerToast(`Force-synced ${n} change(s)`, 'success');
-                    else if (outboxCount() > 0) {
-                      const sample = peekOutbox().slice(0,3).map(e=>e.path).join(', ');
-                      triggerToast(`Still ${outboxCount()}/${before} queued (${sample || 'retry'}) — re-enter PIN if needed`, 'error');
-                    } else triggerToast(before>0 ? 'Queue now empty' : 'Nothing pending', 'info');
-                    if (n>0) fetchAllData();
+                    else if (after > 0) {
+                      const items = await listOutboxItemsAsync();
+                      const sample = items.filter(e => e.status === 'queued' || e.status === 'retrying' || e.status === 'blocked_auth').slice(0, 3).map(e => e.path).join(', ');
+                      triggerToast(`Still ${after}/${before} queued (${sample || 'retry'}) — re-enter PIN if needed`, 'error');
+                    } else triggerToast(before > 0 ? 'Queue now empty' : 'Nothing pending', 'info');
+                    if (n > 0) fetchAllData();
                   }}
                     className="flex-1 h-10 bg-emerald-950/30 border border-emerald-800/40 text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/50 transition-all cursor-pointer">
                     Force sync now
                   </button>
                   <button onClick={async () => {
-                    if (!confirm(`Clear ALL ${outboxCount()} unsynced changes? This discards offline edits that failed to reach the server.`)) return;
-                    clearOutbox();
-                    setPendingCount(0);
+                    if (!(await confirmDialog({ title: 'Clear queue', message: `Clear ALL ${outboxCountsState.total} saved sync items? This discards offline edits and their review details.`, confirmLabel: 'Clear all', danger: true }))) return;
+                    await clearOutboxAsync();
+                    await refreshOutboxState();
                     triggerToast('Queue cleared — refresh to pull latest', 'info');
                   }}
                     className="flex-1 h-10 bg-rose-950/30 border border-rose-800/40 text-rose-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-rose-950/50 transition-all cursor-pointer">
                     Clear queue
                   </button>
                 </div>
-                {pendingCount > 0 && outboxPreview.length > 0 && (
+                {outboxPreview.length > 0 && (
                   <div className="rounded-xl border border-amber-800/30 bg-amber-950/20 overflow-hidden">
-                    <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 border-b border-amber-800/20">Queue — {pendingCount} pending</div>
-                    <div className="divide-y divide-white/5 max-h-32 overflow-y-auto">
-                      {outboxPreview.map((e) => (
-                        <div key={e.id} className="flex items-center justify-between gap-2 px-3 py-1.5 text-[10px] font-bold">
-                          <span className="text-zinc-300 truncate pr-2 min-w-0">{e.method} {e.path}</span>
-                          <span className="text-zinc-500 shrink-0">{e.age} ago</span>
-                          <button onClick={() => {
-                            if (!confirm(`Drop this queued change (${e.method} ${e.path})? It will never reach the server.`)) return;
-                            dropOutboxEntry(e.id);
-                            setPendingCount(outboxCount());
-                            triggerToast('Queued change dropped', 'info');
-                          }} aria-label={`Drop ${e.method} ${e.path}`}
-                            className="shrink-0 text-zinc-600 hover:text-rose-400 font-black uppercase text-[9px] px-1.5 py-1 cursor-pointer">
-                            Drop
-                          </button>
-                        </div>
-                      ))}
+                    <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-300 border-b border-amber-800/20">Sync items — {outboxCountsState.pending} pending · {outboxCountsState.failed} failed · {outboxCountsState.synced} synced</div>
+                    <div className="divide-y divide-white/5 max-h-48 overflow-y-auto">
+                      {outboxPreview.map((e) => {
+                        const ageMins = Math.max(0, Math.round((Date.now() - (e.statusAt || e.queuedAt)) / 60000));
+                        const age = ageMins < 1 ? 'now' : ageMins < 60 ? `${ageMins}m` : `${Math.round(ageMins / 60)}h`;
+                        const canRetry = e.status === 'failed' || e.status === 'blocked_auth' || e.status === 'retrying';
+                        return (
+                          <div key={e.id} className="px-3 py-2 text-[10px] font-bold">
+                            <div className="flex items-center gap-2">
+                              <span className={`shrink-0 px-1.5 py-0.5 rounded uppercase text-[8px] font-black ${e.status === 'failed' ? 'bg-rose-950 text-rose-300 border border-rose-800' : e.status === 'synced' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>
+                                {e.status.replace('_', ' ')}
+                              </span>
+                              <span className="text-zinc-300 truncate min-w-0">{e.entityLabel || e.entityType || e.method} · {e.method} {e.path}</span>
+                              <span className="text-zinc-500 shrink-0 ml-auto">{age}</span>
+                            </div>
+                            {e.lastError && <p className="text-rose-300/80 mt-1 truncate">{e.lastError}</p>}
+                            <div className="flex gap-2 mt-1">
+                              {canRetry && <button onClick={async () => { await retryOutboxEntry(e.id); await refreshOutboxState(); }} className="text-[9px] font-black uppercase text-amber-300 hover:text-white cursor-pointer">Retry</button>}
+                              <button onClick={async () => { await dismissOutboxEntryAsync(e.id); await refreshOutboxState(); }} className="text-[9px] font-black uppercase text-zinc-600 hover:text-rose-300 cursor-pointer">Dismiss</button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <button onClick={() => {
-                      const list = peekOutbox();
-                      if (!list.length) return;
-                      // Route through dropOutboxEntry (not a raw localStorage
-                      // write) so the IndexedDB mirror drops it too — otherwise
-                      // the next flush prefers the longer mirror and resurrects it.
-                      dropOutboxEntry(list[0].id);
-                      setPendingCount(outboxCount());
-                      triggerToast('Dropped oldest queued change', 'info');
-                    }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Drop oldest</button>
+                    <button onClick={async () => {
+                      const list = await listOutboxItemsAsync();
+                      const oldest = list.find(e => e.status === 'queued' || e.status === 'retrying' || e.status === 'blocked_auth');
+                      if (!oldest) return;
+                      await dismissOutboxEntryAsync(oldest.id);
+                      await refreshOutboxState();
+                      triggerToast('Dismissed oldest sync item', 'info');
+                    }} className="w-full h-7 text-[9px] font-black uppercase tracking-wider text-amber-400 hover:bg-amber-950/40">Dismiss oldest pending</button>
                   </div>
                 )}
                 {syncReview.length > 0 && (
@@ -3626,7 +3978,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     } catch { triggerToast('Check failed — try again', 'error'); }
                   }} className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40">Check gaps</button>
                   <button onClick={async () => {
-                    if (!confirm('Fix totals & clamp negative stock? This writes to server.')) return;
+                    if (!(await confirmDialog({ title: 'Fix gaps', message: 'Fix totals & clamp negative stock? This writes to server.', confirmLabel: 'Fix', danger: true }))) return;
                     try {
                       const r = await reconcileApi.fix();
                       setReconcileResult({ salesChecked: r.salesChecked, totalMismatches: r.totalMismatches, negativeStock: r.negativeStock });
@@ -3645,12 +3997,14 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                 <button onClick={async () => {
                   try {
                     const b = await backupsApi.data();
+                    if (!b.data) { triggerToast('No server backup yet — run one first', 'error'); return; }
                     const curProds = products.length;
-                    const backupProds = (b.data as unknown as { products?: unknown[] })?.products?.length ?? 0;
+                    const backupProds = backupTableRows(b.data, 'products');
                     const curSales = sales.length;
-                    const backupSales = (b.data as unknown as { sales?: unknown[] })?.sales?.length ?? 0;
-                    triggerToast(`Backup diff — Products: ${curProds} now vs ${backupProds} backup, Sales: ${curSales} vs ${backupSales}`, 'info');
-                  } catch { triggerToast('Backup diff failed', 'error'); }
+                    const backupSales = backupTableRows(b.data, 'sales');
+                    const when = b.createdAt ? new Date(b.createdAt).toLocaleString() : 'unknown time';
+                    triggerToast(`Backup ${b.id || ''} (${when}) — Products: ${backupProds} vs ${curProds} now, Sales: ${backupSales} vs ${curSales} now`, 'info');
+                  } catch (err) { triggerToast((err as { message?: string })?.message || 'Backup diff failed', 'error'); }
                 }} className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40">Compare with last backup</button>
                 <button onClick={handleExportData}
                   className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer flex items-center justify-center gap-2">
@@ -3693,7 +4047,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     e.target.value = '';
                   }}
                 />
-                <p className="text-[10px] text-zinc-600">Restoring merges over existing records. Create a fresh backup first.</p>
+                <p className="text-[10px] text-zinc-600">Restore merges by record ID: rows in the file overwrite the same rows here, nothing is deleted, and PINs, tokens, order numbers and backup flags stay as they are. Download a fresh backup first. Product photos are not inside the file.</p>
               </div>
               )}
               </SettingsSection>
@@ -3727,6 +4081,7 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                           <div className="min-w-0">
                             <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider truncate">{entry.action}</p>
                             <p className="text-[9px] text-zinc-500 font-bold truncate">{entry.detail}</p>
+                            {entry.requestId && <p className="text-[9px] text-zinc-600 font-mono truncate">trace {entry.requestId}</p>}
                           </div>
                           <span className="text-[9px] text-zinc-600 font-bold shrink-0">
                             {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -3739,6 +4094,51 @@ Count the drawer now (UGX)? Empty = skip.`, '');
                     </div>
                   </div>
                 )}
+              </div>
+              <div className="border-t border-white/5 pt-3 space-y-2">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Support</label>
+                <div className="flex items-center justify-between text-[10px] text-zinc-500 font-bold">
+                  <span>Server</span>
+                  <span className={supportReport ? (supportReport.status === 'ready' ? 'text-emerald-300' : 'text-amber-300') : 'text-zinc-600'}>
+                    {supportReport ? `${supportReport.status} · build ${supportReport.build} · up ${Math.round(supportReport.uptimeSeconds / 60)}m` : 'Checking…'}
+                  </span>
+                </div>
+                {supportReport && !supportReport.database.ok && (
+                  <p className="text-[10px] text-amber-300 font-bold">
+                    Server database unreachable ({supportReport.database.error || 'error'}) — sales are being queued on this device
+                    {supportReport.traceId ? ` · trace ${supportReport.traceId}` : ''}
+                  </p>
+                )}
+                <div className="flex items-center justify-between text-[10px] text-zinc-500 font-bold">
+                  <span>Error reports on this device</span>
+                  <span>{clientErrors.length} kept</span>
+                </div>
+                {clientErrors.slice(0, 3).map(row => (
+                  <div key={row.id} className="bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2 text-[10px] font-bold">
+                    <p className="text-zinc-300 truncate">{row.msg}</p>
+                    <p className="text-[9px] text-zinc-600 font-bold">
+                      {row.kind} · {new Date(row.at).toLocaleString()}
+                      {row.sent ? ' · reported' : ' · waiting for signal'}
+                      {row.traceId ? ` · trace ${row.traceId}` : ''}
+                    </p>
+                  </div>
+                ))}
+                <button onClick={async () => {
+                  const summary = supportSummary({
+                    serverBuild: supportReport?.build,
+                    serverStatus: supportReport?.status,
+                    traceId: supportReport?.traceId || clientErrors.find(r => r.traceId)?.traceId,
+                  });
+                  try {
+                    if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
+                    await navigator.clipboard.writeText(summary);
+                    triggerToast('Support details copied', 'success');
+                  } catch {
+                    triggerToast('Copy not available on this device', 'error');
+                  }
+                }} className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
+                  Copy support details
+                </button>
               </div>
             </>)}
             </div>

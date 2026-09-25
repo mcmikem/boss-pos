@@ -15,7 +15,7 @@ const skipWritesMsg = 'ALLOW_TEST_WRITES not set — skipping admin write round-
 
 let server;
 let base;
-const ADMIN = 'local-dev-admin';
+const ADMIN = process.env.SUPER_ADMIN_SECRET || 'local-dev-admin';
 
 before(async () => {
   if (!HAS_DB) return;

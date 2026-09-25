@@ -24,6 +24,58 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+.skip-link {
+  position: fixed;
+  top: 0;
+  left: 1rem;
+  z-index: 10000;
+  transform: translateY(-150%);
+  border: 2px solid #ffec00;
+  border-radius: 0 0 0.5rem 0.5rem;
+  background: #0A0A0A;
+  color: #fff;
+  padding: 0.75rem 1rem;
+  font-weight: 800;
+}
+
+.skip-link:focus {
+  transform: translateY(0.75rem);
+}
+
+a:focus,
+button:focus,
+input:focus,
+select:focus,
+textarea:focus,
+summary:focus,
+[tabindex]:focus {
+  outline: 3px solid #ffec00;
+  outline-offset: 2px;
+}
+
+@supports selector(:focus-visible) {
+  a:focus:not(:focus-visible),
+  button:focus:not(:focus-visible),
+  input:focus:not(:focus-visible),
+  select:focus:not(:focus-visible),
+  textarea:focus:not(:focus-visible),
+  summary:focus:not(:focus-visible),
+  [tabindex]:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 3px solid #ffec00;
+    outline-offset: 2px;
+  }
+}
+
 /* Fixed bottom navigation must not cover the last action in scrollable panels. */
 [id$="-scroll-container"],
 #catalog-scroll-container {
@@ -275,12 +327,48 @@ html {
 /* Motion sensitivity: kill decorative animation (ping, bounce, glow,
    entrance) while keeping state readable. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-in, .animate-tour-card-in, .animate-fab-pop,
-  .animate-ping, .animate-bounce, .animate-pulse, .animate-tour-glow {
-    animation: none !important;
+  html,
+  body {
+    scroll-behavior: auto !important;
   }
-  .tour-draw {
-    animation-duration: 0.01s !important;
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus {
+    outline: 3px solid Highlight !important;
+  }
+
+  .boss-card,
+  [role="alert"],
+  [role="dialog"],
+  [role="status"] {
+    border: 1px solid CanvasText;
+    forced-color-adjust: auto;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"] {
+    forced-color-adjust: auto;
+  }
+
+  [aria-pressed="true"],
+  [aria-selected="true"] {
+    outline: 2px solid Highlight;
+  }
+
+  button:disabled {
+    color: GrayText;
+    opacity: 1;
   }
 }
 

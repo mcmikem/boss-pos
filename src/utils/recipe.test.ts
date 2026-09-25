@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ingredientCost, calculateRecipe, suggestedFor, effectiveCost, emptyRecipe, applySupplierPricesToRecipes, preferredSupplierQuote } from './recipe';
+import { ingredientCost, calculateRecipe, suggestedFor, effectiveCost, emptyRecipe, applySupplierPricesToRecipes, preferredSupplierQuote, convertPurchasePrice, supplierPriceForUnit } from './recipe';
 import type { Product, SupplierPrice } from '../types';
 
 describe('ingredientCost', () => {
@@ -154,5 +154,42 @@ describe('supplier price propagation', () => {
     const second = applySupplierPricesToRecipes(first.products, quotes);
     expect(second.changedProducts).toHaveLength(0);
     expect(second.matchedIngredients).toBe(1);
+  });
+});
+
+describe('purchase unit conversion', () => {
+  it('converts a bulk price into the recipe unit', () => {
+    expect(convertPurchasePrice(300000, 50, 'kg', 'kg')).toMatchObject({ valid: true, unitCost: 6000, targetQuantity: 50 });
+    expect(convertPurchasePrice(300000, 50, 'kg', 'g')).toMatchObject({ valid: true, unitCost: 6, targetQuantity: 50000 });
+  });
+
+  it('rejects container units until a pack size is known', () => {
+    expect(convertPurchasePrice(300000, 1, 'bag', 'pcs')).toMatchObject({ valid: false, reason: 'Pack size must be entered before conversion' });
+  });
+
+  it('uses quote metadata when propagating to a recipe and stock unit', () => {
+    const quote: SupplierPrice = {
+      id: 'q', supplierId: 's', productId: 'flour', price: 300000, updatedAt: 'x',
+      purchaseQty: 50, purchaseUnit: 'kg', normalizedUnit: 'kg',
+    };
+    const product: Product = {
+      id: 'flour', name: 'Flour', category: 'Groceries', cost: 4000, price: 5000,
+      stockQty: 20, lowStockThreshold: 5, stockUnit: 'kg',
+    };
+    const recipe: Product = {
+      id: 'chapati', name: 'Chapati', category: 'Eatery', cost: 400, price: 1000,
+      stockQty: 0, lowStockThreshold: 0,
+      recipe: {
+        ingredients: [{ id: 'flour-line', name: 'Flour', qty: 1, unit: 'g', unitCost: 5, unitCostUnit: 'g', wastePct: 0 }],
+        yield: 1, overhead: 0, targetMarginPct: 60,
+      },
+    };
+    const result = applySupplierPricesToRecipes([product, recipe], [quote]);
+    expect(result.products.find(p => p.id === 'chapati')?.recipe?.ingredients[0]).toMatchObject({ unitCost: 6, unitCostUnit: 'g' });
+    expect(result.products.find(p => p.id === 'flour')?.cost).toBe(6000);
+  });
+
+  it('does not invent a conversion for an unconfigured supplier quote', () => {
+    expect(supplierPriceForUnit({ id: 'q', supplierId: 's', productId: 'p', price: 5000, updatedAt: 'x' }, 'kg')).toMatchObject({ valid: true, unitCost: 5000 });
   });
 });

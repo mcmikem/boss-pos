@@ -6,9 +6,10 @@
 // Drinks lines with a recipe) are made here.
 import { useMemo, useState } from 'react';
 import { ChefHat, Check, Trash2, ArrowRight } from 'lucide-react';
-import type { Product, ProductionRegister, Sale, WastageLog } from '../types';
+import type { Product, ProductionRegister, RecipeIngredient, Sale, WastageLog } from '../types';
 import { todayLocalKey } from '../utils/dates';
 import { leftoverFor, prevDayKey } from '../utils/cashflow';
+import { confirmDialog } from './Dialog';
 
 interface MorningProductionProps {
   products: Product[];
@@ -19,11 +20,15 @@ interface MorningProductionProps {
   onDeleteProduction: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  // Draft money set aside at close for tomorrow's ingredients. Logging today's
+  // batch spends it, so the kitchen can see what is left to work with.
+  availableBudget?: number;
+  onRequestTopUp?: (amount: number) => void;
 }
 
 export default function MorningProduction({
   products, productionRegisters, sales = [], wastageLogs = [], onAddProduction, onDeleteProduction,
-  formatCurrency, triggerToast,
+  formatCurrency, triggerToast, availableBudget, onRequestTopUp,
 }: MorningProductionProps) {
   const eateryProducts = useMemo(
     () => products.filter(p => p.category === 'Eatery' || (p.category === 'Drinks' && !!p.recipe)),
@@ -34,6 +39,11 @@ export default function MorningProduction({
   const [prodProductId, setProdProductId] = useState<string | null>(null);
   const [prodQty, setProdQty] = useState('');
   const [prodCost, setProdCost] = useState('');
+  // When the chosen item has a recipe, its ingredients load with today's prices
+  // and stay editable. Editing a price here also writes back to the recipe, so
+  // the next morning starts from what was actually paid.
+  const [draftIngredients, setDraftIngredients] = useState<RecipeIngredient[] | null>(null);
+  const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
 
   const today = todayLocalKey();
   const todayMade = useMemo(
@@ -52,9 +62,9 @@ export default function MorningProduction({
     () => productionRegisters.filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === yesterdayKey),
     [productionRegisters, yesterdayKey]
   );
-  const repeatYesterday = () => {
+  const repeatYesterday = async () => {
     if (yesterdayRegs.length === 0) return;
-    if (!window.confirm(`Log yesterday's ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} again for today?`)) return;
+    if (!(await confirmDialog({ title: 'Repeat batch', message: `Log yesterday's ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} again for today?`, confirmLabel: 'Repeat' }))) return;
     yesterdayRegs.forEach(r => onAddProduction({
       ...r,
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -74,19 +84,52 @@ export default function MorningProduction({
       setProdCustomItem('');
       setProdCost('');
       setProdProductId(null);
+      setDraftIngredients(null);
+      setRecipeProductId(null);
+      return;
+    }
+    const prod = eateryProducts.find(p => p.name === value);
+    setProdProductId(prod ? prod.id : null);
+    if (prod) setProdCost(String(prod.cost || ''));
+    const hasRecipe = !!prod?.recipe && Array.isArray(prod.recipe.ingredients) && prod.recipe.ingredients.length > 0;
+    if (hasRecipe && prod) {
+      setRecipeProductId(prod.id);
+      setDraftIngredients(prod.recipe!.ingredients.map(ing => ({ ...ing })));
     } else {
-      const prod = eateryProducts.find(p => p.name === value);
-      setProdProductId(prod ? prod.id : null);
-      if (prod) setProdCost(String(prod.cost || ''));
+      setRecipeProductId(null);
+      setDraftIngredients(null);
     }
   };
+
+  const recipeTotal = useMemo(() => {
+    if (!draftIngredients || draftIngredients.length === 0) return 0;
+    return draftIngredients.reduce((sum, ing) => {
+      const qty = Number(ing.qty) || 0;
+      const unit = Number(ing.unitCost) || 0;
+      const waste = 1 + (Math.max(0, Number(ing.wastePct) || 0) / 100);
+      return sum + qty * unit * waste;
+    }, 0);
+  }, [draftIngredients]);
+
+  const costEachFromRecipe = useMemo(() => {
+    if (recipeTotal <= 0) return 0;
+    const prod = eateryProducts.find(p => p.id === recipeProductId);
+    const overhead = Number(prod?.recipe?.overhead) || 0;
+    const yieldQty = Math.max(1, Number(prod?.recipe?.yield) || 1);
+    const batchQty = Math.max(1, parseInt(prodQty, 10) || 0);
+    const batches = batchQty / yieldQty;
+    return batches > 0 ? (recipeTotal + overhead * batches) / batchQty : 0;
+  }, [recipeTotal, recipeProductId, prodQty, eateryProducts]);
 
   const handleSubmit = () => {
     const item = prodItem === '__custom' ? prodCustomItem.trim() : prodItem;
     if (!item) { triggerToast('Select the item', 'error'); return; }
     const qty = parseInt(prodQty, 10) || 0;
     if (qty <= 0) { triggerToast('Enter the number made', 'error'); return; }
-    const cost = parseFloat(prodCost) || 0;
+    // A recipe-derived cost beats a typed one: it is what the ingredients
+    // actually cost at today's prices.
+    const derived = costEachFromRecipe;
+    const cost = derived > 0 ? derived : (parseFloat(prodCost) || 0);
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     const prod = eateryProducts.find(p => p.name === item) || null;
     onAddProduction({
@@ -99,8 +142,18 @@ export default function MorningProduction({
       costEach: cost,
       total: Math.round(qty * cost),
     });
-    triggerToast(`Production logged: ${qty} × ${item}`, 'success');
+    triggerToast(
+      derived > 0
+        ? `Production logged: ${qty} × ${item} · ${formatCurrency(Math.round(cost * qty))} of ingredients`
+        : `Production logged: ${qty} × ${item}`,
+      'success',
+    );
+    if (derived > 0 && onRequestTopUp && availableBudget != null) {
+      const spent = Math.round(cost * qty);
+      if (spent > availableBudget) onRequestTopUp(spent - availableBudget);
+    }
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
+    setDraftIngredients(null); setRecipeProductId(null);
   };
 
   return (
@@ -117,6 +170,29 @@ export default function MorningProduction({
       <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2 leading-snug">
         One place for kitchen batches: logging here updates Stock automatically — don't add the same pieces in Stock, or they count twice.
       </p>
+
+      {availableBudget != null && (
+        <div className={`boss-card p-3 border-l-4 ${availableBudget - todayCost > 0 ? 'border-l-emerald-500' : 'border-l-rose-500'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Ingredient money set aside</p>
+              <p className="text-lg font-black text-white font-display mt-1">
+                {formatCurrency(availableBudget - todayCost)}
+                <span className="text-xs text-zinc-500 font-bold"> left of {formatCurrency(availableBudget)}</span>
+              </p>
+            </div>
+            {availableBudget - todayCost <= 0 && onRequestTopUp && (
+              <button onClick={() => onRequestTopUp(0)}
+                className="shrink-0 h-10 px-3 bg-rose-950/40 border border-rose-600/40 text-rose-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-rose-950/60 active:scale-95 transition-all cursor-pointer">
+                Need more
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1.5">
+            This was set aside at close for tomorrow's production. Logging a batch spends it.
+          </p>
+        </div>
+      )}
 
       <div className="boss-card p-3 border-l-4 border-l-amber-500">
         <div className="flex items-center justify-between gap-2">
@@ -147,7 +223,7 @@ export default function MorningProduction({
                   </p>
                   {r.carried > 0 && r.gap !== 0 && (
                     <p className="text-[10px] font-black uppercase mt-0.5 text-amber-300">
-                      Tray says {r.carried}, math says {r.leftover} — {Math.abs(r.gap)} {r.gap > 0 ? 'missing' : 'extra'}
+                      Tray says {r.carried}, math says {r.expected} — {Math.abs(r.gap)} {r.gap > 0 ? 'missing' : 'extra'}
                     </p>
                   )}
                 </div>
@@ -197,10 +273,45 @@ export default function MorningProduction({
               placeholder="e.g. 100" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
           </div>
         </div>
+        {draftIngredients && draftIngredients.length > 0 ? (
+          <div className="bg-black/25 border border-white/5 rounded-xl p-3 space-y-2">
+            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+              Ingredients · edit if a price changed
+            </p>
+            {draftIngredients.map((ing, idx) => {
+              const line = (Number(ing.qty) || 0) * (Number(ing.unitCost) || 0) * (1 + (Math.max(0, Number(ing.wastePct) || 0) / 100));
+              return (
+                <div key={ing.id || idx} className="grid grid-cols-[1fr_auto_auto] items-center gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-white truncate">{ing.name || 'Ingredient'}</p>
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase">{ing.qty} {ing.unit}</p>
+                  </div>
+                  <input type="number" min="0" step="50" value={ing.unitCost}
+                    aria-label={`${ing.name} price each`}
+                    onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: parseFloat(e.target.value) || 0 } : x))}
+                    className="w-24 h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
+                  <p className="w-24 text-right text-xs font-black text-amber-400 tabular-nums">{formatCurrency(Math.round(line))}</p>
+                </div>
+              );
+            })}
+            <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
+              <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Recipe total</p>
+              <p className="text-sm font-black text-amber-400 font-display tabular-nums">{formatCurrency(Math.round(recipeTotal))}</p>
+            </div>
+          </div>
+        ) : null}
+
         <div>
-          <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cost Price Each</label>
-          <input type="number" min="0" value={prodCost} onChange={e => setProdCost(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+          <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
+            {costEachFromRecipe > 0 ? 'Cost each (from recipe)' : 'Cost Price Each'}
+          </label>
+          <input type="number" min="0" value={costEachFromRecipe > 0 ? String(Math.round(costEachFromRecipe)) : prodCost}
+            readOnly={costEachFromRecipe > 0}
+            onChange={e => setProdCost(e.target.value)}
+            className={`w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500 ${costEachFromRecipe > 0 ? 'opacity-70' : ''}`} />
+          {costEachFromRecipe > 0 && (
+            <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1">Worked out from the ingredients above — change a price above to adjust it.</p>
+          )}
         </div>
         <div className="flex items-center justify-between">
           <p className="text-xs font-bold text-zinc-400 uppercase">

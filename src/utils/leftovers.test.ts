@@ -155,3 +155,36 @@ describe('automatic leftover carry', () => {
     expect(opening.get('p-chapati')).toBe(30);
   });
 });
+
+describe('authoritative tray count (audit #38)', () => {
+  it('a confirmed count wins over the paper trail, with the variance shown', () => {
+    const rows = leftoverFor(
+      [prod()],
+      [batch({ date: Y })],
+      [saleOn(Y, 70)],
+      [
+        waste({ date: Y, reason: 'expired', qty: 10, lossAmount: 4000 }),
+        waste({ id: 'w-c', date: Y, reason: 'remaining', qty: 7, lossAmount: 2800 }),
+      ],
+      Y,
+    );
+    expect(rows).toHaveLength(1);
+    // Math says 20, tray says 7 → tomorrow opens with 7, gap 13 missing.
+    expect(rows[0]).toMatchObject({ expected: 20, leftover: 7, carried: 7, gap: 13 });
+  });
+
+  it('opening carry follows confirmed counts across days', () => {
+    const twoAgo = prevDayKey(Y);
+    const opening = openingForDay(
+      [prod()],
+      [batch({ date: twoAgo, qty: 100, total: 40000 })],
+      [saleOn(twoAgo, 70)],
+      [
+        waste({ date: twoAgo, reason: 'expired', qty: 10, lossAmount: 4000 }),
+        waste({ id: 'w-c', date: twoAgo, reason: 'remaining', qty: 7, lossAmount: 2800 }),
+      ],
+      Y,
+    );
+    expect(opening.get('p-chapati')).toBe(7);
+  });
+});

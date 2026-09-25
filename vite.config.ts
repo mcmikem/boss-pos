@@ -1,12 +1,18 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
+import {transformAsync} from '@babel/core';
 import {browserslistToTargets, transform as lightningcss} from 'lightningcss';
 import path from 'path';
 import postcss, {type Declaration} from 'postcss';
 import {execSync} from 'node:child_process';
+import {readFile, writeFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
 import {defineConfig, type Plugin} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+
+const require = createRequire(import.meta.url);
+const presetEnv = require('@babel/preset-env');
 
 const LEGACY_CSS_TARGETS = browserslistToTargets(['Android >= 5', 'Chrome >= 49', 'iOS >= 12', 'Safari >= 12']);
 
@@ -197,6 +203,38 @@ function deLayerCSS(): Plugin {
   };
 }
 
+function downlevelServiceWorker(): Plugin {
+  return {
+    name: 'downlevel-service-worker',
+    apply: 'build',
+    closeBundle: {
+      order: 'post',
+      sequential: true,
+      async handler() {
+        const swPath = path.resolve(__dirname, 'dist/sw.js');
+        let source: string;
+        try {
+          source = await readFile(swPath, 'utf8');
+        } catch {
+          return;
+        }
+        const result = await transformAsync(source, {
+          babelrc: false,
+          configFile: false,
+          sourceType: 'script',
+          minified: true,
+          presets: [[presetEnv, {
+            targets: { chrome: '49' },
+            forceAllTransforms: true,
+            modules: false,
+          }]],
+        });
+        if (result?.code) await writeFile(swPath, result.code);
+      },
+    },
+  };
+}
+
 function convertOklch(css: string): string {
   let out = '';
   let i = 0;
@@ -369,7 +407,10 @@ export default defineConfig(() => {
         modernTargets: ['chrome >= 64', 'chromeAndroid >= 64', 'edge >= 79', 'firefox >= 67', 'safari >= 12', 'ios_saf >= 12'],
       }),
       VitePWA({
+        strategies: 'generateSW',
+        injectRegister: false,
         registerType: 'autoUpdate',
+        devOptions: { enabled: false },
         includeAssets: ['icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'apple-touch-icon.png', 'maskable-512x512.png'],
         manifest: {
           // Build-time brand, set by the fleet provisioner per shop (e.g.
@@ -392,6 +433,9 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,svg,png,ico,json}'],
+          globIgnores: ['registerSW.js'],
+          maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
+          inlineWorkboxRuntime: true,
           skipWaiting: true,
           clientsClaim: true,
           cleanupOutdatedCaches: true,
@@ -433,6 +477,7 @@ export default defineConfig(() => {
         },
       }),
       deLayerCSS(),
+      downlevelServiceWorker(),
     ],
     resolve: {
       alias: {

@@ -11,6 +11,7 @@ export type NoticeKind =
   | 'expiry'
   | 'unaccounted'
   | 'no-production'
+  | 'momo'
   | 'shrinkage'
   | 'sync'
   | 'info';

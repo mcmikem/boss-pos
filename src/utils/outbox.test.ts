@@ -1,16 +1,40 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { peekOutbox, dropOutboxEntry, clearOutbox, outboxCount } from '../api';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  clearOutbox,
+  dismissOutboxEntryAsync,
+  dropOutboxEntry,
+  flushOutboxDetailed,
+  listOutboxItemsAsync,
+  outboxCount,
+  peekOutbox,
+  retryOutboxEntry,
+} from '../api';
 
 const store = new Map<string, string>();
+const fetchMock = vi.fn();
+const storedOutbox = (): Array<{ id: string }> => {
+  const parsed = JSON.parse(store.get('boss_pos_outbox') || '[]') as { entries?: Array<{ id: string }> } | Array<{ id: string }>;
+  return Array.isArray(parsed) ? parsed : parsed.entries || [];
+};
+
 beforeEach(() => {
   store.clear();
+  fetchMock.mockReset();
   vi.stubGlobal('localStorage', {
-    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-    setItem: (k: string, v: string) => { store.set(k, String(v)); },
-    removeItem: (k: string) => { store.delete(k); },
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, String(value)); },
+    removeItem: (key: string) => { store.delete(key); },
     clear: () => { store.clear(); },
   });
-  vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+  vi.stubGlobal('window', { dispatchEvent: vi.fn(), setTimeout, clearTimeout });
+  vi.stubGlobal('indexedDB', undefined);
+  vi.stubGlobal('navigator', { onLine: true });
+  vi.stubGlobal('fetch', fetchMock);
+});
+
+afterEach(async () => {
+  await dismissOutboxEntryAsync('__after_each__');
+  vi.unstubAllGlobals();
 });
 
 const seed = () => {
@@ -24,7 +48,7 @@ describe('outbox drops', () => {
   it('dropOutboxEntry removes one entry and keeps the rest queued', () => {
     seed();
     dropOutboxEntry('a');
-    expect(peekOutbox().map(e => e.id)).toEqual(['b']);
+    expect(peekOutbox().map(entry => entry.id)).toEqual(['b']);
     expect(outboxCount()).toBe(1);
   });
 
@@ -40,11 +64,48 @@ describe('outbox drops', () => {
     expect(peekOutbox()).toEqual([]);
   });
 
-  it('drop writes go through the shared saver (LS mirror updated)', () => {
+  it('updates the localStorage mirror after a drop', () => {
     seed();
     dropOutboxEntry('a');
-    // The LS mirror is what the sync badge and boot reads use — it must
-    // reflect the drop, or the next flush resurrects the entry.
-    expect(JSON.parse(store.get('boss_pos_outbox') || '[]').map((e: { id: string }) => e.id)).toEqual(['b']);
+    expect(storedOutbox().map(entry => entry.id)).toEqual(['b']);
+  });
+});
+
+describe('durable outbox records', () => {
+  it('lists, retries, and dismisses individual records', async () => {
+    seed();
+    expect((await listOutboxItemsAsync()).map(entry => entry.id)).toEqual(['a', 'b']);
+
+    const retried = await retryOutboxEntry('a');
+    expect(retried).toMatchObject({ id: 'a', status: 'queued', syncStatus: 'queued', attempts: 0 });
+
+    await dismissOutboxEntryAsync('a');
+    expect((await listOutboxItemsAsync()).map(entry => entry.id)).toEqual(['b']);
+  });
+
+  it('recovers an interrupted sending record as retryable', async () => {
+    store.set('boss_pos_outbox', JSON.stringify([{
+      id: 'stale', path: '/api/sales', method: 'POST', body: '{}', queuedAt: 1,
+      status: 'sending', statusAt: Date.now() - 5 * 60 * 1000,
+    }]));
+
+    const items = await listOutboxItemsAsync();
+
+    expect(items[0]).toMatchObject({ id: 'stale', status: 'retrying', lastError: 'Sync interrupted' });
+  });
+
+  it('persists synced status per record after a successful flush', async () => {
+    seed();
+    store.set('boss_pos_token', 'token');
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+
+    const report = await flushOutboxDetailed();
+    const items = await listOutboxItemsAsync();
+
+    expect(report).toMatchObject({ sent: 2, flushed: 2, remaining: 0 });
+    expect(items.map(entry => [entry.id, entry.status, entry.syncStatus])).toEqual([
+      ['a', 'synced', 'synced'],
+      ['b', 'synced', 'synced'],
+    ]);
   });
 });

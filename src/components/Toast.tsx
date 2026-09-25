@@ -36,29 +36,37 @@ export default function Toast({ message, type, action, onClose }: ToastProps) {
   };
 
   const icons = {
-    success: <CheckCircle className="w-5 h-5 text-emerald-400" />,
-    error: <AlertTriangle className="w-5 h-5 text-rose-400" />,
-    info: <Info className="w-5 h-5 text-amber-400" />,
+    success: <CheckCircle className="w-5 h-5 text-emerald-400" aria-hidden="true" />,
+    error: <AlertTriangle className="w-5 h-5 text-rose-400" aria-hidden="true" />,
+    info: <Info className="w-5 h-5 text-amber-400" aria-hidden="true" />,
   };
 
   return (
-    <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up max-w-[calc(100vw-2rem)] ${bgStyles[type]}`}>
+    <div
+      role={type === 'error' ? 'alert' : 'status'}
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+      aria-atomic="true"
+      className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up max-w-[calc(100vw-2rem)] ${bgStyles[type]}`}
+    >
       {icons[type]}
       <span className="text-sm font-medium tracking-wide">{message}</span>
       {action && (
         <button
+          type="button"
           onClick={() => { action.onClick(); onClose(); }}
           className="ml-1 shrink-0 h-9 px-3 bg-gold-brand text-black font-black text-[11px] rounded-lg uppercase tracking-wider cursor-pointer active:scale-95"
         >
           {action.label}
         </button>
       )}
-      <button 
-        onClick={onClose} 
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Dismiss notification"
         className="ml-2 hover:opacity-80 active:scale-90 transition-all"
         id="close-toast-btn"
       >
-        <X className="w-4 h-4" />
+        <X className="w-4 h-4" aria-hidden="true" />
       </button>
     </div>
   );
