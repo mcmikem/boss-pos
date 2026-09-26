@@ -1763,7 +1763,7 @@ export default function Sales({
               placeholder={t(lang, 'searchItems')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-               className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand h-12 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
+               className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus-visible:outline-none h-12 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
               id="search-inventory-input"
             />
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />

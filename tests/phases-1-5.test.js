@@ -164,8 +164,11 @@ test('a slow 401 after unlock never bounces back to the PIN screen', () => {
   assert.match(api, /export function markUnlocked/);
   assert.match(api, /inUnlockGrace/);
   assert.match(api, /waitForTokenMint/);
-  // The re-lock must only fire once NO credential is actually in place.
-  assert.match(api, /else if \(!getAuthToken\(\)\) \{\s*\n\s*clearAllTokens\(\);\s*\n\s*emitAuthRevoked/);
+  // The re-lock fires only when no credential looks usable, or the server
+  // keeps rejecting live-looking ones — never on a single slow 401.
+  assert.match(api, /const alive = pruneExpiredCredentials\(\);/);
+  assert.match(api, /alive === 'none' \|\| consecutiveAuthFailures >= 2/);
+  assert.match(api, /fail just this request, keep the session/);
 });
 
 test('every unlock path opens the grace window', () => {
@@ -214,15 +217,18 @@ test('a manager stays a manager when the till PIN re-mints', () => {
 test('logging out and auth failures clear both credentials', () => {
   const api = read('src/api.ts');
   assert.match(api, /export function clearAllTokens/);
-  assert.match(api, /if \(sawAuthFailure\) \{\s*\n\s*clearAllTokens\(\)/);
+  assert.match(api, /if \(pruneExpiredCredentials\(\) === 'none'\) \{/);
   assert.match(api, /Failed to log out all devices'\);\s*\n\s*clearAllTokens\(\)/);
 });
 
-test('a stale staff token falls back to the till token, not a re-lock', () => {
+test('a dead credential is proven by expiry, never guessed', () => {
   const api = read('src/api.ts');
-  assert.match(api, /if \(getStaffToken\(\) && getAuthToken\(\)\) \{/);
-  assert.match(api, /fall back to the till token rather than re-locking the device/);
-  assert.match(api, /setStaffToken\(null\);/);
+  assert.match(api, /export function tokenExpired/);
+  assert.match(api, /export function pruneExpiredCredentials/);
+  assert.match(api, /boss-pos-staff-revoked/);
+  assert.match(api, /consecutiveAuthFailures >= 2/);
+  // The old guess — "the staff token is probably stale, drop it" — is gone.
+  assert.equal(/likelier stale one/.test(api), false);
 });
 
 test('the till unlock cannot downgrade a signed-in manager', () => {
@@ -437,4 +443,10 @@ test('every release gets a smoke test and a phone checklist', () => {
   assert.match(qa, /Street mode/);
   assert.match(qa, /Ask to fix/);
   assert.match(qa, /Airplane mode/);
+});
+
+test('a signed-in manager sees unclaimed owner handovers, not just named ones', () => {
+  const api = read('api/index.js');
+  assert.match(api, /recipient_id IS NULL AND to_type IN \('owner', 'manager'\)/);
+  assert.match(api, /unclaimed owner\/manager handovers/);
 });

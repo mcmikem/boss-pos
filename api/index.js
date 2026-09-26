@@ -4694,14 +4694,21 @@ app.post('/api/momo-transfers', requireManager, asHandler(async (req, res) => {
 // GET /api/money-handover/pending - handovers waiting on THIS device's staff id.
 // Drives the full-screen "confirm you received this" prompt on the owner's or
 // manager's phone. Cashiers never see it (they have no recipientId to match).
+// Handovers to "Owner" name no staff record, so a signed-in manager also sees
+// unclaimed owner/manager handovers — otherwise nobody is ever notified.
 app.get('/api/money-handover/pending', requireManager, asHandler(async (req, res) => {
   const actor = await requestActor(req);
   const scope = String(req.query.scope || 'recipient').toLowerCase();
   const where = ["receipt_status = 'requested'"];
   const params = [];
   if (actor.id) {
-    if (scope === 'recipient') { where.push('recipient_id = $1'); params.push(actor.id); }
-    else { where.push('(recipient_id = $1 OR actor_id = $1)'); params.push(actor.id); }
+    if (scope === 'recipient') {
+      params.push(actor.id);
+      where.push(`(recipient_id = $${params.length} OR (recipient_id IS NULL AND to_type IN ('owner', 'manager')))`);
+    } else {
+      params.push(actor.id);
+      where.push(`(recipient_id = $${params.length} OR actor_id = $${params.length})`);
+    }
   } else if (scope !== 'all') {
     // Legacy till token with no staff identity cannot claim a specific
     // handover. Manager-only, so allow the shop-wide board instead of nothing.

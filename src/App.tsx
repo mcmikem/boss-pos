@@ -1141,6 +1141,28 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return () => window.removeEventListener('boss-pos-auth-revoked', onRevoked);
   }, []);
 
+  // A dead staff credential must also kill the staff SESSION. Otherwise the
+  // top bar keeps showing "Manager" while the wire carries a till token, and
+  // every manager call fails with "switch to manager" on a manager's phone.
+  useEffect(() => {
+    const onStaffRevoked = () => {
+      const name = activeStaff?.name || staffName || '';
+      setActiveStaffId(null);
+      try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
+      setShowStaffSwitcher(false);
+      triggerToast(
+        name ? `Session expired for ${name} — enter the staff PIN again` : 'Staff session expired — enter the staff PIN again',
+        'error',
+        {
+          label: 'Sign in',
+          onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+        },
+      );
+    };
+    window.addEventListener('boss-pos-staff-revoked', onStaffRevoked);
+    return () => window.removeEventListener('boss-pos-staff-revoked', onStaffRevoked);
+  }, [activeStaff?.name, staffName]);
+
   useEffect(() => {
     const onManagerRequired = (event: Event) => {
       const usedStaffToken = (event as CustomEvent<{ usedStaffToken?: boolean }>)?.detail?.usedStaffToken;

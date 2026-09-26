@@ -209,6 +209,48 @@ export function clearAllTokens(): void {
   setStaffToken(null);
 }
 
+// Our tokens carry their own expiry inside the signed payload. Reading it is
+// the only thing provable offline about a 401: an expired credential is
+// definitively dead, while a live-looking one may just have raced the mint.
+// Guessing ("the staff token is probably stale") is what used to silently
+// downgrade signed-in managers to till accounts.
+export function tokenExpired(token: string | null | undefined): boolean {
+  try {
+    if (!token || typeof token !== 'string') return true;
+    const payload = token.split('.')[0];
+    if (!payload) return true;
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    const exp = Number(json?.exp);
+    if (!Number.isFinite(exp)) return true;
+    return Date.now() > exp;
+  } catch {
+    return true;
+  }
+}
+
+export type AliveCredential = 'staff' | 'till' | 'both' | 'none';
+
+// Discards provably-expired credentials and reports what is left. Emits
+// boss-pos-staff-revoked when a staff identity dies so the UI stops claiming
+// it — a profile row is not a credential.
+export function pruneExpiredCredentials(): AliveCredential {
+  const staffToken = getStaffToken();
+  const tillToken = getAuthToken();
+  if (staffToken && tokenExpired(staffToken)) {
+    setStaffToken(null);
+    try { window.dispatchEvent(new CustomEvent('boss-pos-staff-revoked', { detail: { reason: 'staff-expired' } })); } catch {}
+  }
+  if (tillToken && tokenExpired(tillToken)) setAuthToken(null);
+  const staffAlive = !!getStaffToken();
+  const tillAlive = !!getAuthToken();
+  if (staffAlive && tillAlive) return 'both';
+  if (staffAlive) return 'staff';
+  if (tillAlive) return 'till';
+  return 'none';
+}
+
+let consecutiveAuthFailures = 0;
+
 // The staff token wins when present: it is the more specific credential and
 // carries the role the server authorises against. A till token on its own is
 // the legacy single-seller case.
@@ -745,8 +787,12 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
   const finalList = await peekOutboxAsync();
   const finalCounts = countsFor(finalList);
   if (sawAuthFailure) {
-    clearAllTokens();
-    emitAuthRevoked(firstAuthPath ? { path: firstAuthPath } : undefined);
+    // Same honesty rule as live requests: only re-lock when no credential
+    // even looks usable. A valid till token survives a dead staff one.
+    if (pruneExpiredCredentials() === 'none') {
+      clearAllTokens();
+      emitAuthRevoked(firstAuthPath ? { path: firstAuthPath } : undefined);
+    }
   }
   if (sawNetworkFailure) {
     try { window.dispatchEvent(new Event('boss-pos-sync-offline')); } catch {}
@@ -1112,26 +1158,25 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
           if (body.code) code = body.code;
           if (body.traceId) traceId = String(body.traceId);
         } catch {}
-        if (res.status === 401 && path.startsWith('/api/') && getAuthToken()) {
+        if (res.status === 401 && path.startsWith('/api/') && (getAuthToken() || getStaffToken())) {
           if (inUnlockGrace() && !revokeRetried) {
             // Freshly unlocked, slow network: the background re-mint may not
             // have landed. Wait for it once, then decide.
             revokeRetried = true;
             try { await waitForTokenMint(); } catch {}
           }
-          if (getStaffToken() && getAuthToken()) {
-            // The staff credential is the likelier stale one (it is the
-            // specific token the server may have revoked). Drop just it and
-            // fall back to the till token rather than re-locking the device.
-            setStaffToken(null);
-          } else if (!getAuthToken()) {
+          consecutiveAuthFailures += 1;
+          const alive = pruneExpiredCredentials();
+          if (alive === 'none' || consecutiveAuthFailures >= 2) {
+            // Nothing usable left, or the server keeps rejecting live-looking
+            // credentials (e.g. "log out all devices" bumped the version) —
+            // re-lock for real.
+            consecutiveAuthFailures = 0;
             clearAllTokens();
             emitAuthRevoked({ path });
-          } else {
-            // A valid token is already in place — this 401 was transient
-            // (a request that raced the mint). Don't punish the cashier.
-            revokeRetried = false;
           }
+          // Otherwise: a single 401 against a live-looking credential is
+          // treated as transient — fail just this request, keep the session.
         }
         if (res.status === 403 && code === 'MANAGER_REQUIRED' && !silentManager) {
           try { window.dispatchEvent(new CustomEvent('boss-pos-manager-required', { detail: { path, usedStaffToken: Boolean(getStaffToken()) } })); } catch {}
@@ -1159,6 +1204,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
         else clearRelatedCaches(path);
       }
 
+      consecutiveAuthFailures = 0;
       return data;
     } catch (err) {
       lastErr = err;
