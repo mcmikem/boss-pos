@@ -15,7 +15,8 @@
     "test": "node --test \"tests/*.test.js\" && vitest run",
     "lint": "tsc --noEmit",
     "test:unit": "vitest run",
-    "test:guards": "node --test tests/frontend-upgrades.test.js"
+    "test:guards": "node --test tests/frontend-upgrades.test.js",
+    "smoke": "node scripts/smoke-prod.mjs"
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",

@@ -427,3 +427,14 @@ test('regulars can be invited to the shoppers group; numbers copy out for broadc
   assert.match(app, /communityGroupUrl/);
   assert.match(app, /Customer community/);
 });
+
+test('every release gets a smoke test and a phone checklist', () => {
+  assert.ok(read('scripts/smoke-prod.mjs').includes('/api/ready'));
+  assert.ok(read('scripts/smoke-prod.mjs').includes('process.exit(1)'));
+  assert.match(JSON.parse(read('package.json')).scripts.smoke, /smoke-prod/);
+  const qa = read('QA.md');
+  assert.match(qa, /Device matrix/);
+  assert.match(qa, /Street mode/);
+  assert.match(qa, /Ask to fix/);
+  assert.match(qa, /Airplane mode/);
+});
