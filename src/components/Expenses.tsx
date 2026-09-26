@@ -12,11 +12,11 @@ interface ExpensesProps {
   expenses: Expense[];
   expenseCategories: string[];
   products: Product[];
-  onAddExpense: (expense: Expense) => void;
+  onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
   onDeleteExpense: (expenseId: string) => void;
-  onAddExpenseCategory: (name: string) => void;
-  onUpdateExpenseCategory: (oldName: string, newName: string) => void;
-  onDeleteExpenseCategory: (name: string) => void;
+  onAddExpenseCategory: (name: string) => void | boolean | Promise<void | boolean>;
+  onUpdateExpenseCategory: (oldName: string, newName: string) => void | boolean | Promise<void | boolean>;
+  onDeleteExpenseCategory: (name: string) => void | boolean | Promise<void | boolean>;
   onUpdateProduct?: (p: Product) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -135,9 +135,17 @@ export default function Expenses({
     const name = catNew.trim();
     if (!name) { triggerToast('Category name is required', 'error'); return; }
     if (expenseCategories.includes(name)) { triggerToast('Category already exists', 'error'); return; }
-    onAddExpenseCategory(name);
+    const written = onAddExpenseCategory(name);
     setCatNew('');
-    triggerToast(`Added "${name}" category`, 'success');
+    // Spend categories are a shop setting. For a seller the label lands when
+    // they next log an expense in it, but it is not saved for everyone — say so
+    // rather than implying the shop changed.
+    triggerToast(
+      written === false
+        ? `"${name}" added on this phone — the shop list is changed by a manager`
+        : `Added "${name}" category`,
+      written === false ? 'info' : 'success',
+    );
   };
 
   const handleSaveEditCat = () => {
@@ -150,9 +158,9 @@ export default function Expenses({
   };
 
   const handleDeleteCat = (name: string) => {
-    onDeleteExpenseCategory(name);
+    const written = onDeleteExpenseCategory(name);
     setDeleteCatConfirm(null);
-    triggerToast(`Deleted "${name}"`, 'info');
+    triggerToast(written === false ? `Removed from this phone only — a manager changes the shop list` : `Deleted "${name}"`, 'info');
   };
 
   return (

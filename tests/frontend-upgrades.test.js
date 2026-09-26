@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -568,4 +568,70 @@ test('no success is announced before the write it describes', () => {
   // form whose every save is refused.
   assert.match(recipes, /canEdit\?: boolean/);
   assert.match(recipes, /Prices and recipes are a manager/);
+});
+
+// A mechanical sweep found these: a handler called without await, with a
+// success toast within a few lines. Each is the "announced, then rolled back"
+// shape that produced the loss-entry and credit reports.
+test('no screen announces a save it has not awaited', () => {
+  const offenders = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      if (!p.endsWith('.tsx')) continue;
+      const lines = readFileSync(p, 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const m = /^\s*(on[A-Z]\w+|handle[A-Z]\w+)\(/.exec(lines[i]);
+        if (!m || lines[i].includes('await')) continue;
+        const window = lines.slice(i, i + 7).join('\n');
+        if (/triggerToast\(/.test(window) && /'success'/.test(window)) {
+          // handleAddToCart is local cart state with deliberate feedback.
+          if (m[1] === 'handleAddToCart') continue;
+          offenders.push(`${p}:${i + 1} ${m[1]}()`);
+        }
+      }
+    }
+  };
+  walk(join(root, 'src'));
+  assert.deepEqual(offenders, [], `un-awaited write announced as success: ${offenders.join(', ')}`);
+});
+
+test('a phone-only change is labelled as one', () => {
+  const app = read('src/App.tsx');
+  const categories = read('src/components/CategoryManager.tsx');
+  const expenses = read('src/components/Expenses.tsx');
+  // Categories live in the shop's settings, which a seller cannot push. The
+  // change is still useful locally, but the screen must not imply otherwise.
+  assert.match(app, /const settingsPersistToServer = !staffConfigured \|\| activeRole === 'manager'/);
+  assert.match(app, /const handleAddCategory = \(name: string\): boolean/);
+  assert.match(categories, /added on this phone only/);
+  assert.match(expenses, /added on this phone/);
+  assert.match(expenses, /a manager changes the shop list/);
+});
+
+test('a refused credit payment in the ledger does not announce itself as recorded', () => {
+  const ledger = read('src/components/CreditsLedger.tsx');
+  const pay = ledger.match(/const handleRecordPayment = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(pay, /const written = await onPayCreditEat\(record\.refId, amtNum\)/);
+  assert.match(pay, /const written = await onPayCredit\(record\.refId, amtNum\)/);
+  // The amount the cashier typed may only be cleared once it is on the server.
+  assert.ok(pay.indexOf('if (written === false) return;') < pay.indexOf("setPaymentAmount('')"),
+    'a refused payment must keep its amount on screen');
+  assert.match(ledger, /onPayCreditEat\?: \(id: string, amount: number\) => void \| boolean/);
+});
+
+test('inventory and supplier writes wait for the server', () => {
+  const inv = read('src/components/Inventory.tsx');
+  const analytics = read('src/components/Analytics.tsx');
+  // New item, 20% markdown, duplicate, and both supplier writes.
+  assert.match(inv, /const written = await onAddProduct\(newProd\);/);
+  assert.match(inv, /const written = await onUpdateProduct\(\{ \.\.\.product, price: next \}\);/);
+  assert.match(inv, /const written = await onAddProduct\(copy\);/);
+  assert.match(analytics, /if \(await onUpdateSupplier\(updated\) === false\) return;/);
+  assert.match(analytics, /if \(await onAddSupplier\(newSup\) === false\) return;/);
+  // And the App side says why a product write was refused.
+  const app = read('src/App.tsx');
+  assert.match(app, /Not saved \\u2014/);
+  assert.match(app, /only a manager can change prices and stock/);
 });

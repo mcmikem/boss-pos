@@ -37,8 +37,10 @@ interface AnalyticsProps {
   onAddExpenseCategory: (name: string) => void;
   onUpdateExpenseCategory: (oldName: string, newName: string) => void;
   onDeleteExpenseCategory: (name: string) => void;
-  onAddSupplier: (supplier: Supplier) => void;
-  onUpdateSupplier: (supplier: Supplier) => void;
+  // Both report the server's answer, so a refused supplier is not announced
+  // as saved behind a closing modal.
+  onAddSupplier: (supplier: Supplier) => void | boolean | Promise<void | boolean>;
+  onUpdateSupplier: (supplier: Supplier) => void | boolean | Promise<void | boolean>;
   onUpdateProduct: (product: Product) => void;
   onDeleteSupplier: (supplierId: string) => void;
   onPayCredit: (saleId: string, amount: number) => void;
@@ -441,15 +443,17 @@ export default function Analytics({
     setShowSupplierModal(true);
   };
 
-  const handleSaveSupplier = () => {
+  const handleSaveSupplier = async () => {
     if (!supName.trim()) { triggerToast('Supplier name is required', 'error'); return; }
+    // Awaited: the modal closed and the supplier was announced while the
+    // server could still refuse and roll the row back.
     if (editingSupplier) {
       const updated: Supplier = { ...editingSupplier, name: supName, contactPerson: supContact, phone: supPhone, email: supEmail };
-      onUpdateSupplier(updated);
+      if (await onUpdateSupplier(updated) === false) return;
       triggerToast(`Updated "${updated.name}"`, 'success');
     } else {
       const newSup: Supplier = { id: `sup-${Date.now()}`, name: supName, contactPerson: supContact, phone: supPhone, email: supEmail };
-      onAddSupplier(newSup);
+      if (await onAddSupplier(newSup) === false) return;
       triggerToast(`Added "${newSup.name}"`, 'success');
     }
     setShowSupplierModal(false);

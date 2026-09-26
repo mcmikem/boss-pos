@@ -25,15 +25,18 @@ interface InventoryProps {
   sales: Sale[];
   shopName: string;
   categories: string[];
-  onAddProduct: (product: Product) => void;
-  onUpdateProduct: (product: Product) => void;
+  // Both report the server's answer: announcing a new item, a price cut or a
+  // duplicate that the server then refused is how a till ends up showing stock
+  // it does not have.
+  onAddProduct: (product: Product) => void | boolean | Promise<void | boolean>;
+  onUpdateProduct: (product: Product) => void | boolean | Promise<void | boolean>;
   onDeleteProduct: (productId: string) => void;
   onUpsertQuote: (supplierId: string, productId: string, price: number) => void;
   onDeleteQuote: (quoteId: string) => void;
   onAddExpense?: (expense: Expense) => void;
-  onAddCategory: (name: string) => void;
-  onUpdateCategory: (oldName: string, newName: string) => void;
-  onDeleteCategory: (name: string) => void;
+  onAddCategory: (name: string) => void | boolean | Promise<void | boolean>;
+  onUpdateCategory: (oldName: string, newName: string) => void | boolean | Promise<void | boolean>;
+  onDeleteCategory: (name: string) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -451,7 +454,7 @@ export default function Inventory({
     setNewVariants(prev => prev.filter(v => v.id !== id));
   };
 
-  const handleCreateProduct = () => {
+  const handleCreateProduct = async () => {
     if (!newName.trim()) {
       triggerToast('Product name is required', 'error');
       return;
@@ -492,7 +495,10 @@ export default function Inventory({
       recipe: sanitizeRecipe(newRecipe),
     };
 
-    onAddProduct(newProd);
+    // Awaited: the form cleared and the item was announced while the server
+    // could still refuse it and roll the row back.
+    const written = await onAddProduct(newProd);
+    if (written === false) return;
     setIsAddingNew(false);
     setNewName(''); setNewCost('0'); setNewPrice('0'); setNewStock('10');
     setNewThreshold('5'); setNewSupplierId(''); setNewImei(''); setNewBarcode(''); setNewExpiry(''); setNewImageUrl(''); setNewSaleUnit('');
@@ -804,9 +810,10 @@ export default function Inventory({
                   </p>
                 </div>
                 <p className="text-xs font-black text-amber-300 shrink-0 tabular-nums">{formatCurrency((product.cost || 0) * Math.max(0, product.stockQty))}</p>
-                <button onClick={() => {
+                <button onClick={async () => {
                     const next = Math.max(0, Math.round(product.price * 0.8));
-                    onUpdateProduct({ ...product, price: next });
+                    const written = await onUpdateProduct({ ...product, price: next });
+                    if (written === false) return;
                     triggerToast(`${product.name} cut to ${formatCurrency(next)} (−20%)`, 'success');
                   }}
                   title={`Cut ${product.name} price by 20% to clear it`}
@@ -1602,7 +1609,7 @@ export default function Inventory({
             </div>
 
             <div className="pt-3 border-t border-zinc-800 space-y-2">
-              <button onClick={() => {
+              <button onClick={async () => {
                   if (!editingProduct) return;
                   const copy: Product = {
                     ...editingProduct,
@@ -1613,7 +1620,8 @@ export default function Inventory({
                     variants: editingProduct.variants?.map(v => ({ ...v, id: `${v.id}-copy-${Date.now().toString().slice(-4)}` })),
                     recipe: editingProduct.recipe ? JSON.parse(JSON.stringify(editingProduct.recipe)) : undefined,
                   };
-                  onAddProduct(copy);
+                  const written = await onAddProduct(copy);
+                  if (written === false) return;
                   triggerToast(`Duplicated — edit "${copy.name}" and set stock`, 'success');
                   setEditingProduct(null);
                 }}

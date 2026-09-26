@@ -6,9 +6,11 @@ interface CreditsLedgerProps {
   sales: Sale[];
   creditPayments: CreditPayment[];
   creditEats?: CreditEat[];
-  onPayCreditEat?: (id: string, amount: number) => void;
+  // Both payment writes report the server's answer, so a refused collection
+  // never announces itself as recorded.
+  onPayCreditEat?: (id: string, amount: number) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
-  onPayCredit: (saleId: string, amount: number) => void;
+  onPayCredit: (saleId: string, amount: number) => void | boolean | Promise<void | boolean>;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
@@ -87,7 +89,7 @@ export default function CreditsLedger({
 
   const totalOutstanding = records.reduce((sum, r) => sum + r.remaining, 0);
 
-  const handleRecordPayment = () => {
+  const handleRecordPayment = async () => {
     if (!paymentKey) return;
     const amtNum = parseFloat(paymentAmount);
     if (isNaN(amtNum) || amtNum <= 0) {
@@ -106,17 +108,22 @@ export default function CreditsLedger({
         triggerToast('Collect book payments in Close day', 'info');
         return;
       }
+      // Awaited: this toast used to fire before the server had the payment, so
+      // a refused collection announced itself as recorded and cleared the
+      // amount the cashier had typed.
+      const written = await onPayCreditEat(record.refId, amtNum);
+      if (written === false) return;
       triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
       setPaymentKey(null);
       setPaymentAmount('');
-      onPayCreditEat(record.refId, amtNum);
       return;
     }
 
+    const written = await onPayCredit(record.refId, amtNum);
+    if (written === false) return;
     triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
     setPaymentKey(null);
     setPaymentAmount('');
-    onPayCredit(record.refId, amtNum);
   };
 
   // One card when clear (no header-0 + empty-message duplication), full

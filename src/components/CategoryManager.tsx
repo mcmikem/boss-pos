@@ -3,8 +3,10 @@ import { Plus, X, Edit2, Trash2, Check, Hash } from 'lucide-react';
 
 interface CategoryManagerProps {
   categories: string[];
-  onAddCategory: (name: string) => void;
-  onUpdateCategory: (oldName: string, newName: string) => void;
+  // Categories are a shop setting, so a seller's change is local to this
+  // phone. These report back so the screen never claims a save that is not one.
+  onAddCategory: (name: string) => void | boolean | Promise<void | boolean>;
+  onUpdateCategory: (oldName: string, newName: string) => void | boolean | Promise<void | boolean>;
   onDeleteCategory: (name: string) => void;
   onClose: () => void;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -23,7 +25,7 @@ export default function CategoryManager({
   const [editValue, setEditValue] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const name = newCategory.trim();
     if (!name) {
       triggerToast('Category name is required', 'error');
@@ -33,9 +35,17 @@ export default function CategoryManager({
       triggerToast('Category already exists', 'error');
       return;
     }
-    onAddCategory(name);
+    // Awaited, and honest about where it landed: categories live in the shop's
+    // settings, which a seller cannot save. Saying "added" and having it vanish
+    // on the next refresh is worse than saying where it went.
+    const written = await onAddCategory(name);
     setNewCategory('');
-    triggerToast(`Added "${name}" category`, 'success');
+    triggerToast(
+      written === false
+        ? `"${name}" added on this phone only — a manager saves shop categories`
+        : `Added "${name}" category`,
+      written === false ? 'info' : 'success',
+    );
   };
 
   const handleStartEdit = (name: string) => {
@@ -43,7 +53,7 @@ export default function CategoryManager({
     setEditValue(name);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingName) return;
     const name = editValue.trim();
     if (!name) {
@@ -54,9 +64,14 @@ export default function CategoryManager({
       triggerToast('Category already exists', 'error');
       return;
     }
-    onUpdateCategory(editingName, name);
+    const written = await onUpdateCategory(editingName, name);
     setEditingName(null);
-    triggerToast(`Renamed to "${name}"`, 'success');
+    triggerToast(
+      written === false
+        ? `Renamed on this phone only — a manager saves shop categories`
+        : `Renamed to "${name}"`,
+      written === false ? 'info' : 'success',
+    );
   };
 
   const handleDelete = (name: string) => {

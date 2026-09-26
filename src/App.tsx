@@ -1826,7 +1826,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }).format(ugxVal);
   };
 
-  const handleAddProduct = async (newProd: Product) => {
+  const handleAddProduct = async (newProd: Product): Promise<boolean> => {
     const stamped = { ...newProd, updatedAt: new Date().toISOString() };
     const prodWithIcon = enrichProductsWithIcons([stamped])[0];
     setProducts(prev => [prodWithIcon, ...prev]);
@@ -1835,9 +1835,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       if (saved?.updatedAt) {
         setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, updatedAt: saved.updatedAt } : p));
       }
-    } catch {
+      return true;
+    } catch (err) {
       setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
-      triggerToast('Failed to save product — not added', 'error');
+      const e = err as { code?: string; message?: string };
+      const why = e?.code === 'MANAGER_REQUIRED'
+        ? 'only a manager can add stock items'
+        : e?.code === 'IDENTITY_AMBIGUOUS'
+          ? 'that barcode or IMEI belongs to another item'
+          : (e?.message ? String(e.message).slice(0, 70) : 'not added');
+      triggerToast(`Not saved \u2014 ${why}`, 'error');
+      return false;
     }
   };
 
@@ -1873,7 +1881,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleUpdateProduct = async (updatedProd: Product) => {
+  const handleUpdateProduct = async (updatedProd: Product): Promise<boolean> => {
     const prev = products.find(p => p.id === updatedProd.id);
     if (prev && prev.price !== updatedProd.price) logPriceChange(prev.id, prev.name, prev.price, updatedProd.price);
     const stamped = { ...updatedProd, updatedAt: new Date().toISOString() };
@@ -1890,11 +1898,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         triggerToast('This product was updated on another device — loading the latest version. Your edit was not saved.', 'error');
         setProducts(list => list.filter(p => p.id !== stamped.id));
         fetchAllData();
-        return;
+        return false;
       }
       if (prev) setProducts(list => list.map(p => p.id === stamped.id ? prev : p));
-      triggerToast('Failed to update product — changes reverted', 'error');
+      const e = err as { code?: string; message?: string };
+      const why = e?.code === 'MANAGER_REQUIRED'
+        ? 'only a manager can change prices and stock'
+        : (e?.message ? String(e.message).slice(0, 70) : 'changes reverted');
+      triggerToast(`Not saved \u2014 ${why}`, 'error');
+      return false;
     }
+    return true;
   };
 
   const handleDeleteProduct = async (productId: string) => {
@@ -2403,8 +2417,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddExpenseCategory = (name: string) => {
+  const handleAddExpenseCategory = (name: string): boolean => {
     setExpenseCategories(prev => prev.includes(name) ? prev : [...prev, name]);
+    return settingsPersistToServer;
   };
 
   // A rename changes the LABEL for future entries. It must not rewrite the
@@ -2412,17 +2427,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // till used to relabel historical spend locally and every total drawn from it
   // was quietly wrong until a refresh put the old names back. The server also
   // refuses renaming a category that is already in use, and now says so.
-  const handleUpdateExpenseCategory = (oldName: string, newName: string) => {
+  const handleUpdateExpenseCategory = (oldName: string, newName: string): boolean => {
     setExpenseCategories(prev => prev.map(c => c === oldName ? newName : c));
+    return settingsPersistToServer;
   };
 
   // Same rule as a rename: existing rows keep the category they were written
   // with. Removing a label only stops it being offered for new entries.
-  const handleDeleteExpenseCategory = (name: string) => {
+  const handleDeleteExpenseCategory = (name: string): boolean => {
     setExpenseCategories(prev => {
       const filtered = prev.filter(c => c !== name);
       return filtered.includes('Miscellaneous') ? filtered : [...filtered, 'Miscellaneous'];
     });
+    return settingsPersistToServer;
   };
 
   const handleAddSupplier = async (newSup: Supplier) => {
@@ -2531,16 +2548,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddCategory = (name: string) => {
+  // Categories and spend categories live in the shop's settings, which a seller
+  // cannot push. The local change is still useful — it is how this till labels
+  // things today — but the screen must say it is phone-only instead of implying
+  // the shop was changed.
+  const settingsPersistToServer = !staffConfigured || activeRole === 'manager';
+
+  const handleAddCategory = (name: string): boolean => {
     if (name === 'Drinks') {
       try { localStorage.removeItem(NO_DRINKS_KEY); } catch {}
     }
     setCategories(prev => prev.includes(name) ? prev : [...prev, name]);
+    return settingsPersistToServer;
   };
 
-  const handleUpdateCategory = (oldName: string, newName: string) => {
+  const handleUpdateCategory = (oldName: string, newName: string): boolean => {
     setCategories(prev => prev.map(c => c === oldName ? newName : c));
     setProducts(prev => prev.map(p => p.category === oldName ? { ...p, category: newName } : p));
+    return settingsPersistToServer;
   };
 
   const handleDeleteCategory = (name: string) => {
