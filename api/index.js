@@ -2372,7 +2372,34 @@ async function applySaleEvent(req, res, eventType) {
 
 app.delete('/api/sales/:id', requireManager, asHandler((req, res) => applySaleEvent(req, res, 'void')));
 app.post('/api/sales/:id/void', requireManager, asHandler((req, res) => applySaleEvent(req, res, 'void')));
-app.post('/api/sales/:id/refund', requireManager, asHandler((req, res) => applySaleEvent(req, res, 'refund')));
+// Undo your own just-rung sale. A cashier mistypes an item and has to be able to
+// take it back without hunting for a manager — the client has always offered
+// this ("<=60s old, no manager PIN") and the gate made it impossible, so the
+// 10-second Undo bar silently did nothing for every seller. Narrow on purpose:
+// the SAME person, inside 60 seconds, refund only. Never a void, never anyone
+// else's sale, never an old one. Everything else stays manager-only.
+const SELF_UNDO_WINDOW_MS = 60 * 1000;
+async function requireManagerOrSelfUndo(req, res, next) {
+  if (managerAllowed(req.auth, await staffCount())) return next();
+  try {
+    const actor = await requestActor(req);
+    const rows = actor.id
+      ? await sql`SELECT staff_id, actor_id, timestamp, refunded, voided FROM sales WHERE id=${req.params.id}`
+      : [];
+    const sale = rows[0];
+    const mine = !!sale && (String(sale.staff_id || '') === String(actor.id) || String(sale.actor_id || '') === String(actor.id));
+    const at = Date.parse(String(sale?.timestamp || ''));
+    const fresh = Number.isFinite(at) && Date.now() - at <= SELF_UNDO_WINDOW_MS;
+    if (mine && fresh && !sale.refunded && !sale.voided) {
+      req.selfUndo = true;
+      return next();
+    }
+  } catch {
+    return res.status(500).json({ error: 'Could not verify the undo' });
+  }
+  return res.status(403).json({ error: 'Manager approval required', code: MANAGER_REQUIRED_CODE });
+}
+app.post('/api/sales/:id/refund', requireManagerOrSelfUndo, asHandler((req, res) => applySaleEvent(req, res, 'refund')));
 
 app.get('/api/sale-events', requireManager, asHandler(async (req, res) => {
   const saleId = String(req.query.saleId || '');
@@ -2911,7 +2938,12 @@ app.get('/api/expenses/report', requireManager, asHandler(handleApprovedExpenseR
 app.get('/api/expense-report', requireManager, asHandler(handleApprovedExpenseReport));
 app.get('/api/reports/expenses', requireManager, asHandler(handleApprovedExpenseReport));
 
-app.get('/api/expenses', requireManager, asHandler(async (req, res) => {
+// The Expenses tab is deliberately handed to cashiers (cashierTabs), and the
+// till's own boot payload already ships this table — while this route refused
+// them, so a 403 was reported as a connection failure and the tab only appeared
+// to work. Reading and removing one's OWN spend is till work. Approvals, the
+// expense report and any other role's view stay manager-only.
+app.get('/api/expenses', asHandler(async (req, res) => {
   const range = normalizeReportRange(req.query);
   if (range.error) return res.status(400).json({ error: range.error });
   const { from, to, branch } = range;
@@ -2941,6 +2973,37 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const allowed = normalizeExpenseCategories(Array.isArray(configured) ? configured : [], existingCategories.map((row) => row.category));
   const actor = await requestActor(req);
   const manager = await requestIsManager(req);
+  // A category the shop has never used is a real thing the seller just paid for
+  // ("Fuel", "Airtime"). It used to be refused outright, and because a cashier
+  // cannot save settings, the category could never reach the server at all — so
+  // the entry was refused and then deleted on the till, behind a generic
+  // "failed to save". Register it here instead, which is also what keeps the
+  // MoMo fee category working without a manager to configure it.
+  const wanted = String(e.category || '').trim().slice(0, 100);
+  if (wanted && !allowed.some((c) => c.toLowerCase() === wanted.toLowerCase())) {
+    // Guard the real risk of this: a typo creating a permanent second category.
+    const squash = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const nearMiss = allowed.find((c) => {
+      const a = squash(c);
+      const b = squash(wanted);
+      return a === b || (Math.abs(a.length - b.length) <= 2 && a.length > 2 && b.length > 2
+        && [...a].filter((ch, i) => b[i] === ch).length >= Math.max(2, Math.min(a.length, b.length) - 2));
+    });
+    if (nearMiss) {
+      return res.status(400).json({
+        error: `Did you mean "${nearMiss}"?`,
+        code: 'INVALID_CATEGORY',
+        category: wanted,
+        suggestions: [nearMiss],
+      });
+    }
+    const configuredList = Array.isArray(configured) ? configured : [];
+    const next = normalizeExpenseCategories([...configuredList, wanted], existingCategories.map((row) => row.category));
+    await sql`INSERT INTO settings (key, value) VALUES ('expenseCategories', ${JSON.stringify(next)})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+    allowed.push(wanted);
+    await audit('expense.category.create', wanted, actor, { category: wanted, via: 'expense-create' }, req.id);
+  }
   const requestedStatus = String(e.approvalStatus || 'submitted').toLowerCase();
   const validated = validateExpense({ ...e, approvalStatus: requestedStatus }, allowed);
   if (validated.error) return res.status(400).json({ error: validated.error, code: validated.code });
@@ -3616,7 +3679,9 @@ app.get('/api/sheets/status', asHandler(async (req, res) => {
   });
 }));
 
-app.delete('/api/expenses/:id', requireManager, asHandler(async (req, res) => {
+// Same reasoning as a loss entry: POST /api/expenses is open to any seller, so
+// a manager-only delete let a cashier log a mis-keyed receipt but not remove it.
+app.delete('/api/expenses/:id', asHandler(async (req, res) => {
   const actor = await requestActor(req);
   await sql`DELETE FROM expenses WHERE id=${req.params.id}`;
   await audit('expense.delete', `Deleted ${req.params.id}`, actor, { expenseId: req.params.id });

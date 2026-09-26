@@ -442,3 +442,73 @@ test('a close summary that was refused for good says so', () => {
   assert.equal(/catch \{\s*return null;\s*\}/.test(finished), false);
   assert.match(finished, /catch \(err\) \{/);
 });
+
+// The sell screen and the Expenses tab are what a cashier touches all day, so
+// they get the same audit the Close screen got.
+test('a cashier can undo their own just-rung sale', () => {
+  const server = read('api/index.js');
+  const app = read('src/App.tsx');
+  // The client has always offered this ("<=60s old, no manager PIN") and the
+  // gate made it impossible, so the 10-second Undo bar did nothing for sellers.
+  assert.match(server, /const SELF_UNDO_WINDOW_MS = 60 \* 1000/);
+  assert.match(server, /async function requireManagerOrSelfUndo/);
+  assert.match(server, /app\.post\('\/api\/sales\/:id\/refund', requireManagerOrSelfUndo/);
+  const gate = server.match(/async function requireManagerOrSelfUndo[\s\S]*?\n\}/)?.[0] || '';
+  // Narrow on purpose: same person, inside the window, refund only.
+  assert.match(gate, /String\(sale\.staff_id \|\| ''\) === String\(actor\.id\)/);
+  assert.match(gate, /Date\.now\(\) - at <= SELF_UNDO_WINDOW_MS/);
+  assert.match(gate, /!sale\.refunded && !sale\.voided/);
+  // Voiding stays manager-only: only a refund can be self-undone.
+  assert.match(server, /app\.post\('\/api\/sales\/:id\/void', requireManager/);
+  assert.match(app, /New-cashier safety net: undo your own just-made sale/);
+});
+
+test('a seller can read and remove their own spend', () => {
+  const server = read('api/index.js');
+  // The Expenses tab is deliberately handed to cashiers, and boot already ships
+  // this table, while the route refused them and the 403 was reported as a dead
+  // connection. Approvals and the report stay manager-only.
+  assert.match(server, /app\.get\('\/api\/expenses', asHandler/);
+  assert.match(server, /app\.delete\('\/api\/expenses\/:id', asHandler/);
+  assert.equal(/app\.delete\('\/api\/expenses\/:id', requireManager/.test(server), false);
+  assert.match(server, /app\.get\('\/api\/expenses\/report', requireManager/);
+  assert.match(server, /app\.post\('\/api\/expenses\/:id\/approve', requireManager/);
+  // A role refusal is reported as a role refusal, not as a connection fault.
+  assert.match(read('src/App.tsx'), /Not available on this account: \$\{refused\.join/);
+});
+
+test('a category the shop has never used is registered, and a typo is caught', () => {
+  const server = read('api/index.js');
+  // A cashier cannot save settings, so a category they added could never reach
+  // the server: the next expense in it was refused and then deleted on the till.
+  assert.match(server, /audit\('expense\.category\.create', wanted/);
+  assert.match(server, /ON CONFLICT \(key\) DO UPDATE SET value = EXCLUDED\.value/);
+  // The real risk of allowing this is typo sprawl, so a near miss is refused
+  // with the name it probably meant.
+  assert.match(server, /Did you mean "\$\{nearMiss\}"\?/);
+  assert.match(server, /code: 'INVALID_CATEGORY'/);
+  assert.match(server, /suggestions: \[nearMiss\]/);
+});
+
+test('an ingredient top-up that was refused cannot inflate tomorrow\u2019s float', () => {
+  const app = read('src/App.tsx');
+  const topUp = app.match(/const handleIngredientTopUp = [\s\S]*?\n  \};/)?.[0] || '';
+  // The refusal answer used to be discarded, so the till added money the server
+  // never recorded — and that inflated float drove every batch budget.
+  assert.match(topUp, /const recorded = await handleAddMomoTransfer\(\{/);
+  assert.match(topUp, /if \(recorded === false\) return;/);
+  assert.ok(topUp.indexOf('if (recorded === false) return;') < topUp.indexOf('eodCapital:'),
+    'the float may only grow once the movement is on the server');
+  // One success toast for one action, not two.
+  assert.equal(/triggerToast\('Ingredient top-up recorded'/.test(topUp), false);
+});
+
+test('renaming a spend category never rewrites history', () => {
+  const app = read('src/App.tsx');
+  // There is no route to re-categorise an expense, so relabelling existing rows
+  // locally made every total drawn from them quietly wrong.
+  const rename = app.match(/const handleUpdateExpenseCategory = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.equal(/setExpenses/.test(rename), false);
+  const remove = app.match(/const handleDeleteExpenseCategory = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.equal(/setExpenses/.test(remove), false);
+});

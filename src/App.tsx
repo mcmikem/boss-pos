@@ -686,7 +686,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     } catch {}
 
     const failed: string[] = [];
-    const fail = (name: string) => () => { failed.push(name); };
+    // A MANAGER_REQUIRED refusal is a different event from a dead connection and
+    // gets its own list, so the message can say which one happened.
+    const refused: string[] = [];
+    const fail = (name: string) => (err?: unknown) => {
+      if ((err as { code?: string })?.code === 'MANAGER_REQUIRED') { refused.push(name); return; }
+      failed.push(name);
+    };
     await Promise.all([
       settingsApi.get().then((s) => {
         setSettings(s);
@@ -726,6 +732,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setLoading(false);
     if (failed.length >= 6) {
       setApiError(true);
+    } else if (refused.length > 0) {
+      // A role refusal is not a network problem, and saying "check connection"
+      // sent everyone hunting for a signal that was fine.
+      triggerToast(`Not available on this account: ${refused.join(', ')} — ask a manager`, 'error');
     } else if (failed.length > 0) {
       triggerToast(`Failed to load: ${failed.join(', ')}. Check connection.`, 'error');
     }
@@ -2310,25 +2320,26 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleIngredientTopUp = async (amount: number, reason: string) => {
     const amt = Math.max(0, Math.round(amount));
     const who = activeStaff?.name || staffName || 'Till';
-    try {
-      await handleAddMomoTransfer({
-        id: `mt-topup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        category: 'Eatery',
-        amount: amt || 1,
-        comment: `Ingredient top-up — ${reason}`.slice(0, 200),
-        createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
-        to: 'float',
-        sentBy: who,
-      });
-      if (amt > 0) {
-        setSettings(prev => ({
-          ...prev,
-          eodCapital: { ...(prev.eodCapital || {}), Eatery: Math.max(0, Number(prev.eodCapital?.Eatery || 0) + amt) },
-        }));
-      }
-      triggerToast('Ingredient top-up recorded', 'success');
-    } catch {
-      triggerToast('Could not record the top-up — try from Close day → Money moved', 'error');
+    // handleAddMomoTransfer resolves false when the server refused it, and that
+    // answer used to be thrown away: the till then added the money to tomorrow's
+    // float anyway and saved it, so the kitchen believed it had ingredient money
+    // the server never recorded — and that inflated float drove every batch
+    // budget on the screen.
+    const recorded = await handleAddMomoTransfer({
+      id: `mt-topup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      category: 'Eatery',
+      amount: amt || 1,
+      comment: `Ingredient top-up — ${reason}`.slice(0, 200),
+      createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
+      to: 'float',
+      sentBy: who,
+    });
+    if (recorded === false) return;
+    if (amt > 0) {
+      setSettings(prev => ({
+        ...prev,
+        eodCapital: { ...(prev.eodCapital || {}), Eatery: Math.max(0, Number(prev.eodCapital?.Eatery || 0) + amt) },
+      }));
     }
   };
 
@@ -2378,17 +2389,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setExpenseCategories(prev => prev.includes(name) ? prev : [...prev, name]);
   };
 
+  // A rename changes the LABEL for future entries. It must not rewrite the
+  // category on rows that already exist: there is no route to do that, so the
+  // till used to relabel historical spend locally and every total drawn from it
+  // was quietly wrong until a refresh put the old names back. The server also
+  // refuses renaming a category that is already in use, and now says so.
   const handleUpdateExpenseCategory = (oldName: string, newName: string) => {
     setExpenseCategories(prev => prev.map(c => c === oldName ? newName : c));
-    setExpenses(prev => prev.map(e => e.category === oldName ? { ...e, category: newName } : e));
   };
 
+  // Same rule as a rename: existing rows keep the category they were written
+  // with. Removing a label only stops it being offered for new entries.
   const handleDeleteExpenseCategory = (name: string) => {
     setExpenseCategories(prev => {
       const filtered = prev.filter(c => c !== name);
       return filtered.includes('Miscellaneous') ? filtered : [...filtered, 'Miscellaneous'];
     });
-    setExpenses(prev => prev.map(e => e.category === name ? { ...e, category: 'Miscellaneous' } : e));
   };
 
   const handleAddSupplier = async (newSup: Supplier) => {
