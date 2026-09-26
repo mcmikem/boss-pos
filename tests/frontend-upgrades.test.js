@@ -291,12 +291,24 @@ test('support details carry the lock history QA promises', () => {
 
 test('a refused write leaves a trace, so the next report is answerable', () => {
   const server = read('api/index.js');
-  // No body, no amounts: path, method, status, actor, trace id.
-  assert.match(server, /audit\('write\.refused', `\$\{req\.method\} \$\{req\.path\}`, actor/);
+  // No body, no amounts: path, method, status, code, actor, trace id.
+  assert.match(server, /audit\('write\.refused', `\$\{req\.method\} \$\{req\.path\} \$\{code\}`, actor/);
   assert.equal(/JSON\.stringify\(req\.body\)/.test(server), false);
+  // Registered BEFORE the business routes: Express never reaches middleware
+  // that sits after a route which already answered, so placing it at the end of
+  // the file would trace nothing at all.
+  const traceAt = server.indexOf("const REFUSAL_TRACE_SKIP");
+  const firstRoute = server.indexOf("app.post('/api/products'");
+  assert.ok(traceAt > 0 && traceAt < firstRoute, 'refusal tracing must be registered before the routes');
+  // After the auth gate, so the actor can be resolved.
+  const gate = server.indexOf('requireAuth(req, res, next).catch(next);');
+  assert.ok(traceAt > gate, 'refusal tracing must come after the auth gate to know who acted');
+  // Hooked before the send: a 'finish' handler can be frozen out on serverless.
+  assert.match(server, /const sendJson = res\.json\.bind\(res\);/);
+  assert.equal(/res\.on\('finish'[\s\S]{0,200}write\.refused/.test(server), false);
   // Only writes, and never the PIN endpoints (they fail by design).
   assert.match(server, /const REFUSAL_TRACE_SKIP = new Set\(\['\/api\/auth\/verify', '\/api\/staff\/unlock', '\/api\/staff\/verify', '\/api\/auth\/set'\]\)/);
   // Throttled, so a retry loop cannot bury the line that matters.
   assert.match(server, /const REFUSAL_TRACE_WINDOW_MS = 30 \* 1000/);
-  assert.match(server, /if \(Date\.now\(\) - last < REFUSAL_TRACE_WINDOW_MS\) return;/);
+  assert.match(server, /if \(Date\.now\(\) - last >= REFUSAL_TRACE_WINDOW_MS\)/);
 });
