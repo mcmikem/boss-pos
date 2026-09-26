@@ -1113,7 +1113,7 @@ export default function Sales({
     const givenTotal = saleDiscount + itemsToSell.reduce((a, i) => a + (i.lineDiscount || 0), 0);
     const pinAbove = Math.max(0, settings?.discountPinAbove || 0);
     if (pinAbove > 0 && givenTotal > pinAbove && onRequirePin) {
-      const ok = await onRequirePin(`Discount ${formatCurrency(givenTotal)} is above ${formatCurrency(pinAbove)} — manager PIN to allow it:`);
+      const ok = await onRequirePin(`Discount ${formatCurrency(givenTotal)} is above ${formatCurrency(pinAbove)} — a manager must sign in to allow it:`);
       if (!ok) return false;
     }
     if (oversold.length > 0) {
@@ -2541,7 +2541,7 @@ export default function Sales({
                   <label className="text-xs text-zinc-400 font-bold uppercase flex items-center gap-1.5">
                     <Percent className="w-3.5 h-3.5" /> {t(lang, 'discount')}
                     {(settings?.discountPinAbove || 0) > 0 && (
-                      <span className="text-[9px] text-zinc-600 font-bold normal-case">· big ones ask manager PIN</span>
+                      <span className="text-[9px] text-zinc-600 font-bold normal-case">· big ones need a manager</span>
                     )}
                   </label>
                   <div className="flex bg-[#141414] rounded-lg border border-white/5 overflow-hidden">

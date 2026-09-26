@@ -145,7 +145,7 @@ test('moving money out needs a manager session, and a refusal never eats the amo
     'amounts may only be cleared once the server confirmed',
   );
   // The manager refusal is explained and offers the sign-in that fixes it.
-  assert.match(app, /Only a manager can move money out — sign in with your manager PIN/);
+  assert.match(app, /Only a manager can move money out — sign in with your staff PIN/);
   assert.match(app, /label: 'Sign in',\n\s*onClick: \(\) => \{ setStaffVerifyError\(null\); setShowStaffSwitcher\(true\); \}/);
   // A shop with no staff accounts is owner-run: the till is the manager there,
   // exactly as the server decides it.
@@ -197,4 +197,54 @@ test('there is no phone-only PIN pretending to be a manager', () => {
   // The top bar says who this phone is signed in as, on phones too.
   assert.match(app, /\{isManager \? 'MGR' : activeStaff \? 'CSH' : 'TILL'\}/);
   assert.match(app, /canManageMoneyOut=\{isManager\}/);
+});
+
+test('money coming IN is a till action, and a refused write always says why', () => {
+  const server = read('api/index.js');
+  const app = read('src/App.tsx');
+  // Collecting a debt is the seller handing over cash, not a manager decision.
+  assert.match(server, /app\.post\('\/api\/credit-payments', asHandler\(handleCreditPaymentCreate\)\)/);
+  // Crediting it to somebody else's name still is one.
+  assert.match(server, /Only a manager can record another collector/);
+  // Credit limits stay manager-only.
+  assert.match(server, /Only a manager can override a credit limit/);
+  // No bare "failed to sync" anywhere: every catch names the cause.
+  assert.equal(/Failed to sync payment to server/.test(app), false);
+  const reasons = app.match(/const paymentSaveFailure = [\s\S]*?\n  \};/)?.[0] || '';
+  for (const code of ['SESSION_CLOSED', 'MANAGER_REQUIRED', 'SALE_NOT_FOUND', 'OVERPAYMENT']) {
+    assert.match(reasons, new RegExp(code));
+  }
+  assert.match(reasons, /No connection — the payment is queued/);
+  // The credit-add path names its causes too, including the silent-server case.
+  const credit = app.match(/const creditSaveFailure = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(credit, /CREDIT_RECORD_NOT_SAVED/);
+  assert.match(credit, /tell the manager/);
+});
+
+test('one PIN per person: the lock screen asks whose PIN it is', () => {
+  const server = read('api/index.js');
+  const api = read('src/api.ts');
+  const app = read('src/App.tsx');
+  const gate = read('src/components/PinGate.tsx');
+  // Pre-auth, rate limited exactly like the seller switcher, and it answers
+  // with the person AND their role token.
+  const unlock = server.match(/app\.post\('\/api\/staff\/unlock'[\s\S]*?\n\}\)\);/)?.[0] || '';
+  assert.match(unlock, /'staff:' \+ attemptKey\(clientIp\(req\)\)/);
+  assert.match(unlock, /LOCKOUT_FAILURES/);
+  assert.match(unlock, /verifyStoredPin\(row\.pin_hash, pin\)/);
+  assert.match(unlock, /ambiguous: true/);
+  assert.match(unlock, /signToken\(person\.role, person\.id\)/);
+  // The lock screen tries the person first and falls back to the rescue PIN.
+  assert.match(app, /staffApi\.unlock\(pin, 8000\)/);
+  assert.match(app, /const handleUnlock = async \(pin: string\)/);
+  const unlockFn = app.match(/const handleUnlock = async \(pin: string\)[\s\S]*?\n  \};/)?.[0] || '';
+  assert.ok(unlockFn.indexOf('staffApi.unlock') < unlockFn.indexOf('authVerify(pin, 8000)'),
+    'a staff PIN must be tried before the shop rescue PIN');
+  // A PIN shared by two people asks who, and issues no token until they answer.
+  assert.match(gate, /Who is this\?/);
+  assert.match(gate, /candidates\?\.length/);
+  assert.match(app, /handleUnlockPickPerson/);
+  // Both doors share one sign-in, so a handover behaves the same either way.
+  assert.match(app, /const signInAsSeller = /);
+  assert.match(app, /const handleVerifyStaff = [\s\S]{0,400}signInAsSeller\(/);
 });

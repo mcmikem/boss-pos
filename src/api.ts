@@ -1343,6 +1343,21 @@ export const staffApi = {
     api<StaffMember>(`/api/staff/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
   verify: (id: string, pin: string) =>
     api<StaffMember & { ok: boolean; token?: string }>('/api/staff/verify', { method: 'POST', body: JSON.stringify({ id, pin }) }),
+  // Which person is this PIN? One PIN per person: the lock screen asks once and
+  // this answers with the account and its role token. Pre-auth, so it must not
+  // go through the normal api() wrapper (that one would attach a token we do
+  // not have yet, and would emit spurious re-lock events on 401).
+  unlock: (pin: string, timeoutMs?: number) =>
+    fetchTimeout(`${BASE}/api/staff/unlock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    }, timeoutMs ?? WRITE_TIMEOUT_MS)
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Wrong PIN');
+        return data as { ok: boolean; ambiguous: boolean; id?: string; name?: string; role?: 'manager' | 'cashier'; token?: string; staff?: Array<{ id: string; name: string; role: 'manager' | 'cashier' }> };
+      }),
 };
 
 export interface SaleListParams {

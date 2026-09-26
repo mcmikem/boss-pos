@@ -138,7 +138,12 @@ test('a manager profile without a manager credential gets a different, actionabl
   assert.match(api, /usedStaffToken: Boolean\(getStaffToken\(\)\)/);
   assert.match(app, /Manager profile, manager credential missing — enter the manager staff PIN again\./);
   assert.match(app, /label: managerProfile && !usedStaffToken \? 'Sign in' : 'Switch seller'/);
-  assert.match(app, /setShowStaffSwitcher\(false\);\s*\n\s*fetchAllData\(\)\.catch\(\(\) => \{\}\);/);
+  // Every door that signs a person in goes through the one shared path.
+  const signIn = app.match(/const signInAsSeller = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(signIn, /if \(s\.token\) setStaffToken\(s\.token\)/);
+  assert.match(signIn, /setShowStaffSwitcher\(false\)/);
+  assert.match(signIn, /setAuthState\('ready'\)/);
+  assert.match(signIn, /fetchAllData\(\)\.catch\(\(\) => \{\}\)/);
 });
 
 test('background handover checks never raise the manager toast', () => {
@@ -244,10 +249,15 @@ test('the till unlock cannot downgrade a signed-in manager', () => {
   const api = read('src/api.ts');
   const app = read('src/App.tsx');
   // authVerify (till PIN) writes ONLY the till slot; setAuthToken must never be
-  // pointed at the staff slot, and the staff slot is what carries the role.
-  const staffVerify = app.match(/staffApi\.verify[\s\S]{0,200}/)?.[0] || '';
-  assert.match(staffVerify, /setStaffToken\(s\.token\)/);
+  // pointed at the staff slot, and the staff slot is what carries the role. A
+  // staff PIN is applied by the shared sign-in path, so the role always lands in
+  // the staff slot — whichever door (lock screen or seller switcher) was used.
+  const signIn = app.match(/const signInAsSeller = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(signIn, /if \(s\.token\) setStaffToken\(s\.token\)/);
+  assert.equal(/setAuthToken\(/.test(signIn), false);
   assert.equal(/staffApi\.verify[\s\S]{0,300}setAuthToken\(/.test(app), false);
+  // Unlocking with a staff PIN must not mint a till token that could outrank it.
+  assert.equal(/authVerify\(pin, 8000\)[\s\S]{0,200}staffApi\.unlock/.test(app), false);
   // A 401 drops the staff credential first and only re-locks when nothing is left.
   assert.match(api, /getStaffToken\(\) \|\| getAuthToken\(\)/);
 });

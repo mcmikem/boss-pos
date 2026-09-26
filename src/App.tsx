@@ -409,6 +409,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
+  // Two accounts can share a 4-digit PIN. The gate then asks which person this
+  // is rather than guessing, and no token is issued until they answer.
+  const [unlockCandidates, setUnlockCandidates] = useState<Array<{ id: string; name: string; role: 'manager' | 'cashier' }> | null>(null);
+  const [unlockPin, setUnlockPin] = useState('');
   // Why the till keeps asking for PIN: last 10 lock reasons (boot/idle/revoke).
   const [lockLog, setLockLog] = useState<LockEvent[]>(() => {
     try { return readLockLog(); } catch { return []; }
@@ -1431,9 +1435,67 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     };
   }, [authState]);
 
+  // ONE PIN PER PERSON. A staff PIN is asked first: it opens the device AND
+  // says who is selling, so nobody types two PINs in a shift. The shop's
+  // till PIN stays as the rescue door (new phone, staff sign-in broken, or a
+  // shop with no staff accounts) — it opens the device but grants nothing.
+  // The one place a person becomes signed in: their PIN opened the device, it
+  // says who they are, and the drawer is counted if the shift changed hands.
+  // Both the lock screen and the seller switcher come through here, so a
+  // handover can never behave differently depending on which door was used.
+  const signInAsSeller = async (s: { id: string; name: string; role: 'manager' | 'cashier'; token?: string }) => {
+    if (s.token) setStaffToken(s.token);
+    markUnlocked();
+    const prevName = activeStaff?.name || staffName || '';
+    setActiveStaffId(s.id);
+    try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
+    setStaffName(s.name);
+    setShowStaffSwitcher(false);
+    setAuthState('ready');
+    fetchAllData().catch(() => {});
+    if (prevName && prevName !== s.name) {
+      const raw = await promptDialog({ title: 'Shift handover', message: `Handover ${prevName} → ${s.name}.\nCount the drawer now (UGX)? Empty = skip.`, defaultValue: '', inputMode: 'numeric', placeholder: '0 = skip', confirmLabel: 'Count' });
+      if (raw !== null && raw !== '') {
+        const amt = Math.max(0, Math.round(parseFloat(raw) || 0));
+        try {
+          const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
+          const next = [{ at: new Date().toISOString(), from: prevName, to: s.name, amount: amt }, ...(Array.isArray(log) ? log : [])].slice(0, 30);
+          localStorage.setItem('boss_pos_handovers', JSON.stringify(next));
+        } catch {}
+        triggerToast(`Handover counted: ${formatCurrency(amt)} (${prevName} → ${s.name})`, 'success');
+        return;
+      }
+    }
+    triggerToast(`${s.name} is selling (${s.role})`, 'success');
+  };
+
   const handleUnlock = async (pin: string) => {
     const cachedSettings = readCached<StoreSettings>('/api/settings');
     if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
+      // Person first. Short timeout so a dead network never traps anyone on the
+    // lock screen — it falls straight through to the rescue PIN below.
+    let staffPinError = '';
+    try {
+      const who = await staffApi.unlock(pin, 8000);
+      if (who.ambiguous && who.staff?.length) {
+        setUnlockCandidates(who.staff);
+        setUnlockPin(pin);
+        return;
+      }
+      if (who.id && who.token) {
+        await signInAsSeller({ id: who.id, name: String(who.name || ''), role: who.role === 'manager' ? 'manager' : 'cashier', token: who.token });
+        return;
+      }
+    } catch (err) {
+      const msg = String((err as Error)?.message || '');
+      // A network failure must not look like a wrong PIN: fall through to the
+      // rescue path, which has its own offline fast path.
+      if (/Network timeout|fetch failed|Failed to fetch|Load failed/i.test(msg)) {
+        // fall through
+      } else {
+        staffPinError = msg || 'Wrong PIN';
+      }
+    }
     // Fast path FIRST: local hash verifies in ms, even on dead-WiFi phones
     // where navigator.onLine lies "true" and the server round-trip hangs for
     // 30s ("auth failed / takes long to unlock"). Unlock instantly, then mint
@@ -1471,6 +1533,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         // exactly that (not "wrong PIN").
         throw new Error('No connection — try again when online, or use this till\'s last PIN on its own device.');
       }
+      throw new Error(staffPinError || msg || 'Wrong PIN');
+    }
+  };
+
+  // Two accounts share this PIN — the gate asked who, this applies the answer.
+  const handleUnlockPickPerson = async (id: string) => {
+    const pin = unlockPin;
+    if (!pin) return;
+    try {
+      const s = await staffApi.verify(id, pin);
+      setUnlockCandidates(null);
+      setUnlockPin('');
+      await signInAsSeller({ id: s.id, name: String(s.name || ''), role: s.role === 'manager' ? 'manager' : 'cashier', token: s.token });
+    } catch (err) {
+      setUnlockCandidates(null);
+      setUnlockPin('');
       throw err;
     }
   };
@@ -1885,7 +1963,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return false;
   };
 
-  // Permanently delete a wrong order: manager PIN + confirm, stock goes back in.
+  // Permanently delete a wrong order: manager sign-in + confirm, stock goes back in.
   const handleVoidSale = async (saleId: string) => {
     const sale = sales.find(s => s.id === saleId);
     if (!sale) return;
@@ -1893,7 +1971,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       triggerToast(`Already ${sale.voided ? 'deleted' : 'refunded'} — nothing left to delete`, 'info');
       return;
     }
-    if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
+    if (!(await requirePin(`Manager sign-in needed to delete ${sale.orderNumber}:`, true))) return;
     if (!(await confirmDialog({ title: 'Delete sale', message: `Delete ${sale.orderNumber} (${formatCurrency(sale.total)}) for good? The items go back into stock and it disappears from reports.`, confirmLabel: 'Delete', danger: true }))) return;
     // Tombstone FIRST so a stale boot cache can never resurrect it.
     addDeletedSale(saleId);
@@ -1942,7 +2020,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       triggerToast(`Already ${saleToRefund.voided ? 'deleted' : 'refunded'} — nothing left to refund`, 'info');
       return false;
     }
-    if (!skipPin && !(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return false;
+    if (!skipPin && !(await requirePin(`Manager sign-in needed to refund ${saleToRefund.orderNumber}:`, true))) return false;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
       return prevProducts.map(prod => {
@@ -2331,31 +2409,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffVerifyError(null);
     try {
       const s = await staffApi.verify(id, pin);
-      if (s.token) setStaffToken(s.token);
-      markUnlocked();
-      const prevName = activeStaff?.name || staffName || '';
-      setActiveStaffId(s.id);
-      try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
-      setStaffName(s.name);
-      setShowStaffSwitcher(false);
-      fetchAllData().catch(() => {});
-      // Shift handover: count the drawer as it changes hands (optional, skippable).
-      if (prevName && prevName !== s.name) {
-        const raw = await promptDialog({ title: 'Shift handover', message: `Handover ${prevName} → ${s.name}.\nCount the drawer now (UGX)? Empty = skip.`, defaultValue: '', inputMode: 'numeric', placeholder: '0 = skip', confirmLabel: 'Count' });
-        if (raw !== null && raw !== '') {
-          const amt = Math.max(0, Math.round(parseFloat(raw) || 0));
-          try {
-            const log = JSON.parse(localStorage.getItem('boss_pos_handovers') || '[]');
-            const next = [{ at: new Date().toISOString(), from: prevName, to: s.name, amount: amt }, ...(Array.isArray(log) ? log : [])].slice(0, 30);
-            localStorage.setItem('boss_pos_handovers', JSON.stringify(next));
-          } catch {}
-          triggerToast(`Handover counted: ${formatCurrency(amt)} (${prevName} → ${s.name})`, 'success');
-        } else {
-          triggerToast(`${s.name} is selling (${s.role})`, 'success');
-        }
-      } else {
-        triggerToast(`${s.name} is selling (${s.role})`, 'success');
-      }
+      await signInAsSeller({ id: s.id, name: String(s.name || ''), role: s.role === 'manager' ? 'manager' : 'cashier', token: s.token });
     } catch (err) {
       setStaffVerifyError(err instanceof Error ? err.message : 'Wrong PIN');
     } finally {
@@ -2418,6 +2472,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     });
   };
 
+  // A refused payment must SAY WHY. "Failed to sync" told us nothing, so the
+  // next report could not be diagnosed — every message here names the cause and
+  // what to do about it.
+  const paymentSaveFailure = (err: unknown): string => {
+    const e = err as { message?: string; code?: string };
+    if (e?.code === 'SESSION_CLOSED') return 'That day\u2019s books are closed — reopen the day first';
+    if (e?.code === 'MANAGER_REQUIRED') return 'Only a manager can credit a payment to someone else';
+    if (e?.code === 'SALE_NOT_FOUND') return 'That sale is not on the server — refresh, then record the payment again';
+    if (e?.code === 'OVERPAYMENT') return 'That is more than what is still owed — check the amount';
+    if (e?.code === 'INVALID_SALE' || e?.code === 'INVALID_TARGET' || e?.code === 'INVALID_AMOUNT') return 'That payment is missing something — check the amount';
+    if (/timeout|fetch failed|Failed to fetch|Load failed|NetworkError/i.test(String(e?.message || ''))) {
+      return 'No connection — the payment is queued and will sync when you are back online';
+    }
+    return `Payment not recorded${e?.message ? ` \u2014 ${String(e.message).slice(0, 80)}` : ''}`;
+  };
+
   const handlePayCredit = async (saleId: string, amount: number) => {
     const payment: CreditPayment = {
       id: `cp-${Date.now()}`,
@@ -2428,9 +2498,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setCreditPayments(prev => [payment, ...prev]);
     try {
       await creditPaymentApi.create(payment);
-    } catch {
+      triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+    } catch (err) {
       setCreditPayments(prev => prev.filter(p => p.id !== payment.id));
-      triggerToast('Failed to sync payment to server', 'error');
+      triggerToast(paymentSaveFailure(err), 'error');
     }
   };
 
@@ -2442,11 +2513,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (e?.code === 'CREDIT_LIMIT_EXCEEDED') return `${eater.customerName} is over their credit limit — a manager must approve it`;
     if (e?.code === 'TOTAL_MISMATCH') return 'Quantity and price do not match the total — check the numbers';
     if (e?.code === 'INVALID_AMOUNT' || e?.code === 'INVALID_CREDIT_RECORD') return 'Enter a price and an item for the credit';
+    if (e?.code === 'CREDIT_RECORD_NOT_SAVED') return 'The server did not store that credit — try again, and tell the manager if it repeats';
     if (e?.code === 'MANAGER_REQUIRED') return 'Only a manager can do that — ask them to sign in';
-    if (/timeout|fetch failed|Failed to fetch|Load failed/i.test(String(e?.message || ''))) {
+    if (/timeout|fetch failed|Failed to fetch|Load failed|NetworkError/i.test(String(e?.message || ''))) {
       return 'No connection — the credit is queued and will sync when you are back online';
     }
-    return `Failed to save credit entry — not added${e?.message ? ` (${String(e.message).slice(0, 80)})` : ''}`;
+    return `Credit not saved${e?.message ? ` — ${String(e.message).slice(0, 80)}` : ' (no reason given — tell the manager)'}`;
   };
 
   const handleAddCreditEat = async (newEat: CreditEat) => {
@@ -2470,10 +2542,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     const leg: CreditPayment = { id: `cp-${Date.now()}`, saleId: `book:${id}`, amount, createdAt: new Date().toISOString() };
     setCreditEats(cs => cs.map(c => c.id === id ? next : c));
     setCreditPayments(prevPs => [leg, ...prevPs]);
-    try { await creditEatApi.pay(id, amount); } catch {
+    try {
+      await creditEatApi.pay(id, amount);
+      triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+    } catch (err) {
       if (prev) setCreditEats(cs => cs.map(c => c.id === id ? prev : c));
       setCreditPayments(prevPs => prevPs.filter(p => p.id !== leg.id));
-      triggerToast('Failed to sync payment to server', 'error');
+      triggerToast(paymentSaveFailure(err), 'error');
     }
   };
 
@@ -2639,7 +2714,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setMomoTransfers(prev => prev.filter(x => x.id !== t.id));
       if (code === 'MANAGER_REQUIRED') {
         setMoneyOutBlocked(true);
-        triggerToast('Only a manager can move money out — sign in with your manager PIN', 'error', {
+        triggerToast('Only a manager can move money out — sign in with your staff PIN', 'error', {
           label: 'Sign in',
           onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
         });
@@ -2741,7 +2816,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             const steps = [
               { key: 'stock', label: 'Add your first products', done: products.length > 0, act: () => setActiveTab('inventory') },
               { key: 'sale', label: 'Make your first sale', done: sales.length > 0 },
-              { key: 'pin', label: 'Set a till PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
+              { key: 'pin', label: 'Set a rescue PIN', done: !!settings.hasPin, act: () => setIsSettingsOpen(true) },
             ];
             const laterSteps = [
               { key: 'name', label: 'Name your shop', done: !!settings.shopName && settings.shopName !== 'My Shop', act: () => setIsSettingsOpen(true) },
@@ -3025,7 +3100,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }
 
   if (authState === 'locked') {
-    return <PinGate onUnlock={handleUnlock} shopName={settings.shopName} />;
+    return <PinGate onUnlock={handleUnlock} shopName={settings.shopName}
+      candidates={unlockCandidates} onPickPerson={handleUnlockPickPerson} />;
   }
 
   if (loading) {
@@ -3833,7 +3909,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Big discounts need PIN <SettingHelp label="Big discounts need PIN" text="Discounts above this amount need a manager PIN at checkout — stops quiet friend-discounts. 0 = never ask." /></label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Big discounts need PIN <SettingHelp label="Big discounts need PIN" text="Discounts above this amount need a manager to sign in at checkout — stops quiet friend-discounts. 0 = never ask." /></label>
                 <input type="number" min="0" step="500" value={settings.discountPinAbove || ''}
                   placeholder="0 = never ask"
                   onChange={(e) => setSettings(prev => ({ ...prev, discountPinAbove: Math.max(0, parseFloat(e.target.value) || 0) || undefined }))}
@@ -3901,7 +3977,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </label>
                 {!staffConfigured ? (
                   <>
-                    <p className="text-[10px] text-zinc-600 leading-relaxed">One shared till PIN today. Add the first staff member to switch on PIN-checked logins: cashiers sell, managers unlock everything.</p>
+                    <p className="text-[10px] text-zinc-600 leading-relaxed">One PIN per person. Each seller's own PIN opens the till and signs them in at once — cashiers sell, managers unlock everything.</p>
                     <StaffFirstSetup onAdd={handleAddStaff} />
                   </>
                 ) : isManager ? (
@@ -4092,14 +4168,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Blind close (Shop hours section) hides every total on Close day.</p>
               </div>
               </SettingsSection>
-              <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Till PIN, auto-lock, manager PIN, log out all"
+              <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Rescue PIN, auto-lock, manager sign-in, log out all"
                 open={settingsSection === 'security'} onToggle={() => toggleSettingsSection('security')}>
               {isManager && (
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Security</label>
+                <p className="text-[10px] text-zinc-500 uppercase font-bold">Rescue PIN (backup door)</p>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const newPin = await promptDialog({ title: settings.hasPin ? 'Change till PIN' : 'Set till PIN', message: settings.hasPin ? 'Enter new 4-digit PIN:' : 'Set a 4-digit PIN:', secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
+                    const newPin = await promptDialog({ title: settings.hasPin ? 'Change rescue PIN' : 'Set rescue PIN', message: settings.hasPin ? 'Enter the new 4-digit rescue PIN:' : 'Set a 4-digit rescue PIN for this shop:', secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
                     if (newPin) { try { await handleSetPin(newPin); } catch { triggerToast('Failed to save PIN', 'error'); } }
                   }}
                     className="flex-1 h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
@@ -4122,17 +4199,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   ))}
                 </div>
                 <p className="text-[10px] text-zinc-600">Solo seller glued to the till? 30–60 min nags less. Shared phone? Keep 10. PIN is still required on load.</p>
-                {/* There is no second "manager PIN". Manager authority is the
-                    signed-in staff account, checked by the server — so the
-                    screen says how it actually works instead of collecting a
-                    device PIN that could never approve anything. */}
+                {/* One PIN per person. The rescue PIN below is the exception:
+                    it opens the device when staff sign-in cannot, and grants
+                    no manager rights. Manager authority is always the signed-in
+                    staff account, checked by the server. */}
                 <div className="rounded-xl border border-amber-800/30 bg-amber-950/15 p-3 space-y-1.5">
                   <p className="text-[10px] font-black uppercase tracking-widest text-amber-400">Manager approval</p>
                   <p className="text-[10px] text-zinc-400 leading-snug">
-                    Money out, voids, refunds and price changes are allowed by whoever is <span className="text-white font-bold">signed in at the top bar</span>. Tap <span className="text-white font-bold">MGR / TILL</span> &rarr; choose a seller &rarr; enter their <span className="text-white font-bold">staff PIN</span>. Add a seller as Manager in Staff below.
+                    Money out, voids, refunds and price changes are allowed by whoever is <span className="text-white font-bold">signed in at the top bar</span>. Tap <span className="text-white font-bold">MGR / TILL</span> &rarr; choose a seller &rarr; enter their <span className="text-white font-bold">staff PIN</span>. Add a seller as Manager in Staff below. Unlocking the till with your own PIN signs you in, so most days you only type it once.
                   </p>
                   <p className="text-[10px] text-zinc-500 leading-snug">
-                    The till PIN on its own sells, but cannot move money or change prices. There is no separate manager PIN on this phone &mdash; it would not be accepted.
+                    Everyone signs in with <span className="text-white font-bold">their own staff PIN</span> &mdash; it opens the till and signs them in together. The rescue PIN above is the backup for a new phone or a broken sign-in: it opens the device but cannot move money or change prices.
                   </p>
                   {localStorage.getItem('boss_pos_manager_pin') && (
                     <button onClick={() => {

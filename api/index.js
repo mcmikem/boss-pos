@@ -1544,6 +1544,58 @@ app.get('/api/auth/status', asHandler(async (req, res) => {
   res.json({ shopName: obj.shopName || '', hasPin: !!(obj.pinHash) });
 }));
 
+// ONE PIN PER PERSON. The lock screen asks for a PIN and this says whose it is.
+// Without it every seller types a shop-wide till PIN to open the device and
+// then their own staff PIN to say who they are — two PINs for one shift, and
+// the first one is not even a person. Same lockout as /api/staff/verify (per
+// IP, 5 tries), same PBKDF2 comparison, and it hands back the same role token
+// so nothing downstream needs to know which door the PIN came through.
+//
+// Two people sharing a 4-digit PIN is possible, so an ambiguous PIN resolves to
+// the candidate names WITHOUT a token: the gate asks "which one?" and the app
+// re-verifies with the chosen id. No PIN, no token, no guessing.
+app.post('/api/staff/unlock', asHandler(async (req, res) => {
+  const key = 'staff:' + attemptKey(clientIp(req));
+  const now = Date.now();
+  const attempts = await sql`SELECT failures, lockeduntil FROM auth_attempts WHERE id=${key}`;
+  const lockedUntil = attempts.length ? parseInt(attempts[0].lockeduntil || '0', 10) : 0;
+  if (lockedUntil > now) {
+    return res.status(429).json({ error: 'Too many attempts. Wait a moment and try again.', code: 'RATE_LIMITED' });
+  }
+  const pin = String((req.body || {}).pin ?? '');
+  const fail = async () => {
+    if (!attempts.length) {
+      await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
+    } else {
+      const n = (attempts[0].failures || 0) + 1;
+      if (n >= LOCKOUT_FAILURES) {
+        await sql`UPDATE auth_attempts SET failures=0, lastfailedat=${String(now)}, lockeduntil=${String(now + LOCKOUT_MS)} WHERE id=${key}`;
+      } else {
+        await sql`UPDATE auth_attempts SET failures=${n}, lastfailedat=${String(now)} WHERE id=${key}`;
+      }
+    }
+  };
+  if (!/^\d{4}$/.test(pin)) {
+    await fail();
+    return res.status(401).json({ error: 'PIN must be 4 digits', code: 'WRONG_PIN' });
+  }
+  const active = await sql`SELECT id, name, role, pin_hash FROM staff WHERE active=true`;
+  const matches = active.filter((row) => verifyStoredPin(row.pin_hash, pin));
+  if (!matches.length) {
+    await fail();
+    await audit('staff.failed', 'Failed till unlock (no staff PIN matched)');
+    return res.status(401).json({ error: 'Wrong PIN', code: 'WRONG_PIN' });
+  }
+  if (attempts.length > 0) await sql`DELETE FROM auth_attempts WHERE id=${key}`;
+  if (matches.length > 1) {
+    // Same PIN on two accounts: ask who, do not hand out a token yet.
+    return res.json({ ambiguous: true, staff: matches.map((row) => ({ id: row.id, name: row.name, role: row.role })) });
+  }
+  const person = matches[0];
+  await audit('staff.login', `${person.name} (${person.role}) unlocked the till`);
+  res.json({ ok: true, ambiguous: false, id: person.id, name: person.name, role: person.role, active: true, token: await signToken(person.role, person.id) });
+}));
+
 // Product photos are public (like static assets) so <img> tags and the service
 // worker can fetch them without an Authorization header. They're immutable:
 // every upload is a unique id, so cache forever.
@@ -3806,8 +3858,12 @@ async function handleCreditPaymentCreate(req, res) {
 
 app.get('/api/credit-payments', requireManager, asHandler(handleCreditPaymentList));
 app.get('/api/credit-collections', requireManager, asHandler(handleCreditPaymentList));
-app.post('/api/credit-payments', requireManager, asHandler(handleCreditPaymentCreate));
-app.post('/api/credit-collections', requireManager, asHandler(handleCreditPaymentCreate));
+// Taking money IN against a debt is a till action, not a manager decision: the
+// seller who hands over the cash is the one recording it. The handler still
+// requires a manager for the one thing that IS a decision — crediting a payment
+// to somebody else's name. Credit LIMITS and waivers stay manager-only.
+app.post('/api/credit-payments', asHandler(handleCreditPaymentCreate));
+app.post('/api/credit-collections', asHandler(handleCreditPaymentCreate));
 
 app.get('/api/credit-limits', requireManager, asHandler(async (req, res) => {
   const branch = String(req.query.branch || '').trim();
