@@ -21,10 +21,13 @@ interface MorningProductionProps {
   productionRegisters: ProductionRegister[];
   sales?: Sale[];
   wastageLogs?: WastageLog[];
-  onAddProduction: (p: ProductionRegister) => void;
-  onDeleteProduction: (id: string) => void;
-  onAddExpense?: (e: Expense) => void;
-  onUpdateProduct?: (p: Product) => void;
+  // All three report the server's answer. The batch toast names the batch AND
+  // its expense, so announcing it before both writes are confirmed is how a
+  // kitchen ends up told a batch was logged when neither write landed.
+  onAddProduction: (p: ProductionRegister) => void | boolean | Promise<void | boolean>;
+  onDeleteProduction: (id: string) => void | boolean | Promise<void | boolean>;
+  onAddExpense?: (e: Expense) => void | boolean | Promise<void | boolean>;
+  onUpdateProduct?: (p: Product) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   // Which kitchen this is. Eatery sees Eatery items, Drinks sees Drinks —
@@ -67,6 +70,7 @@ export default function MorningProduction({
   const [draftIngredients, setDraftIngredients] = useState<DraftIngredient[] | null>(null);
   const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
   const [recordExpense, setRecordExpense] = useState(true);
+  const [savingBatch, setSavingBatch] = useState(false);
 
   const today = todayLocalKey();
   const todayMade = useMemo(
@@ -201,7 +205,17 @@ export default function MorningProduction({
 
   const scopedCategory = category === 'Drinks' ? 'Drinks' : 'Eatery';
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (savingBatch) return;
+    setSavingBatch(true);
+    try {
+      await submitBatch();
+    } finally {
+      setSavingBatch(false);
+    }
+  };
+
+  const submitBatch = async () => {
     const item = prodItem === '__custom' ? prodCustomItem.trim() : prodItem;
     if (!item) { triggerToast('Select the item', 'error'); return; }
     const qty = parseInt(prodQty, 10) || 0;
@@ -213,7 +227,7 @@ export default function MorningProduction({
     const spend = recipePath ? batchSpend : Math.round(qty * (parseFloat(prodCost) || 0));
     if (!recipePath && spend <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     const cost = qty > 0 ? spend / qty : 0;
-    onAddProduction({
+    const batchSaved = await onAddProduction({
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: prodDate,
       item,
@@ -226,13 +240,14 @@ export default function MorningProduction({
     // One place, one tap: the ingredient spend lands in Expenses with its
     // breakdown, so nobody makes a second trip to log the same money.
     let expensed = 0;
+    let expenseSaved = true;
     if (recordExpense && spend > 0 && onAddExpense) {
       const items = recipePath
         ? draftIngredients
           .map(ing => ({ name: String(ing.name || 'Ingredient').slice(0, 120), amount: Math.round((Number(ing.boughtQty) || 0) * (Number(ing.unitCost) || 0)) }))
           .filter(i => i.amount > 0)
         : undefined;
-      onAddExpense({
+      const written = await onAddExpense({
         id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         timestamp: middayStamp(prodDate),
         description: `Ingredients · ${qty} × ${item}`,
@@ -242,7 +257,8 @@ export default function MorningProduction({
         ...(items && items.length ? { items } : {}),
         ...(prod ? { linkedProductId: prod.id, linkedProductName: prod.name } : {}),
       });
-      expensed = spend;
+      expenseSaved = written !== false;
+      expensed = expenseSaved ? spend : 0;
     }
     // What was paid today becomes tomorrow's cost.
     if (recipePath && prod?.recipe && onUpdateProduct) {
@@ -253,19 +269,26 @@ export default function MorningProduction({
         });
         const changed = nextIngredients.some((n, idx) => n.unitCost !== prod.recipe!.ingredients[idx].unitCost);
         if (changed) {
-          onUpdateProduct({ ...prod, recipe: { ...prod.recipe, ingredients: nextIngredients } });
-          triggerToast('Recipe costs updated from what you paid', 'info');
+          const written = await onUpdateProduct({ ...prod, recipe: { ...prod.recipe, ingredients: nextIngredients } });
+          if (written !== false) triggerToast('Recipe costs updated from what you paid', 'info');
         }
       } catch {}
     }
-    triggerToast(
-      expensed > 0
-        ? `Batch logged + ${formatCurrency(expensed)} expense recorded: ${qty} × ${item}`
-        : spend > 0
-          ? `Production logged: ${qty} × ${item} · ${formatCurrency(spend)} of ingredients`
-          : `Production logged: ${qty} × ${item} (from stock on hand)`,
-      'success',
-    );
+    // Announced only after the server has the batch. The form keeps everything
+    // typed when it does not, so the cook can simply press Save again.
+    if (batchSaved === false) return;
+    if (!expenseSaved) {
+      triggerToast(`Batch logged, but the ${formatCurrency(spend)} ingredient expense was refused \u2014 record it in Expenses`, 'error');
+    } else {
+      triggerToast(
+        expensed > 0
+          ? `Batch logged + ${formatCurrency(expensed)} expense recorded: ${qty} \u00d7 ${item}`
+          : spend > 0
+            ? `Production logged: ${qty} \u00d7 ${item} \u00b7 ${formatCurrency(spend)} of ingredients`
+            : `Production logged: ${qty} \u00d7 ${item} (from stock on hand)`,
+        'success',
+      );
+    }
     if (spend > 0 && onRequestTopUp && availableBudget != null && spend > availableBudget) {
       onRequestTopUp(spend - availableBudget);
     }
@@ -418,8 +441,8 @@ export default function MorningProduction({
           </span>
         </button>
 
-        <PrimaryAction onClick={handleSubmit}>
-          <Check className="w-4 h-4" /> Save batch
+        <PrimaryAction onClick={handleSubmit} disabled={savingBatch}>
+          <Check className="w-4 h-4" /> {savingBatch ? 'Saving\u2026' : 'Save batch'}
         </PrimaryAction>
       </div>
 

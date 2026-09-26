@@ -8,12 +8,12 @@ const SHOP_CATEGORY_ORDER = ['Electronics', 'Eatery', 'Drinks', 'Stationery', 'P
 interface QuickExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAddExpense: (expense: Expense) => void;
+  onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
   products: Product[];
   expenseCategories: string[];
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
-  onUpdateProduct?: (p: Product) => void;
+  onUpdateProduct?: (p: Product) => void | boolean | Promise<void | boolean>;
 }
 
 export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, products, expenseCategories, formatCurrency, triggerToast, onUpdateProduct }: QuickExpenseModalProps) {
@@ -123,7 +123,7 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     setExpenseSource('drawer');
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     let amtNum = 0;
     let description = '';
     let category = expenseCat;
@@ -210,7 +210,10 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
         ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
         : {}),
     };
-    onAddExpense(newExpense);
+    // Awaited: this toast said "Expense logged" while the entry could still be
+    // rolled back a moment later behind a different error.
+    const written = await onAddExpense(newExpense);
+    if (written === false) return;
 
     // Carry ingredient prices forward into the dish recipe so pricing, COGS
     // and profit stay honest: what you paid today becomes tomorrow's cost.
@@ -223,8 +226,8 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
           );
           const changed = nextIngredients.some((n, idx) => n.unitCost !== dishProduct.recipe!.ingredients[idx].unitCost);
           if (changed) {
-            onUpdateProduct({ ...dishProduct, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } });
-            triggerToast('Recipe costs updated from what you paid', 'info');
+            const recipeWritten = await onUpdateProduct({ ...dishProduct, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } });
+            if (recipeWritten !== false) triggerToast('Recipe costs updated from what you paid', 'info');
           }
         }
       } catch {}

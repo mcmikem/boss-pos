@@ -512,3 +512,60 @@ test('renaming a spend category never rewrites history', () => {
   const remove = app.match(/const handleDeleteExpenseCategory = [\s\S]*?\n  \};/)?.[0] || '';
   assert.equal(/setExpenses/.test(remove), false);
 });
+
+test('moving cash between drawers is till work, not a manager decision', () => {
+  const server = read('api/index.js');
+  const modal = read('src/components/CashTransferModal.tsx');
+  // The modal's own default reason is "Change / borrow" and it sits on the Sell
+  // toolbar, so all three routes were refusing something a seller does daily.
+  assert.match(server, /app\.get\('\/api\/cash-transfers', asHandler/);
+  assert.match(server, /app\.post\('\/api\/cash-transfers', asHandler/);
+  assert.match(server, /app\.put\('\/api\/cash-transfers\/:id\/settle', asHandler/);
+  // A refused move keeps the amount on screen, because the cash is still in hand.
+  const submit = modal.match(/const handleRecordTransfer = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(submit, /Move not recorded/);
+  assert.ok(submit.indexOf('Move not recorded') < submit.indexOf("setTransferAmt('')"),
+    'the amount may only be cleared once the movement is on the server');
+});
+
+test('a seller\u2019s paid ingredient prices reach the recipe without opening the pricing door', () => {
+  const server = read('api/index.js');
+  const put = server.match(/app\.put\('\/api\/products\/:id', requireManager, asHandler[\s\S]*?\napp\.delete\('\/api\/products\/:id'/)?.[0] || '';
+  // The batch save writes back what the cook paid, so tomorrow's cost is honest.
+  // For a non-manager ONLY those unit costs are read from the payload...
+  assert.match(put, /if \(!\(await requestIsManager\(req\)\)\) \{/);
+  assert.match(put, /const priced = new Map\(incomingIngredients/);
+  assert.match(put, /priced\.has\(key\) \? \{ \.\.\.ing, unitCost: priced\.get\(key\) \} : ing/);
+  // ...and every other field is pinned to the stored row, so this can never
+  // become a back door to changing a price, a cost, stock or an identity.
+  for (const pinned of ['price: Number(current.price || 0)', 'cost: Number(current.cost || 0)',
+                        'stockQty: Number(current.stockqty || 0)', 'barcode: current.barcode',
+                        'imei: current.imei', 'name: current.name', 'category: current.category']) {
+    assert.ok(put.includes(pinned), `missing pinned field: ${pinned}`);
+  }
+  // No recipe, or nothing priced in it, means there is nothing this may do.
+  assert.match(put, /Only a manager can change this item/);
+});
+
+test('no success is announced before the write it describes', () => {
+  const kitchen = read('src/components/MorningProduction.tsx');
+  const quick = read('src/components/QuickExpenseModal.tsx');
+  const recipes = read('src/components/EateryPricing.tsx');
+  // The batch toast names the batch AND its expense, so it can only fire once
+  // both are on the server.
+  const submit = kitchen.match(/const submitBatch = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(submit, /const batchSaved = await onAddProduction\(\{/);
+  assert.ok(submit.indexOf('if (batchSaved === false) return;') < submit.indexOf("triggerToast(\n        expensed > 0"),
+    'the batch toast must wait for the server');
+  assert.match(submit, /but the .* ingredient expense was refused/);
+  assert.match(kitchen, /disabled=\{savingBatch\}/);
+  // Quick expense, and the recipe screens, same rule.
+  assert.match(quick, /const written = await onAddExpense\(newExpense\);/);
+  assert.match(quick, /if \(written === false\) return;/);
+  assert.match(recipes, /const written = await onUpdateProduct\(\{/);
+  assert.match(recipes, /if \(written === false\) return;/);
+  // And a seller opening the pricing screen is told why, not left filling in a
+  // form whose every save is refused.
+  assert.match(recipes, /canEdit\?: boolean/);
+  assert.match(recipes, /Prices and recipes are a manager/);
+});

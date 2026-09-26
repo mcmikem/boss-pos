@@ -2343,9 +2343,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddExpense = async (newExpense: Expense) => {
+  // Resolves false when the server refused it, so a caller that bundled this
+  // write with another (the kitchen's batch + its ingredients) can tell the
+  // truth about which half landed.
+  const handleAddExpense = async (newExpense: Expense): Promise<boolean> => {
     const inflight = inflightExpenses.current.get(newExpense.id);
-    if (inflight) return inflight;
+    if (inflight) { await inflight; return true; }
+    let written = true;
     const run = (async () => {
     // Stamp who recorded it (clocked-in seller wins) + default source drawer.
     const who = activeStaff?.name || staffName;
@@ -2359,9 +2363,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setExpenses(prev => prev.some(e => e.id === stamped.id)
       ? prev.map(e => e.id === stamped.id ? stamped : e)
       : [stamped, ...prev]);
-    try { await expenseApi.create(stamped); } catch {
+    try { await expenseApi.create(stamped); } catch (err) {
       setExpenses(prev => prev.filter(e => e.id !== newExpense.id));
-      triggerToast('Failed to save expense — not added', 'error');
+      written = false;
+      // The server knows why — an unknown category, a closed day, a bad amount.
+      // "Failed to save expense" threw that away every single time.
+      const e = err as { code?: string; message?: string; category?: string; suggestions?: string[] };
+      const why = e?.code === 'INVALID_CATEGORY' && e.suggestions?.length
+        ? `unknown category \u2014 did you mean \u201c${e.suggestions[0]}\u201d?`
+        : e?.code === 'INVALID_CATEGORY'
+          ? `unknown category \u201c${e.category || ''}\u201d`
+          : e?.code === 'SESSION_CLOSED'
+            ? 'that day\u2019s books are closed \u2014 reopen the day first'
+            : e?.code === 'MANAGER_REQUIRED'
+              ? 'only a manager can approve an expense'
+              : (e?.message ? String(e.message).slice(0, 70) : 'not saved');
+      triggerToast(`Expense not saved \u2014 ${why}`, 'error');
     }
     })();
     inflightExpenses.current.set(newExpense.id, run);
@@ -2370,6 +2387,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     } finally {
       inflightExpenses.current.delete(newExpense.id);
     }
+    return written;
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
@@ -2670,7 +2688,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     })();
   }, [authState, customers.length]);
 
-  const handleAddProduction = async (p: ProductionRegister) => {
+  const handleAddProduction = async (p: ProductionRegister): Promise<boolean> => {
     setProductionRegisters(prev => [p, ...prev]);
     // Morning batch adds to sellable stock so the till can actually sell what
     // the kitchen made (previously production never touched stock, forcing
@@ -2682,7 +2700,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           : prod
       ));
     }
-    try { await productionRegisterApi.create(p); } catch {
+    try { await productionRegisterApi.create(p); return true; } catch (err) {
       setProductionRegisters(prev => prev.filter(x => x.id !== p.id));
       if (p.productId && p.qty > 0) {
         setProducts(prev => prev.map(prod =>
@@ -2691,11 +2709,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             : prod
         ));
       }
-      triggerToast('Failed to save production — not added', 'error');
+      const e = err as { code?: string; message?: string };
+      const why = e?.code === 'SESSION_CLOSED'
+        ? 'that day\u2019s books are closed \u2014 reopen the day first'
+        : (e?.message ? String(e.message).slice(0, 70) : 'not saved');
+      triggerToast(`Batch not saved \u2014 ${why}`, 'error');
+      return false;
     }
   };
 
-  const handleDeleteProduction = async (id: string) => {
+  const handleDeleteProduction = async (id: string): Promise<boolean> => {
     const prev = productionRegisters.find(p => p.id === id);
     setProductionRegisters(prev => prev.filter(p => p.id !== id));
     // Mirror the add path: removing a batch takes it back out of sellable
@@ -2707,7 +2730,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           : prod
       ));
     }
-    try { await productionRegisterApi.remove(id); } catch {
+    try { await productionRegisterApi.remove(id); return true; } catch (err) {
       if (prev) setProductionRegisters(list => [prev, ...list]);
       if (prev?.productId && prev.qty > 0) {
         setProducts(list => list.map(prod =>
@@ -2716,7 +2739,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             : prod
         ));
       }
-      triggerToast('Failed to delete production', 'error');
+      const e = err as { code?: string; message?: string };
+      triggerToast(`Batch not deleted \u2014 ${e?.message ? String(e.message).slice(0, 70) : 'try again'}`, 'error');
+      return false;
     }
   };
 
@@ -3003,6 +3028,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             simple={isSimpleNav}
             hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}
+            canEditPrices={isManager}
+            onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             customers={customers}
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
@@ -3169,6 +3196,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             simple={isSimpleNav}
             hideGuide={tourVisible}
             onRequirePin={(msg) => requirePin(msg, true)}
+            canEditPrices={isManager}
+            onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             customers={customers}
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}

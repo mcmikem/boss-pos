@@ -145,6 +145,11 @@ interface SalesProps {
   simple?: boolean;
   hideGuide?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
+  // Changing prices and recipes is a manager decision. The screen still opens
+  // for a seller, but says so and offers the sign-in instead of letting them
+  // fill in a form whose every save is refused.
+  canEditPrices?: boolean;
+  onRequestManagerSignIn?: () => void;
   customers?: CustomerProfile[];
   onSaveCustomer?: (c: CustomerProfile) => void;
   onDeleteCustomer?: (id: string) => void;
@@ -201,7 +206,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, canEditPrices, onRequestManagerSignIn, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const effectiveDraftScope = useMemo<CheckoutDraftScope>(() => ({
@@ -523,7 +528,6 @@ export default function Sales({
     const note = raw.trim();
     if (!note) { triggerToast('Say where the money came from', 'error'); return; }
     if (onRecordIngredientTopUp) onRecordIngredientTopUp(missing, note);
-    triggerToast('Ingredient top-up recorded', 'success');
   };
   useEffect(() => {
     let active = true;
@@ -2226,7 +2230,8 @@ export default function Sales({
             </button>
             <Suspense fallback={subManagerFallback}>
               <EateryPricing products={products} onUpdateProduct={onUpdateProduct}
-                formatCurrency={formatCurrency} triggerToast={triggerToast} />
+                formatCurrency={formatCurrency} triggerToast={triggerToast}
+                canEdit={canEditPrices} onRequestManagerSignIn={onRequestManagerSignIn} />
             </Suspense>
           </div>
                 ) : showProduction && onAddProduction && onDeleteProduction ? (

@@ -20,7 +20,12 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
 
   useEffect(() => {
     if (!isOpen) return;
-    cashTransferApi.list().then(setTransfers).catch(() => triggerToast('Failed to load transfers', 'error'));
+    cashTransferApi.list().then(setTransfers).catch((err: unknown) => {
+      const e = err as { code?: string };
+      triggerToast(e?.code === 'MANAGER_REQUIRED'
+        ? 'Drawer moves are not available on this account \u2014 ask a manager'
+        : 'Could not load past drawer moves', 'error');
+    });
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -52,9 +57,16 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
     try {
       await cashTransferApi.create(newTransfer);
       triggerToast(`Recorded: ${formatCurrency(amtNum)} from ${transferFrom} → ${transferTo}`, 'info');
-    } catch {
+    } catch (err) {
       setTransfers(prev => prev.filter(t => t.id !== newTransfer.id));
-      triggerToast('Failed to save transfer', 'error');
+      // Name the cause and keep the amount: a refused drawer move is money the
+      // cashier still has in their hand and needs to record somewhere.
+      const e = err as { code?: string; message?: string };
+      const why = e?.code === 'SESSION_CLOSED'
+        ? 'that day\u2019s books are closed \u2014 reopen the day first'
+        : (e?.message ? String(e.message).slice(0, 70) : 'not saved');
+      triggerToast(`Move not recorded \u2014 ${why}`, 'error');
+      return;
     }
     setTransferAmt('');
     setTransferReason('');
@@ -66,9 +78,10 @@ export default function CashTransferModal({ isOpen, onClose, formatCurrency, tri
     try {
       await cashTransferApi.settle(id);
       triggerToast('Marked as settled', 'success');
-    } catch {
+    } catch (err) {
       setTransfers(prev => prev.map(t => t.id === id ? { ...t, settledAt: null } : t));
-      triggerToast('Failed to settle transfer', 'error');
+      const e = err as { message?: string };
+      triggerToast(`Not marked settled \u2014 ${e?.message ? String(e.message).slice(0, 70) : 'try again'}`, 'error');
     }
   };
 

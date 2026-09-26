@@ -1975,41 +1975,79 @@ app.put('/api/stocktake', requireManager, asHandler(handleBulkStocktake));
 app.put('/api/stocktake/bulk', requireManager, asHandler(handleBulkStocktake));
 
 app.put('/api/products/:id', requireManager, asHandler(async (req, res) => {
-  const p = req.body && typeof req.body === 'object' ? req.body : {};
-  if (p.imageUrl && String(p.imageUrl).length > 60000) {
+  let body = req.body && typeof req.body === 'object' ? req.body : {};
+  if (body.imageUrl && String(body.imageUrl).length > 60000) {
     return res.status(400).json({ error: 'Image too large (max ~60KB after compression)' });
   }
   const old = await sql`SELECT * FROM products WHERE id=${req.params.id}`;
   if (!old.length) return res.status(404).json({ error: 'Product not found' });
   const current = old[0];
+  // A seller's batch save carries the prices they actually paid for the
+  // ingredients, and writes them back so tomorrow's cost is honest. That is not
+  // a price change, but this route is the shop's pricing door — so for a
+  // non-manager ONLY the recipe's ingredient unit costs are taken from the
+  // payload and every other field is pinned to the stored row. It therefore
+  // cannot be used to change a selling price, a cost, stock or an identity, no
+  // matter what the request body claims.
+  if (!(await requestIsManager(req))) {
+    const storedRecipe = current.recipe ? (typeof current.recipe === 'string' ? JSON.parse(current.recipe) : current.recipe) : null;
+    const incoming = body.recipe && typeof body.recipe === 'object' ? body.recipe : null;
+    const storedIngredients = Array.isArray(storedRecipe?.ingredients) ? storedRecipe.ingredients : [];
+    const incomingIngredients = Array.isArray(incoming?.ingredients) ? incoming.ingredients : [];
+    const priced = new Map(incomingIngredients.filter((i) => i && Number(i.unitCost) >= 0).map((i) => [String(i.id ?? i.name), Number(i.unitCost)]));
+    if (!storedRecipe || !Array.isArray(storedRecipe.ingredients) || priced.size === 0) {
+      return res.status(403).json({ error: 'Only a manager can change this item', code: MANAGER_REQUIRED_CODE });
+    }
+    const mergedIngredients = storedIngredients.map((ing) => {
+      const key = String(ing.id ?? ing.name);
+      return priced.has(key) ? { ...ing, unitCost: priced.get(key) } : ing;
+    });
+    body = {
+      ...body,
+      name: current.name,
+      category: current.category,
+      price: Number(current.price || 0),
+      cost: Number(current.cost || 0),
+      stockQty: Number(current.stockqty || 0),
+      lowStockThreshold: Number(current.lowstockthreshold ?? 5),
+      barcode: current.barcode || '',
+      imei: current.imei || '',
+      variants: current.variants || null,
+      saleUnit: current.saleunit || null,
+      imageUrl: current.imageurl || '',
+      supplierId: current.supplierid || null,
+      isService: !!current.isservice,
+      recipe: { ...storedRecipe, ingredients: mergedIngredients },
+    };
+  }
   const serverUpdatedAt = current.updated_at;
-  const clientUpdatedAt = p.updatedAt;
+  const clientUpdatedAt = body.updatedAt;
   if (clientUpdatedAt && serverUpdatedAt && clientUpdatedAt < serverUpdatedAt) {
     return res.status(409).json({ error: 'This item was changed on another device. Your edit was not saved.', code: 'CONFLICT', row: mapProduct(current) });
   }
-  const name = p.name !== undefined ? text(p.name, 150) : current.name;
-  const category = p.category !== undefined ? text(p.category, 100) : current.category;
+  const name = body.name !== undefined ? text(body.name, 150) : current.name;
+  const category = body.category !== undefined ? text(body.category, 100) : current.category;
   if (!name || !category) return res.status(400).json({ error: 'name and category are required' });
-  const barcodeInput = p.barcode !== undefined ? p.barcode : current.barcode;
-  const imeiInput = p.imei !== undefined ? p.imei : current.imei;
+  const barcodeInput = body.barcode !== undefined ? body.barcode : current.barcode;
+  const imeiInput = body.imei !== undefined ? body.imei : current.imei;
   const identity = validateProductIdentity({ id: req.params.id, barcode: barcodeInput, imei: imeiInput }, await sql`SELECT id,barcode,imei FROM products`);
   if (identity.errors.length) {
     const ambiguous = identity.errors.find((e) => e.code === 'IDENTITY_AMBIGUOUS');
     return res.status(ambiguous ? 409 : 400).json({ error: identity.errors[0].message, code: identity.errors[0].code, fields: identity.errors });
   }
-  const expiry = expiryDateValue(p.expiryDate !== undefined ? p.expiryDate : (current.expirydate || ''));
+  const expiry = expiryDateValue(body.expiryDate !== undefined ? body.expiryDate : (current.expirydate || ''));
   if (expiry.error) return res.status(400).json({ error: expiry.error, code: 'INVALID_EXPIRY' });
   const expiryRaw = expiry.value || '';
-  const rawStock = p.stockQty !== undefined ? Number(p.stockQty) : Number(current.stockqty || 0);
+  const rawStock = body.stockQty !== undefined ? Number(body.stockQty) : Number(current.stockqty || 0);
   if (!Number.isFinite(rawStock) || rawStock < 0) return res.status(400).json({ error: 'stockQty must be a non-negative number', code: 'INVALID_QUANTITY' });
-  const rawThreshold = p.lowStockThreshold !== undefined ? Number(p.lowStockThreshold) : Number(current.lowstockthreshold ?? 5);
+  const rawThreshold = body.lowStockThreshold !== undefined ? Number(body.lowStockThreshold) : Number(current.lowstockthreshold ?? 5);
   if (!Number.isFinite(rawThreshold) || rawThreshold < 0) return res.status(400).json({ error: 'lowStockThreshold must be a non-negative number', code: 'INVALID_QUANTITY' });
-  const imageUrl = p.imageUrl !== undefined ? await resolveImageUrl(p.imageUrl) : current.imageurl || null;
+  const imageUrl = body.imageUrl !== undefined ? await resolveImageUrl(body.imageUrl) : current.imageurl || null;
   const nowIso = new Date().toISOString();
   const stockQty = qty3(rawStock);
   const lowStockThreshold = qty3(rawThreshold) || 5;
-  await sql`UPDATE products SET name=${name},category=${category},cost=${p.cost !== undefined ? num(p.cost) : current.cost},price=${p.price !== undefined ? num(p.price) : current.price},stockQty=${stockQty},lowStockThreshold=${lowStockThreshold},supplierId=${p.supplierId !== undefined ? p.supplierId || null : current.supplierid},isService=${p.isService !== undefined ? !!p.isService : !!current.isservice},saleUnit=${p.saleUnit !== undefined ? p.saleUnit || null : current.saleunit || null},imei=${identity.imei},barcode=${identity.barcode},expirydate=${expiryRaw || null},imageUrl=${imageUrl},variants=${p.variants !== undefined ? (p.variants ? JSON.stringify(p.variants) : null) : current.variants},recipe=${p.recipe !== undefined ? (p.recipe ? JSON.stringify(p.recipe) : null) : current.recipe},updated_at=${nowIso},deleted=false,barcode_normalized=${identity.barcode},imei_normalized=${identity.imei} WHERE id=${req.params.id}`;
-  const isService = p.isService !== undefined ? !!p.isService : !!current.isservice;
+  await sql`UPDATE products SET name=${name},category=${category},cost=${body.cost !== undefined ? num(body.cost) : current.cost},price=${body.price !== undefined ? num(body.price) : current.price},stockQty=${stockQty},lowStockThreshold=${lowStockThreshold},supplierId=${body.supplierId !== undefined ? body.supplierId || null : current.supplierid},isService=${body.isService !== undefined ? !!body.isService : !!current.isservice},saleUnit=${body.saleUnit !== undefined ? body.saleUnit || null : current.saleunit || null},imei=${identity.imei},barcode=${identity.barcode},expirydate=${expiryRaw || null},imageUrl=${imageUrl},variants=${body.variants !== undefined ? (body.variants ? JSON.stringify(body.variants) : null) : current.variants},recipe=${body.recipe !== undefined ? (body.recipe ? JSON.stringify(body.recipe) : null) : current.recipe},updated_at=${nowIso},deleted=false,barcode_normalized=${identity.barcode},imei_normalized=${identity.imei} WHERE id=${req.params.id}`;
+  const isService = body.isService !== undefined ? !!body.isService : !!current.isservice;
   if (!isService) {
     const prev = Number(current.stockqty || 0);
     if (stockQty !== prev) await logStockMovement(sql, { productId: req.params.id, productName: name, delta: stockQty - prev, type: 'adjust', qtyAfter: stockQty, note: `Stock edited ${prev} -> ${stockQty}` });
@@ -4080,12 +4118,18 @@ app.delete('/api/credit-limits/:key', requireManager, asHandler(async (req, res)
 }));
 
 // === CASH TRANSFERS API ===
-app.get('/api/cash-transfers', requireManager, asHandler(async (req, res) => {
+// Moving cash between department drawers is making change at the till — the
+// modal's own default reason is "Change / borrow". It was manager-only on all
+// three routes while sitting on the Sell toolbar, so a seller could see the
+// button, fill the form, and be refused; the read gate also emptied the modal's
+// history and reported "Failed to load transfers". The server already treats
+// this as a till-level money write (it is in SESSION_WRITE_PATHS).
+app.get('/api/cash-transfers', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM cash_transfers ORDER BY createdat DESC`;
   res.json(rows.map(mapTransfer));
 }));
 
-app.post('/api/cash-transfers', requireManager, asHandler(async (req, res) => {
+app.post('/api/cash-transfers', asHandler(async (req, res) => {
   const t = req.body && typeof req.body === 'object' ? req.body : {};
   const amount = Number(t.amount);
   if (!t.fromCategory || !t.toCategory || !Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'fromCategory, toCategory, and a positive amount are required', code: 'INVALID_TRANSFER' });
@@ -4105,7 +4149,7 @@ app.post('/api/cash-transfers', requireManager, asHandler(async (req, res) => {
   res.json(mapTransfer(inserted[0]));
 }));
 
-app.put('/api/cash-transfers/:id/settle', requireManager, asHandler(async (req, res) => {
+app.put('/api/cash-transfers/:id/settle', asHandler(async (req, res) => {
   const actor = await requestActor(req);
   const rows = await sql`SELECT * FROM cash_transfers WHERE id=${req.params.id}`;
   if (!rows.length) return res.status(404).json({ error: 'Transfer not found', code: 'TRANSFER_NOT_FOUND' });

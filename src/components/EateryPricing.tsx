@@ -6,9 +6,15 @@ import { RECIPE_UNITS, calculateRecipe, emptyRecipe, suggestedFor, effectiveCost
 
 interface EateryPricingProps {
   products: Product[];
-  onUpdateProduct: (p: Product) => void;
+  // Reports the server's answer: this screen changes prices, which IS a manager
+  // decision, so "Recipe saved" must never be claimed before the server agrees.
+  onUpdateProduct: (p: Product) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  // Managers only. A seller who opens this is told why, not left to fill in a
+  // form whose every save is refused.
+  canEdit?: boolean;
+  onRequestManagerSignIn?: () => void;
 }
 
 const sanitizeRecipe = (recipe: Recipe | null): Recipe | undefined => {
@@ -32,7 +38,7 @@ const sanitizeRecipe = (recipe: Recipe | null): Recipe | undefined => {
   };
 };
 
-export default function EateryPricing({ products, onUpdateProduct, formatCurrency, triggerToast }: EateryPricingProps) {
+export default function EateryPricing({ products, onUpdateProduct, formatCurrency, triggerToast, canEdit, onRequestManagerSignIn }: EateryPricingProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
@@ -82,7 +88,7 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
     });
   };
 
-  const applySuggested = () => {
+  const applySuggested = async () => {
     if (!calc || !selected) return;
     const suggested = String(Math.round(calc.suggestedPrice));
     setPrice(suggested);
@@ -91,12 +97,16 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
       price: Math.round(suggestedFor(v.cost ?? calc.cogsPerUnit, recipe?.targetMarginPct || 60)),
     }));
     setVariants(newVariants);
-    save(suggested, newVariants);
-    triggerToast('Suggested prices applied', 'success');
+    await save(suggested, newVariants, 'Suggested prices applied');
   };
 
-  const save = (priceVal?: string, variantList?: ProductVariant[]) => {
+  const save = async (priceVal?: string, variantList?: ProductVariant[], doneMessage = 'Recipe saved') => {
     if (!selected) return;
+    if (canEdit === false) {
+      triggerToast('Prices and recipes are a manager\u2019s job — ask them to sign in', 'error');
+      onRequestManagerSignIn?.();
+      return;
+    }
     const clean = sanitizeRecipe(recipe);
     if (!clean) {
       triggerToast('Add at least one ingredient and a batch yield', 'error');
@@ -104,13 +114,14 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
     }
     const nextPrice = priceVal ?? price;
     const nextVariants = variantList ?? variants;
-    onUpdateProduct({
+    const written = await onUpdateProduct({
       ...selected,
       price: parseFloat(nextPrice) || 0,
       variants: nextVariants,
       recipe: clean,
     });
-    triggerToast('Recipe saved', 'success');
+    if (written === false) return;
+    triggerToast(doneMessage, 'success');
   };
 
   return (
