@@ -499,6 +499,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Money out is manager-only, so a till-only session cannot even list it.
   // Remember that: an empty list we were not allowed to read is not an empty day.
   const [moneyOutBlocked, setMoneyOutBlocked] = useState(false);
+  // Why the last close summary did not reach the owner, if it did not.
+  const [closeSummaryError, setCloseSummaryError] = useState('');
   const [categories, setCategories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('boss_pos_categories');
@@ -626,7 +628,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setCustomers(d.customers || []);
     setProductionRegisters(d.productionRegisters);
     setWastageLogs(d.wastageLogs);
-    setMomoTransfers(d.momoTransfers);
+    setMomoTransfers(d.momoTransfers || []);
+    // The boot payload leaves out the manager-only tables for a seller. Do NOT
+    // cache the empty stand-in: a cached [] would read as a day with no money
+    // moved, which is exactly the lie the blocked banner exists to prevent.
+    const hidden = Array.isArray(d.managerOnlyHidden) ? d.managerOnlyHidden : [];
+    if (hidden.includes('momoTransfers')) {
+      setMomoTransfers([]);
+      setMoneyOutBlocked(true);
+    } else {
+      setMoneyOutBlocked(false);
+      primeCache('/api/momo-transfers', d.momoTransfers || []);
+    }
+    if (!hidden.includes('creditPayments')) primeCache('/api/credit-payments', d.creditPayments || []);
     // Warm per-endpoint caches so later reads (and offline reloads) hit cache.
     primeCache('/api/products', d.products);
     primeCache('/api/suppliers', d.suppliers);
@@ -634,12 +648,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     primeCache('/api/staff', d.staff || []);
     primeCache('/api/sales', d.sales);
     primeCache('/api/expenses', d.expenses);
-    primeCache('/api/credit-payments', d.creditPayments);
     primeCache('/api/credit-eats', d.creditEats);
     primeCache('/api/customers', d.customers || []);
     primeCache('/api/production-register', d.productionRegisters);
     primeCache('/api/wastage-log', d.wastageLogs);
-    primeCache('/api/momo-transfers', d.momoTransfers);
     primeCache('/api/settings', d.settings);
     setLastSyncedAt(Date.now());
   }, []);
@@ -1282,9 +1294,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // to save settings").
   useEffect(() => {
     if (!readyRef.current) return;
-    // Cashiers never push settings (a clocked-in cashier only sells).
-    if (staffConfigured && activeRole !== 'manager') return;
-    const serialized = serializeSettings(settings);
+    // A cashier pushes NOTHING of their own — except the float each department
+    // carries into tomorrow, which is counted at the till. That one key used to
+    // be dropped here as well as refused by the server: the figure showed on
+    // screen, fed the unaccounted-money maths, and never left the phone.
+    const tillOnly = staffConfigured && activeRole !== 'manager';
+    const serialized = tillOnly
+      ? JSON.stringify({ eodCapital: (settings as { eodCapital?: unknown }).eodCapital ?? {} })
+      : serializeSettings(settings);
     if (serialized === lastSentSettingsRef.current) return;
     // Don't echo the just-booted value back immediately — wait for a user edit
     if (lastSentSettingsRef.current === '' ) {
@@ -2179,6 +2196,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Filing the close: the evening briefing goes to the owner's in-app inbox
   // the moment the day is closed. Idempotent per day + department, and the
   // one story the till, the inbox and WhatsApp all tell.
+  // Set by the send below, read by the screen that promised a summary. A local,
+  // not state: it is written and read inside one call.
+  let closeSummaryFailure = '';
   const handleCloseDayFinished = async (close: {
     businessDate: string;
     branch: string;
@@ -2221,6 +2241,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         closedByName: close.closedByName || activeStaff?.name || staffName || '',
         ownerName: settings.ownerName || '',
       });
+      setCloseSummaryError('');
       const sent = await closeSummaryApi.send({
         businessDate: close.businessDate,
         branch: close.branch,
@@ -2233,7 +2254,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         clientWriteId: closeSummaryClientWriteId(close.businessDate, close.branch),
       });
       return { id: sent.id, body: payload.body };
-    } catch {
+    } catch (err) {
+      // The drawer count reaches the server ONLY through this summary, so a
+      // silent null left the day's numbers nowhere and told the cashier it would
+      // "send on the next sync" — which a permanent 400/409 never would.
+      const e = err as { code?: string; message?: string };
+      closeSummaryFailure = e?.code === 'SESSION_CLOSED'
+        ? 'that day\u2019s books are closed \u2014 reopen the day and send again'
+        : (e?.message ? String(e.message).slice(0, 70) : 'no reason given');
+      setCloseSummaryError(closeSummaryFailure);
       return null;
     }
   };
@@ -2675,7 +2704,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddWastage = async (w: WastageLog) => {
+  const handleAddWastage = async (w: WastageLog): Promise<boolean> => {
     setWastageLogs(prev => [w, ...prev]);
     // Mirror the server: expired leaves the shelf now; remaining stays —
     // it IS tomorrow's opening stock.
@@ -2687,7 +2716,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           : prod
       ));
     }
-    try { await wastageLogApi.create(w); } catch {
+    try { await wastageLogApi.create(w); return true; } catch (err) {
       setWastageLogs(prev => prev.filter(x => x.id !== w.id));
       if (touchesStock) {
         setProducts(prev => prev.map(prod =>
@@ -2696,11 +2725,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             : prod
         ));
       }
-      triggerToast('Failed to save loss — not added', 'error');
+      // The server knows WHY (not enough stock left, a closed day, a bad
+      // number). "Failed to save loss" threw that away every time.
+      const e = err as { code?: string; message?: string; shortBy?: number };
+      const why = e?.code === 'INSUFFICIENT_STOCK'
+        ? `only ${formatCurrency(Math.max(0, (w.qty || 0) - (e.shortBy || 0)))} left on the shelf — count the tray first`
+        : e?.code === 'SESSION_CLOSED'
+          ? 'that day\u2019s books are closed — reopen the day first'
+          : (e?.message ? String(e.message).slice(0, 70) : 'not saved');
+      triggerToast(`Loss not saved \u2014 ${why}`, 'error');
+      return false;
     }
   };
 
-  const handleDeleteWastage = async (id: string) => {
+  const handleDeleteWastage = async (id: string): Promise<boolean> => {
     const prev = wastageLogs.find(w => w.id === id);
     setWastageLogs(prev => prev.filter(w => w.id !== id));
     // Remaining rows never touched stock — only reverse expired removals.
@@ -2712,7 +2750,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           : prod
       ));
     }
-    try { await wastageLogApi.remove(id); } catch {
+    try { await wastageLogApi.remove(id); return true; } catch (err) {
       if (prev) setWastageLogs(list => [prev, ...list]);
       if (touchedStock && prev) {
         setProducts(list => list.map(prod =>
@@ -2721,7 +2759,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             : prod
         ));
       }
-      triggerToast('Failed to delete loss', 'error');
+      const e = err as { code?: string; message?: string };
+      const why = e?.code === 'MANAGER_REQUIRED'
+        ? 'only a manager can remove that entry'
+        : e?.code === 'SESSION_CLOSED'
+          ? 'that day\u2019s books are closed — reopen the day first'
+          : (e?.message ? String(e.message).slice(0, 70) : 'not deleted');
+      triggerToast(`Not deleted \u2014 ${why}`, 'error');
+      return false;
     }
   };
 
@@ -3016,6 +3061,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onBack={() => setActiveTab('analytics')}
             onReopenDay={handleReopenDay}
             creditBookName={settings.creditBookName || 'Credit book'}
+            closeSummaryError={closeSummaryError}
             canManageMoneyOut={isManager}
             onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             moneyOutBlocked={moneyOutBlocked}

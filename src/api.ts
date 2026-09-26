@@ -1705,6 +1705,9 @@ export interface BootData {
   settings: StoreSettings;
   salesTruncated?: boolean;
   expensesTruncated?: boolean;
+  // Tables the server omitted because this session is not a manager. The empty
+  // arrays above are stand-ins, NOT "nothing happened" — the screen must say so.
+  managerOnlyHidden?: string[];
 }
 
 // One round-trip boots the whole till on 3G instead of 10 serialized requests.

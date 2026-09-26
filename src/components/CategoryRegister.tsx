@@ -37,8 +37,11 @@ interface CategoryRegisterProps {
   // clears the form only once the entry is actually on the books.
   onAddCreditEat: (e: CreditEat) => void | boolean | Promise<void | boolean>;
   onPayCreditEat: (id: string, amount: number) => void | boolean | Promise<void | boolean>;
-  onAddWastage: (w: WastageLog) => void;
-  onDeleteWastage: (id: string) => void;
+  // Wastage writes report the server's answer: a loss or tray count that was
+  // refused must not be announced as logged, and a refused delete must not be
+  // followed by the replacement row that was meant to replace it.
+  onAddWastage: (w: WastageLog) => void | boolean | Promise<void | boolean>;
+  onDeleteWastage: (id: string) => void | boolean | Promise<void | boolean>;
   onAddMomoTransfer: (t: MomoTransfer) => void | boolean | Promise<void | boolean>;
   onDeleteMomoTransfer: (id: string) => void;
   // Money out decides what the drawer, the float and the owner get, so it is a
@@ -49,6 +52,9 @@ interface CategoryRegisterProps {
   // The money-out list itself is manager-only: when it could not be loaded the
   // screen says so rather than showing an empty day as if nothing moved.
   moneyOutBlocked?: boolean;
+  // Set when the close summary was refused for good. "Will send on the next
+  // sync" is a promise a permanent 400/409 never keeps.
+  closeSummaryError?: string;
   staffName?: string;
   shopName?: string;
   ownerName?: string;
@@ -178,7 +184,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  canManageMoneyOut = true, onRequestManagerSignIn, moneyOutBlocked = false,
+  canManageMoneyOut = true, onRequestManagerSignIn, moneyOutBlocked = false, closeSummaryError = '',
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
   onPrintClose, onSendClose, onReopenDay, onCloseDayFinished, onShareCloseSummary, onCommitProductionPlan,
   ownerPhone = '', branch = '', pastClose = true, blind = false, notifyOwner = true,
@@ -373,17 +379,22 @@ export default function CategoryRegister({
 
   // Optional tray-count audit: logs a 'remaining' row confirming the counted
   // tray. Not required — leftover auto-carries anyway (see openingForDay).
-  const carryRow = (row: { product: Product; recon: number }) => {
+  const carryRow = async (row: { product: Product; recon: number }) => {
     const qty = Math.round(row.recon);
     if (qty <= 0) return;
-    // Recount replaces the old tray count — otherwise two "remaining" rows
-    // stack and the gap math reads double.
-    try {
-      catWastage
-        .filter(x => x.productId === row.product.id && x.date === balanceDate && x.reason === 'remaining')
-        .forEach(x => onDeleteWastage(x.id));
-    } catch {}
-    onAddWastage({
+    // Recount REPLACES the old tray count. The delete has to be awaited: fired
+    // and forgotten, a refused delete still let the new row through and two
+    // "remaining" rows stacked — which is exactly what the gap math then read
+    // as double stock.
+    const stale = catWastage.filter(x => x.productId === row.product.id && x.date === balanceDate && x.reason === 'remaining');
+    for (const old of stale) {
+      const removed = await onDeleteWastage(old.id);
+      if (removed === false) {
+        triggerToast(`Could not replace yesterday's count for ${row.product.name} — try again`, 'error');
+        return;
+      }
+    }
+    await onAddWastage({
       id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: balanceDate,
       item: row.product.name,
@@ -400,7 +411,12 @@ export default function CategoryRegister({
     const rows = balanceRows.filter(r => r.recon > 0);
     if (rows.length === 0) return;
     if (!(await confirmDialog({ title: 'Carry tray', message: `Confirm tray counts for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? They auto-carry anyway.`, confirmLabel: 'Carry' }))) return;
-    rows.forEach(carryRow);
+    setCarrying(true);
+    try {
+      for (const row of rows) await carryRow(row);
+    } finally {
+      setCarrying(false);
+    }
   };
 
   const [payId, setPayId] = useState<string | null>(null);
@@ -410,6 +426,9 @@ export default function CategoryRegister({
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [savingMoneyOut, setSavingMoneyOut] = useState(false);
   const [savingCredit, setSavingCredit] = useState(false);
+  const [carrying, setCarrying] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [savingWaste, setSavingWaste] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
   // Mobile-money confirmation code. Only phone money has one, so it is asked
@@ -509,11 +528,27 @@ export default function CategoryRegister({
     try { await onShareCloseSummary?.(summarySentId); } catch {}
     triggerToast('Opening WhatsApp with the close summary', 'success');
   };
+  // Reopening a day is a manager decision, and the local record is only cleared
+  // once the SERVER has reopened it. Clearing first left the till believing the
+  // day was open while the server still refused every write to it.
   const reopenDay = async () => {
+    if (!canManageMoneyOut) {
+      triggerToast('Only a manager can reopen a day — sign in with your staff PIN', 'error');
+      onRequestManagerSignIn?.();
+      return;
+    }
+    setReopening(true);
+    try {
+      if (onReopenDay) await onReopenDay();
+    } catch (err) {
+      triggerToast(`Day not reopened — ${err instanceof Error ? err.message.slice(0, 80) : 'try again'}`, 'error');
+      return;
+    } finally {
+      setReopening(false);
+    }
     try { localStorage.removeItem(closedStoreKey); } catch {}
     setDayClosedAt(null);
-    triggerToast('Day reopened — closing record cleared', 'info');
-    if (onReopenDay) await onReopenDay();
+    triggerToast('Day reopened — books are open again', 'success');
   };
   const [showCloseHelp, setShowCloseHelp] = useState(false);
 
@@ -942,24 +977,35 @@ export default function CategoryRegister({
     setShowMomoForm(false);
   };
 
-  const handleSubmitWastage = () => {
+  const handleSubmitWastage = async () => {
     const item = activeItem(catProducts.map(p => p.name), wasteCustomItem, wasteItem);
     if (!item) { triggerToast('Select the item', 'error'); return; }
     const qty = parseInt(wasteQty, 10) || 0;
     if (qty <= 0) { triggerToast('Enter how many', 'error'); return; }
     const cost = parseFloat(wasteCost) || 0;
     if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
-    onAddWastage({
-      id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      date: wasteDate,
-      item,
-      category: selected,
-      productId: wasteProductId || undefined,
-      qty,
-      costEach: cost,
-      lossAmount: Math.round(qty * cost),
-      reason: wasteReason,
-    });
+    setSavingWaste(true);
+    let saved: void | boolean;
+    try {
+      saved = await onAddWastage({
+        id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        date: wasteDate,
+        item,
+        category: selected,
+        productId: wasteProductId || undefined,
+        qty,
+        costEach: cost,
+        lossAmount: Math.round(qty * cost),
+        reason: wasteReason,
+      });
+    } finally {
+      setSavingWaste(false);
+    }
+    // "Loss logged" used to fire before the server agreed, then the entry was
+    // rolled back with "Failed to save loss" — the classic reported-it-and-it-
+    // vanished. The form keeps what was typed until the loss is really on the
+    // books, and the reason is named.
+    if (saved === false) return;
     triggerToast(wasteReason === 'remaining' ? `Carried to tomorrow — not a loss` : 'Loss logged', 'success');
     setWasteItem(''); setWasteCustomItem(''); setWasteProductId(null); setWasteQty(''); setWasteCost('');
     setShowWasteForm(false);
@@ -1279,13 +1325,15 @@ export default function CategoryRegister({
                       </button>
                     </div>
                   ) : (
-                    <p className="mt-1.5 text-[10px] font-bold text-zinc-500 uppercase">
-                      Owner summary not sent yet — it goes out on the next sync.
+                    <p className={`mt-1.5 text-[10px] font-bold uppercase ${closeSummaryError ? 'text-rose-300' : 'text-zinc-500'}`}>
+                      {closeSummaryError
+                        ? `Owner summary NOT sent — ${closeSummaryError}. The counted drawer is still on this phone: send it by hand or reopen the day.`
+                        : 'Owner summary not sent yet — it goes out on the next sync.'}
                     </p>
                   )}
-                  <button onClick={reopenDay}
-                    className="mt-1.5 text-[10px] font-black text-zinc-500 uppercase tracking-wider hover:text-zinc-300 cursor-pointer">
-                    Reopen day
+                  <button onClick={reopenDay} disabled={reopening}
+                    className="mt-1.5 text-[10px] font-black text-zinc-500 uppercase tracking-wider hover:text-zinc-300 cursor-pointer disabled:opacity-60">
+                    {reopening ? 'Reopening\u2026' : 'Reopen day'}
                   </button>
                 </div>
               ) : (
@@ -1345,9 +1393,9 @@ export default function CategoryRegister({
                 </div>
                 {balanceRows.some(r => r.recon > 0 && (r.carried <= 0 || r.gap !== 0)) && (
                   <>
-                    <button onClick={carryAll}
-                      className="mt-2 w-full h-10 bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-emerald-500/20 active:scale-[0.99] transition-all cursor-pointer">
-                      Confirm tray count (optional)
+                    <button onClick={carryAll} disabled={carrying}
+                      className="mt-2 w-full h-10 bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 rounded-xl text-[11px] font-black uppercase tracking-wider hover:bg-emerald-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-60">
+                      {carrying ? 'Saving\u2026' : 'Confirm tray count (optional)'}
                     </button>
                     <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1.5">…or log spoiled food as expired below — only expired is a loss</p>
                   </>
@@ -1489,9 +1537,9 @@ export default function CategoryRegister({
                 {wasteReason === 'remaining' ? 'Left-over value: ' : 'Loss value: '}
                 <span className={`${wasteReason === 'remaining' ? 'text-amber-300' : 'text-rose-400'} font-black text-base`}>{fmt((parseInt(wasteQty, 10) || 0) * (parseFloat(wasteCost) || 0))}</span>
               </p>
-              <button onClick={handleSubmitWastage}
-                className="h-11 px-5 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> {wasteReason === 'remaining' ? 'Carry over' : 'Log Loss'}
+              <button onClick={handleSubmitWastage} disabled={savingWaste}
+                className="h-11 px-5 bg-rose-600 hover:bg-rose-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-60">
+                <Check className="w-4 h-4" /> {savingWaste ? 'Saving\u2026' : (wasteReason === 'remaining' ? 'Carry over' : 'Log Loss')}
               </button>
             </div>
           </div>

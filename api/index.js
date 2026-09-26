@@ -3763,7 +3763,26 @@ app.get('/api/settings', asHandler(async (req, res) => {
   res.json(obj);
 }));
 
-app.put('/api/settings', requireManager, asHandler(async (req, res) => {
+// "Tomorrow's opening" is the float each department carries into the next day.
+// It is counted at the till, it is a money decision, and the client used to
+// skip the request entirely for a non-manager — so the figure appeared on
+// screen, fed the unaccounted-money maths, and never left the phone. One key,
+// one shape, and nothing else about the shop's settings is reachable this way.
+const TILL_OWNED_SETTING_KEYS = new Set(['eodCapital']);
+function requireManagerForTillSettings(req, res, next) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const keys = Object.keys(body).filter((k) => body[k] !== undefined);
+  const tillOwned = keys.length > 0 && keys.every((k) => TILL_OWNED_SETTING_KEYS.has(k));
+  const shapeOk = tillOwned && body.eodCapital && typeof body.eodCapital === 'object' && !Array.isArray(body.eodCapital)
+    && Object.values(body.eodCapital).every((v) => v === null || (Number.isFinite(Number(v)) && Number(v) >= 0));
+  if (shapeOk) {
+    req.tillOwnedSettings = true;
+    return next();
+  }
+  return requireManager(req, res, next);
+}
+
+app.put('/api/settings', requireManagerForTillSettings, asHandler(async (req, res) => {
   // Allowlist so internal keys (orderCounter, authSecret, migration flags,
   // and the client's injected clientWriteId/deviceId) never get clobbered
   // by a stale boot payload echo. Sequential inserts were also slow enough
@@ -4696,7 +4715,9 @@ app.post('/api/production-register', asHandler(async (req, res) => {
   res.json(mapProductionRegister(row[0]));
 }));
 
-app.delete('/api/production-register/:id', requireManager, asHandler(async (req, res) => {
+// Same reasoning as a loss entry: the kitchen that logged the batch corrects
+// the batch. POST /api/production-register is ungated for the same reason.
+app.delete('/api/production-register/:id', asHandler(async (req, res) => {
   const old = await sql`SELECT * FROM production_register WHERE id=${req.params.id}`;
   if (!old.length) return res.json({ success: true, deleted: 0 });
   await sql`DELETE FROM production_register WHERE id=${req.params.id}`;
@@ -4770,7 +4791,12 @@ app.post('/api/wastage-log', asHandler(async (req, res) => {
   res.json({ ...mapWastageLog(row[0]), expiryDate, available: result[0].product_id ? Number(result[0].stockqty || 0) : available });
 }));
 
-app.delete('/api/wastage-log/:id', requireManager, asHandler(async (req, res) => {
+// Correcting your own loss or carry entry is ordinary till work, and the CREATE
+// side has always been open to any seller — a manager-only delete meant a seller
+// could log a mistake but not fix it, so the entry stayed wrong until a manager
+// came. Both are audited, and a false "remaining" carry is still available to
+// anyone, so nothing is being opened up that was not already reachable.
+app.delete('/api/wastage-log/:id', asHandler(async (req, res) => {
   const old = await sql`SELECT * FROM wastage_log WHERE id=${req.params.id}`;
   if (!old.length) return res.json({ success: true, deleted: 0 });
   await sql`DELETE FROM wastage_log WHERE id=${req.params.id}`;
@@ -5097,6 +5123,13 @@ app.get('/api/boot', asHandler(async (req, res) => {
   obj.hasPin = hasPin;
 
   const BOOT_SALE_CAP = 2000;
+  // The boot payload is ungated, so it must not hand a seller the tables their
+  // own role cannot read: /api/momo-transfers and /api/credit-payments are
+  // manager-only, and shipping them here let a seller see the money-out list
+  // (with delete buttons on it) while the API would refuse them. They are
+  // omitted and flagged, so the screen can say "not available on this session"
+  // instead of showing an empty day as if nothing moved.
+  const bootIsManager = await requestIsManager(req);
   const [products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats, productionRegisters, wastageLogs, momoTransfers, staff, customers, counts] = await Promise.all([
     sql`SELECT * FROM products WHERE deleted = false`.then(r => r.map(mapProduct)),
     sql`SELECT * FROM suppliers`.then(r => r.map(mapSupplier)),
@@ -5117,8 +5150,13 @@ app.get('/api/boot', asHandler(async (req, res) => {
 
   maybeAutoBackup().catch(() => {});
   res.json({
-    products, suppliers, supplierPrices, sales, expenses, creditPayments, creditEats,
-    productionRegisters, wastageLogs, momoTransfers, staff, customers, settings: obj,
+    products, suppliers, supplierPrices, sales, expenses,
+    creditPayments: bootIsManager ? creditPayments : [],
+    creditEats,
+    productionRegisters, wastageLogs,
+    momoTransfers: bootIsManager ? momoTransfers : [],
+    staff, customers, settings: obj,
+    managerOnlyHidden: bootIsManager ? [] : ['momoTransfers', 'creditPayments'],
     // Tells the client the history list was capped (aggregates still exact via
     // /api/summary, older rows are one pageable query away).
     salesTruncated: (counts[0]?.sales_total || 0) > BOOT_SALE_CAP,

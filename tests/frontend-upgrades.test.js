@@ -349,3 +349,96 @@ test('the credit book is named in Settings, not hardcoded in a screen', () => {
   assert.match(app, /'cashierTabs','creditBookName'/);
   assert.match(server, /'cashierTabs', 'creditBookName'/);
 });
+
+// The Close-day screen produced every live-money bug report this session, all
+// of one shape: a write the till performs that the server refuses. These guards
+// keep the remaining instances of that shape from coming back.
+test('a seller can correct their own loss and batch entries', () => {
+  const server = read('api/index.js');
+  // The create side was always open to any seller; a manager-only delete meant
+  // a seller could log a mistake but not fix it.
+  assert.match(server, /app\.delete\('\/api\/wastage-log\/:id', asHandler/);
+  assert.match(server, /app\.delete\('\/api\/production-register\/:id', asHandler/);
+  assert.equal(/app\.delete\('\/api\/wastage-log\/:id', requireManager/.test(server), false);
+  assert.equal(/app\.delete\('\/api\/production-register\/:id', requireManager/.test(server), false);
+  // The create side stays open, or the fix would be one-sided.
+  assert.match(server, /app\.post\('\/api\/wastage-log', asHandler/);
+});
+
+test('tomorrow\u2019s opening float reaches the server for any seller', () => {
+  const server = read('api/index.js');
+  const app = read('src/App.tsx');
+  // It used to be skipped entirely for a non-manager: the figure showed on
+  // screen, fed the money maths, and never left the phone.
+  assert.match(server, /const TILL_OWNED_SETTING_KEYS = new Set\(\['eodCapital'\]\)/);
+  assert.match(server, /function requireManagerForTillSettings/);
+  assert.match(server, /app\.put\('\/api\/settings', requireManagerForTillSettings/);
+  // One key, numbers only — nothing else about the shop's settings gets in.
+  assert.match(server, /keys\.every\(\(k\) => TILL_OWNED_SETTING_KEYS\.has\(k\)\)/);
+  assert.match(server, /Object\.values\(body\.eodCapital\)\.every/);
+  // And the client must actually send it: the old blanket early-return dropped
+  // the key before a request was ever made, so the server gate was only half
+  // the bug. A non-manager now sends that one key and nothing else.
+  const push = app.match(/useEffect\(\(\) => \{\s*\n\s*if \(!readyRef\.current\) return;[\s\S]*?\n  \}, \[settings, staffConfigured, activeRole\]\);/)?.[0] || '';
+  assert.match(push, /const tillOnly = staffConfigured && activeRole !== 'manager'/);
+  assert.match(push, /JSON\.stringify\(\{ eodCapital:/);
+  assert.equal(/if \(staffConfigured && activeRole !== 'manager'\) return;/.test(push), false);
+});
+
+test('the boot payload no longer hands sellers the manager-only money tables', () => {
+  const server = read('api/index.js');
+  const app = read('src/App.tsx');
+  const api = read('src/api.ts');
+  const boot = server.match(/app\.get\('\/api\/boot'[\s\S]*?\n\}\)\);/)?.[0] || '';
+  assert.match(boot, /const bootIsManager = await requestIsManager\(req\)/);
+  assert.match(boot, /momoTransfers: bootIsManager \? momoTransfers : \[\]/);
+  assert.match(boot, /creditPayments: bootIsManager \? creditPayments : \[\]/);
+  assert.match(boot, /managerOnlyHidden: bootIsManager \? \[\] : \['momoTransfers', 'creditPayments'\]/);
+  // The empty stand-in must NOT be cached, or a seller reads it as a day with
+  // no money moved — the exact lie the blocked banner prevents.
+  assert.match(app, /if \(hidden\.includes\('momoTransfers'\)\) \{/);
+  assert.match(app, /setMoneyOutBlocked\(true\);/);
+  assert.match(api, /managerOnlyHidden\?: string\[\]/);
+});
+
+test('a refused close-day write never announces success or clears the form', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  // Wastage: "Loss logged" used to fire before the server agreed, then the
+  // entry rolled back — the reported-it-and-it-vanished report.
+  const waste = register.match(/const handleSubmitWastage = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(waste, /saved = await onAddWastage\(\{/);
+  assert.ok(waste.indexOf('if (saved === false) return;') < waste.indexOf("setWasteItem('')"),
+    'the loss form may only clear once the server confirmed');
+  // Recount: the delete has to be awaited or two "remaining" rows stack and the
+  // gap maths reads double — the exact failure the code's own comment names.
+  const carry = register.match(/const carryRow = async [\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(carry, /const removed = await onDeleteWastage\(old\.id\)/);
+  assert.match(carry, /if \(removed === false\) \{/);
+  assert.ok(carry.indexOf('await onDeleteWastage') < carry.indexOf('await onAddWastage'),
+    'the old tray count must be gone before its replacement is written');
+  // Reopen day: the local record was cleared BEFORE the server was asked, so a
+  // refusal left the till believing a day the server still calls closed was open.
+  const reopen = register.match(/const reopenDay = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.ok(reopen.indexOf('await onReopenDay()') < reopen.indexOf('localStorage.removeItem(closedStoreKey)'),
+    'the closed record may only be cleared once the server reopened the day');
+  assert.match(reopen, /Day not reopened/);
+  // And the refusals name themselves.
+  assert.match(app, /Loss not saved/);
+  assert.match(app, /Not deleted/);
+});
+
+test('a close summary that was refused for good says so', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  // The counted drawer reaches the server ONLY through this summary, so a silent
+  // null left the day's numbers nowhere while promising "next sync".
+  assert.match(app, /setCloseSummaryError\(closeSummaryFailure\)/);
+  assert.match(app, /closeSummaryError=\{closeSummaryError\}/);
+  assert.match(register, /closeSummaryError\?: string/);
+  assert.match(register, /Owner summary NOT sent/);
+  // Scoped to this function: an unrelated silent catch elsewhere is not the point.
+  const finished = app.match(/const handleCloseDayFinished = [\s\S]*?\n  \};/)?.[0] || '';
+  assert.equal(/catch \{\s*return null;\s*\}/.test(finished), false);
+  assert.match(finished, /catch \(err\) \{/);
+});
