@@ -30,10 +30,16 @@ export function aggregateSaleLines(value) {
     if (!Number.isFinite(unitPrice) || unitPrice < 0) return { error: `Unit price must be non-negative for ${productId}`, code: 'INVALID_PRICE' };
     if (!Number.isFinite(unitCost) || unitCost < 0) return { error: `Unit cost must be non-negative for ${productId}`, code: 'INVALID_COST' };
     if (!Number.isFinite(lineDiscount) || lineDiscount < 0) return { error: `Line discount must be non-negative for ${productId}`, code: 'INVALID_DISCOUNT' };
-    const gross = roundMoney(unitPrice * qty);
+    // Ugandan shillings have no minor unit in the till: every line total is a
+    // whole shilling, and the client rounds to one. Comparing the client's whole
+    // number against an exact 2dp product rejected perfectly honest lines whose
+    // qty x price landed on a half (3 x 1,500.50 -> 4,502 vs 4,501.50). Round
+    // the same way the client does, and keep a one-shilling tolerance so a real
+    // inflation attempt is still caught.
+    const gross = Math.round(unitPrice * qty);
     const lineTotal = raw.lineTotal == null ? roundMoney(gross - lineDiscount) : roundMoney(raw.lineTotal);
     if (!Number.isFinite(lineTotal) || lineTotal < 0) return { error: `Line total must be non-negative for ${productId}`, code: 'INVALID_TOTAL' };
-    if (lineTotal > gross + 0.01) return { error: `Line total exceeds gross for ${productId}`, code: 'INVALID_TOTAL' };
+    if (lineTotal > gross + 1) return { error: `Line total exceeds gross for ${productId}`, code: 'INVALID_TOTAL' };
     const key = `${productId}\u0000${String(raw.variantId || '')}\u0000${String(raw.saleUnit || '')}`;
     const current = lines.get(key);
     if (!current) {

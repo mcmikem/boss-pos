@@ -49,3 +49,37 @@ test('requires manager approval only above the configured threshold', () => {
   assert.equal(discountRequiresManager(100, 100), false);
   assert.equal(discountRequiresManager(101, 100), true);
 });
+
+// A till rounds every line to a whole shilling; the server used to compare that
+// whole number against an exact 2dp product, so any qty x price landing on a
+// half was rejected as "line total exceeds gross" — an honest sale refused.
+test('a line whose product lands on a half shilling is accepted, an inflated one is not', () => {
+  const half = aggregateSaleLines([
+    { productId: 'p1', productName: 'Chapati', qty: 3, unitPrice: 1500.5, lineTotal: 4502 },
+  ]);
+  assert.equal(half.error, undefined);
+  assert.equal(half.items[0].lineTotal, 4502);
+
+  const single = aggregateSaleLines([
+    { productId: 'p1', productName: 'Item', qty: 1, unitPrice: 500.5, lineTotal: 501 },
+  ]);
+  assert.equal(single.error, undefined);
+
+  // Inflating the line is still caught: one shilling of tolerance, not a free pass.
+  const inflated = aggregateSaleLines([
+    { productId: 'p1', productName: 'Chapati', qty: 3, unitPrice: 1500.5, lineTotal: 6000 },
+  ]);
+  assert.equal(inflated.error, 'Line total exceeds gross for p1');
+  assert.equal(inflated.code, 'INVALID_TOTAL');
+
+  // The tolerance is exactly one shilling: a whole-shilling overshoot is the
+  // rounding the till is allowed to do, two is a mistake and is refused.
+  const withinTolerance = aggregateSaleLines([
+    { productId: 'p1', productName: 'Chapati', qty: 3, unitPrice: 1500.5, lineTotal: 4503 },
+  ]);
+  assert.equal(withinTolerance.error, undefined);
+  const beyond = aggregateSaleLines([
+    { productId: 'p1', productName: 'Chapati', qty: 3, unitPrice: 1500.5, lineTotal: 4504 },
+  ]);
+  assert.equal(beyond.error, 'Line total exceeds gross for p1');
+});

@@ -4381,7 +4381,11 @@ app.post('/api/credit-eats', asHandler(async (req, res) => {
   const unitPriceRaw = Number(e.unitPrice == null ? total / qty : e.unitPrice);
   if (!Number.isFinite(unitPriceRaw) || unitPriceRaw < 0) return res.status(400).json({ error: 'unitPrice must be a non-negative number', code: 'INVALID_AMOUNT' });
   const unitPrice = roundMoney(unitPriceRaw);
-  if (e.unitPrice != null && Math.abs(roundMoney(unitPrice * qty) - total) > 0.01) return res.status(400).json({ error: 'unitPrice and qty do not match total', code: 'TOTAL_MISMATCH' });
+  // The total is what the customer owes, and the till rounds it to a whole
+  // shilling. Recomputing qty x price at 2dp and demanding they agree to within
+  // a cent rejected honest entries whose product landed on a half (3 x 1,500.50
+  // -> 4,502 vs 4,501.50). A one-shilling tolerance keeps a real typo visible.
+  if (e.unitPrice != null && Math.abs(Math.round(unitPrice * qty) - total) > 1) return res.status(400).json({ error: 'unitPrice and qty do not match total', code: 'TOTAL_MISMATCH' });
   const paidAmount = Math.max(0, roundMoney(Number(e.paidAmount) || 0));
   if (paidAmount > total) return res.status(400).json({ error: 'paidAmount cannot exceed total', code: 'INVALID_AMOUNT' });
   const createdAtRaw = e.createdAt ? new Date(e.createdAt) : new Date();
