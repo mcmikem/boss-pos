@@ -7280,5 +7280,38 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Something went wrong on the server', code: 'INTERNAL_ERROR', traceId: id });
 });
 
+// A refused write is the hardest thing to diagnose from a phone: the till says
+// "failed", the row is rolled back, and nothing survives anywhere. Leave a
+// trace in the audit log so the next report can be answered from the database
+// instead of guessed at. Path, code, actor and trace id only — never the body,
+// so no amounts or customer names are recorded here.
+const REFUSAL_TRACE_SKIP = new Set(['/api/auth/verify', '/api/staff/unlock', '/api/staff/verify', '/api/auth/set']);
+// Throttled per lambda instance: a till stuck in a retry loop must not bury the
+// one line that matters under a hundred identical ones.
+const refusalTraceAt = new Map();
+const REFUSAL_TRACE_WINDOW_MS = 30 * 1000;
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  if (!req.path.startsWith('/api/') || REFUSAL_TRACE_SKIP.has(req.path)) return next();
+  let recorded = false;
+  res.on('finish', () => {
+    if (recorded || res.statusCode < 400) return;
+    recorded = true;
+    const key = `${req.method} ${req.path}`;
+    const last = refusalTraceAt.get(key) || 0;
+    if (Date.now() - last < REFUSAL_TRACE_WINDOW_MS) return;
+    refusalTraceAt.set(key, Date.now());
+    requestActor(req)
+      .then((actor) => audit('write.refused', `${req.method} ${req.path}`, actor, {
+        path: req.path,
+        method: req.method,
+        status: res.statusCode,
+        traceId: String((res.getHeader('X-Request-Id') || req.id) || ''),
+      }, req.id))
+      .catch(() => {});
+  });
+  next();
+});
+
 // --------------------------------------------
 export default app;

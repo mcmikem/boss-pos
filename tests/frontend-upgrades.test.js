@@ -288,3 +288,15 @@ test('support details carry the lock history QA promises', () => {
   assert.match(summary, /lockHistory: lockLog/);
   assert.match(summary, /signedInAs: activeStaff/);
 });
+
+test('a refused write leaves a trace, so the next report is answerable', () => {
+  const server = read('api/index.js');
+  // No body, no amounts: path, method, status, actor, trace id.
+  assert.match(server, /audit\('write\.refused', `\$\{req\.method\} \$\{req\.path\}`, actor/);
+  assert.equal(/JSON\.stringify\(req\.body\)/.test(server), false);
+  // Only writes, and never the PIN endpoints (they fail by design).
+  assert.match(server, /const REFUSAL_TRACE_SKIP = new Set\(\['\/api\/auth\/verify', '\/api\/staff\/unlock', '\/api\/staff\/verify', '\/api\/auth\/set'\]\)/);
+  // Throttled, so a retry loop cannot bury the line that matters.
+  assert.match(server, /const REFUSAL_TRACE_WINDOW_MS = 30 \* 1000/);
+  assert.match(server, /if \(Date\.now\(\) - last < REFUSAL_TRACE_WINDOW_MS\) return;/);
+});
