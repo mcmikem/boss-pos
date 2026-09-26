@@ -89,9 +89,13 @@ export function validateExpenseTransition(currentStatus, nextStatus) {
   return { status: next };
 }
 
-export function validateReference(value, field = 'reference') {
+// A reference is proof a transaction happened (e.g. a mobile-money confirmation
+// code). It is OPTIONAL: cash handed to a person, cash left in the drawer and
+// bank deposits have no reference at all. When one is given it is still length
+// and control-character checked, and callers still enforce uniqueness.
+export function validateReference(value, field = 'reference', { required = true } = {}) {
   const result = String(value ?? '').trim();
-  if (!result) return { error: `${field} is required`, code: 'INVALID_REFERENCE' };
+  if (!result) return required ? { error: `${field} is required`, code: 'INVALID_REFERENCE' } : { value: '' };
   if (result.length > 120 || /[\u0000-\u001f\u007f]/.test(result)) return { error: `${field} is invalid`, code: 'INVALID_REFERENCE' };
   return { value: result };
 }

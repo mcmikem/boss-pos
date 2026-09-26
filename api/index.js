@@ -4700,7 +4700,11 @@ app.post('/api/momo-transfers', requireManager, asHandler(async (req, res) => {
   const amount = Number(t.amount);
   const to = ['float', 'cash', 'owner', 'manager', 'bank'].includes(t.to) ? t.to : null;
   if (!Number.isFinite(amount) || amount <= 0 || !to) return res.status(400).json({ error: 'A positive amount and valid destination are required', code: 'INVALID_MOMO_TRANSFER' });
-  const referenceResult = validateReference(t.reference, 'MoMo reference');
+  // A MoMo reference only exists when the money actually moved over the phone.
+  // Cash handed to the owner or a manager, cash left in the drawer and a bank
+  // deposit have no reference — requiring one made the whole money-out step
+  // impossible. When one IS given it is still checked, and still unique.
+  const referenceResult = validateReference(t.reference, 'MoMo reference', { required: false });
   if (referenceResult.error) return res.status(400).json({ error: referenceResult.error, code: 'INVALID_MOMO_TRANSFER' });
   const direction = t.direction === 'in' ? 'in' : 'out';
   const provider = String(t.provider || 'MoMo').trim().slice(0, 50);
@@ -4713,8 +4717,12 @@ app.post('/api/momo-transfers', requireManager, asHandler(async (req, res) => {
     const existing = await sql`SELECT * FROM momo_transfers WHERE client_write_id=${clientWriteId}`;
     if (existing.length) return res.json({ ...mapMomoTransfer(existing[0]), duplicate: true });
   }
-  const duplicateReference = await sql`SELECT id,status FROM momo_transfers WHERE reference=${referenceResult.value} AND status <> 'voided' LIMIT 1`;
-  if (duplicateReference.length) return res.status(409).json({ error: 'MoMo reference already exists', code: 'DUPLICATE_REFERENCE', transferId: duplicateReference[0].id });
+  // Uniqueness only matters for a real reference — rows without one (cash to a
+  // person, cash kept in the drawer) must not collide with each other.
+  if (referenceResult.value) {
+    const duplicateReference = await sql`SELECT id,status FROM momo_transfers WHERE reference=${referenceResult.value} AND status <> 'voided' LIMIT 1`;
+    if (duplicateReference.length) return res.status(409).json({ error: 'MoMo reference already exists', code: 'DUPLICATE_REFERENCE', transferId: duplicateReference[0].id });
+  }
   const branch = text(t.branch, 80);
   const status = String(t.status || 'pending').toLowerCase();
   if (!['pending', 'settled'].includes(status)) return res.status(400).json({ error: 'MoMo status must be pending or settled', code: 'INVALID_SETTLEMENT_STATUS' });

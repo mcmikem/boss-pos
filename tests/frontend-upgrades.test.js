@@ -147,7 +147,9 @@ test('moving money out needs a manager session, and a refusal never eats the amo
   // The manager refusal is explained and offers the sign-in that fixes it.
   assert.match(app, /Only a manager can move money out — sign in with your manager PIN/);
   assert.match(app, /label: 'Sign in',\n\s*onClick: \(\) => \{ setStaffVerifyError\(null\); setShowStaffSwitcher\(true\); \}/);
-  assert.match(app, /canManageMoneyOut=\{activeStaff\?\.role === 'manager'\}/);
+  // A shop with no staff accounts is owner-run: the till is the manager there,
+  // exactly as the server decides it.
+  assert.match(app, /canManageMoneyOut=\{isManager\}/);
   // A list we were not allowed to read is never shown as a day with no moves.
   assert.match(app, /moneyOutBlocked=\{moneyOutBlocked\}/);
   assert.match(register, /moneyOutBlocked && \(/);
@@ -163,4 +165,36 @@ test('the close time is a reminder, never a lock on selling or on money out', ()
   // The client flag only arms the close-out verdicts.
   assert.equal(/pastClose/.test(register.match(/handleSubmitMomo[\s\S]*?\n  \};/)[0] || ''), false);
   assert.match(register, /buildTheftFlags\(\{/);
+});
+
+test('cash money-out never demands a mobile-money reference', () => {
+  const server = read('api/index.js');
+  const rules = read('api/operationsBusiness.js');
+  const register = read('src/components/CategoryRegister.tsx');
+  // A reference is proof a phone transaction happened — optional everywhere,
+  // still format-checked and still unique when it IS given.
+  assert.match(rules, /export function validateReference\(value, field = 'reference', \{ required = true \} = \{\}\)/);
+  assert.match(rules, /return required \? \{ error: `\$\{field\} is required`/);
+  assert.match(server, /validateReference\(t\.reference, 'MoMo reference', \{ required: false \}\)/);
+  // Rows without a reference must not collide with each other.
+  assert.match(server, /if \(referenceResult\.value\) \{\n\s+const duplicateReference = await sql`SELECT id,status FROM momo_transfers WHERE reference=/);
+  // And the form asks for it in plain words, with cash as the default answer.
+  assert.match(register, /Mobile money reference/);
+  assert.match(register, /Mobile money reference \(optional\)/);
+  assert.match(register, /momoReference\.trim\(\) \? \{ reference: momoReference\.trim\(\)\.slice\(0, 120\) \} : \{\}/);
+});
+
+test('there is no phone-only PIN pretending to be a manager', () => {
+  const app = read('src/App.tsx');
+  // Manager authority is the signed-in staff account, checked by the server.
+  // A local 4-digit PIN cannot authorise anything, so it is never collected.
+  const requirePin = app.match(/const requirePin = [\s\S]*?\n  \};/)[0];
+  assert.equal(/boss_pos_manager_pin/.test(requirePin), false);
+  assert.equal(/promptDialog\(\{ title: 'Manager PIN'/.test(app), false);
+  assert.match(requirePin, /Only a manager can do this — sign in with a manager staff PIN/);
+  // The one place the old key is still mentioned can only remove it.
+  assert.match(app, /Remove old phone-only PIN/);
+  // The top bar says who this phone is signed in as, on phones too.
+  assert.match(app, /\{isManager \? 'MGR' : activeStaff \? 'CSH' : 'TILL'\}/);
+  assert.match(app, /canManageMoneyOut=\{isManager\}/);
 });

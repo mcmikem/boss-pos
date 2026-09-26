@@ -405,6 +405,9 @@ export default function CategoryRegister({
   const [savingMoneyOut, setSavingMoneyOut] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
+  // Mobile-money confirmation code. Only phone money has one, so it is asked
+  // for on phone moves and never blocks cash to a person or the drawer.
+  const [momoReference, setMomoReference] = useState('');
   const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner' | 'manager' | 'bank'>('float');
   const [momoSentBy, setMomoSentBy] = useState(staffName || '');
   // Business date for the move (default today — a 00:10 close-out attributes
@@ -887,6 +890,7 @@ export default function CategoryRegister({
         comment: momoComment.trim(),
         createdAt: middayStamp(momoDate),
         to: momoDest,
+        ...(momoReference.trim() ? { reference: momoReference.trim().slice(0, 120) } : {}),
         sentBy: momoSentBy.trim() || staffName || '',
         ...(momoDest === 'manager' && handoffRecipient
           ? { recipientId: handoffRecipient.id, recipientName: handoffRecipient.name, recipientRole: 'manager' as const }
@@ -908,6 +912,7 @@ export default function CategoryRegister({
     );
     setMomoAmount('');
     setMomoComment('');
+    setMomoReference('');
     setMomoDate(todayStr());
     setHandoffRecipient(null);
     setShowMomoForm(false);
@@ -1692,6 +1697,17 @@ export default function CategoryRegister({
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">For day</label>
               <input type="date" value={momoDate} max={todayStr()} onChange={(e) => setMomoDate(e.target.value || todayStr())}
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500 font-bold" />
+            </div>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
+                Mobile money reference (optional)
+              </label>
+              <input type="text" value={momoReference} onChange={e => setMomoReference(e.target.value)}
+                placeholder="MTN/Airtel confirmation code — skip if you have none"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
+              <p className="text-[10px] text-zinc-600 mt-1 leading-snug">
+                The code MTN/Airtel gave you for the transfer. Add it whenever you have one &mdash; it is the proof the money reached the business line. Never required, so a cash move is never blocked.
+              </p>
             </div>
             <div>
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Comment (optional)</label>

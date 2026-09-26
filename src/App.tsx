@@ -1857,23 +1857,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  // Ask for the PIN before destructive actions (refund / delete a sale). If no
-  // PIN is set yet, skip the prompt. A clocked-in manager passes straight
-  // through; everyone else takes the legacy manager-PIN path.
+  // Ask for approval before destructive actions (refund / delete a sale).
+  // A manager action is authorised by the SERVER from the signed-in staff
+  // credential, so when this device is not signed in as a manager there is
+  // nothing a local 4-digit PIN can do — the write would be refused anyway.
+  // We say so and open the seller switcher instead of collecting a PIN that
+  // cannot work. (A shop with no staff accounts at all still passes: the till
+  // token is the owner there.)
   const requirePin = async (message: string, managerOnly = false): Promise<boolean> => {
-    if (staffConfigured && activeStaff?.role === 'manager') return true;
-    if (!settings.hasPin) return true;
-    const managerPin = localStorage.getItem('boss_pos_manager_pin');
-    if (managerOnly && managerPin && /^\d{4}$/.test(managerPin)) {
-      const pin = await promptDialog({ title: 'Manager PIN', message, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'Enter the 4-digit manager PIN.' });
-      if (!pin) return false;
-      if (pin === managerPin) return true;
-      // Allow main PIN as fallback if manager not set correctly
-      const mainHash = localStorage.getItem('boss_pos_pin');
-      if (mainHash && !mainHash.startsWith('fb_') && await verifyPinAgainstHash(pin, mainHash)) return true;
-      triggerToast('Wrong manager PIN — action cancelled', 'error');
+    if (isManager) return true;
+    if (managerOnly && staffConfigured) {
+      triggerToast('Only a manager can do this — sign in with a manager staff PIN', 'error', {
+        label: 'Sign in',
+        onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+      });
+      setStaffVerifyError(null);
+      setShowStaffSwitcher(true);
       return false;
     }
+    if (!settings.hasPin) return true;
     const hash = localStorage.getItem('boss_pos_pin');
     if (!hash || hash.startsWith('fb_')) return true;
     const pin = await promptDialog({ title: 'Till PIN', message, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'Enter the 4-digit till PIN.' });
@@ -2913,7 +2915,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
             onReopenDay={handleReopenDay}
-            canManageMoneyOut={activeStaff?.role === 'manager'}
+            canManageMoneyOut={isManager}
             onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             moneyOutBlocked={moneyOutBlocked}
             onCloseDayFinished={handleCloseDayFinished}
@@ -3099,12 +3101,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               Install<span className="hidden sm:inline"> app</span>
             </button>
           )}
-          <button onClick={handleSwitchStaff} title={staffConfigured ? 'Switch seller (PIN-checked)' : 'Who is selling'}
-            aria-label={staffConfigured ? `Switch seller, currently ${activeStaff?.name || staffName || 'unset'}` : 'Set seller name'}
+          <button onClick={handleSwitchStaff}
+            title={staffConfigured
+              ? `Signed in as ${activeStaff?.name || 'nobody'} · ${isManager ? 'Manager — money out, voids, prices' : activeStaff ? 'Cashier — selling only' : 'Till PIN only — manager actions need a manager staff PIN'}`
+              : 'Who is selling'}
+            aria-label={staffConfigured
+              ? `Switch seller. Currently ${activeStaff ? `${activeStaff.name}, ${isManager ? 'manager' : 'cashier'}` : 'till PIN only, no seller signed in'}`
+              : 'Set seller name'}
             className="flex items-center gap-1.5 h-7 px-2 sm:px-2.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 rounded-lg text-[10px] font-black uppercase tracking-wider text-zinc-300 hover:text-gold-brand transition-all cursor-pointer min-w-0">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeStaff ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-            <span className="max-w-[64px] min-[400px]:max-w-[90px] sm:max-w-[120px] truncate">{activeStaff?.name || staffName || 'Seller'}</span>
-            {staffConfigured && <span className="hidden sm:inline text-[8px] text-zinc-600 shrink-0">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeStaff ? 'bg-emerald-400' : 'bg-amber-500'}`} />
+            <span className="max-w-[56px] min-[400px]:max-w-[90px] sm:max-w-[120px] truncate">{activeStaff?.name || staffName || 'Till only'}</span>
+            {/* Who this phone is signed in as, in words. "Till only" is the one
+                people misread as a manager, so it is spelled out, not hidden. */}
+            {staffConfigured && (
+              <span className={`text-[8px] shrink-0 ${isManager ? 'text-emerald-400' : activeStaff ? 'text-zinc-500' : 'text-amber-400'}`}>
+                {isManager ? 'MGR' : activeStaff ? 'CSH' : 'TILL'}
+              </span>
+            )}
           </button>
           <NotificationsBell onNavigate={(t) => setActiveTab(t)} />
           {isManager && (
@@ -4109,18 +4122,27 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   ))}
                 </div>
                 <p className="text-[10px] text-zinc-600">Solo seller glued to the till? 30–60 min nags less. Shared phone? Keep 10. PIN is still required on load.</p>
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    const m = await promptDialog({ title: 'Manager PIN', message: localStorage.getItem('boss_pos_manager_pin') ? 'Enter new MANAGER 4-digit PIN:' : 'Set MANAGER 4-digit PIN (for voids/refunds):', secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
-                    if (m) {
-                      try { localStorage.setItem('boss_pos_manager_pin', m); } catch {}
-                      try { await fetch('/api/settings', { method:'PUT', headers:{'Content-Type':'application/json', Authorization: `Bearer ${getAuthToken()}`}, body: JSON.stringify({ managerPin: m }) }); } catch {}
-                      triggerToast('Manager PIN set', 'success');
-                    } else if (m) triggerToast('PIN must be 4 digits', 'error');
-                  }} className="flex-1 h-10 bg-amber-950/30 border border-amber-800/40 text-amber-400 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-amber-950/50">Set Manager PIN</button>
-                  {localStorage.getItem('boss_pos_manager_pin') && <button onClick={()=>{ localStorage.removeItem('boss_pos_manager_pin'); triggerToast('Manager PIN removed — staff PIN now used for voids', 'info'); }} className="h-10 px-3 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-xl text-[10px] font-bold uppercase">Clear</button>}
+                {/* There is no second "manager PIN". Manager authority is the
+                    signed-in staff account, checked by the server — so the
+                    screen says how it actually works instead of collecting a
+                    device PIN that could never approve anything. */}
+                <div className="rounded-xl border border-amber-800/30 bg-amber-950/15 p-3 space-y-1.5">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-400">Manager approval</p>
+                  <p className="text-[10px] text-zinc-400 leading-snug">
+                    Money out, voids, refunds and price changes are allowed by whoever is <span className="text-white font-bold">signed in at the top bar</span>. Tap <span className="text-white font-bold">MGR / TILL</span> &rarr; choose a seller &rarr; enter their <span className="text-white font-bold">staff PIN</span>. Add a seller as Manager in Staff below.
+                  </p>
+                  <p className="text-[10px] text-zinc-500 leading-snug">
+                    The till PIN on its own sells, but cannot move money or change prices. There is no separate manager PIN on this phone &mdash; it would not be accepted.
+                  </p>
+                  {localStorage.getItem('boss_pos_manager_pin') && (
+                    <button onClick={() => {
+                      try { localStorage.removeItem('boss_pos_manager_pin'); } catch {}
+                      triggerToast('Old phone-only PIN removed — use a manager staff PIN', 'info');
+                    }} className="h-9 px-3 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-zinc-700 cursor-pointer">
+                      Remove old phone-only PIN
+                    </button>
+                  )}
                 </div>
-                <p className="text-[10px] text-zinc-600">Voids/refunds need manager PIN if set, else staff PIN. Set a different 4-digit for managers.</p>
                 <button onClick={handleRevokeAll}
                   className="w-full h-10 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
                   Log out all devices
