@@ -1751,7 +1751,32 @@ async function logStockMovement(db, m) {
   }
 }
 
-app.post('/api/products', requireManager, asHandler(async (req, res) => {
+// A seller ringing up a custom item at the till must be able to keep that item
+// for tomorrow — otherwise the item is re-typed every day and the sale that
+// used it is refused as an unknown product. Registering a SERVICE line (no
+// stock, no barcode/IMEI, no recipe) is therefore allowed for any signed-in
+// seller; anything that touches stock or product identity stays manager-only.
+function isTillServiceLine(p = {}) {
+  return p.isService === true
+    && !(Number(p.stockQty) > 0)
+    && !text(p.barcode, 60)
+    && !text(p.imei, 60)
+    && !p.expiryDate
+    && !p.recipe
+    && !p.variants
+    && !text(p.supplierId, 60);
+}
+
+function requireManagerForCatalogItem(req, res, next) {
+  const p = req.body && typeof req.body === 'object' ? req.body : {};
+  if (isTillServiceLine(p)) {
+    req.tillServiceItem = true;
+    return next();
+  }
+  return requireManager(req, res, next);
+}
+
+app.post('/api/products', requireManagerForCatalogItem, asHandler(async (req, res) => {
   const p = req.body && typeof req.body === 'object' ? req.body : {};
   if (p.imageUrl && String(p.imageUrl).length > 60000) {
     return res.status(400).json({ error: 'Image too large (max ~60KB after compression)' });
@@ -2028,6 +2053,33 @@ app.post('/api/sales', asHandler(async (req, res) => {
   const productIds = [...new Set(items.map((item) => item.productId))];
   const productRows = await sql.query(`SELECT id,name,deleted,isservice FROM products WHERE id IN (${productIds.map((_, i) => `$${i + 1}`).join(',')})`, productIds);
   const productMap = new Map(productRows.map((row) => [row.id, row]));
+  // A line for a product the server has NEVER seen is a custom item made at the
+  // till (its library save can be queued, blocked or offline). Register it as a
+  // service so the sale is never refused and the item is on the list tomorrow.
+  // A product that was deliberately DELETED is still refused — that is a
+  // decision someone made, not a missing row.
+  const missingIds = productIds.filter((productId) => !productMap.has(productId));
+  for (const productId of missingIds) {
+    const line = items.find((item) => item.productId === productId);
+    const name = text(line && line.productName, 150);
+    if (!name) continue;
+    const now = new Date().toISOString();
+    try {
+      const inserted = await sql`INSERT INTO products (id,name,category,cost,price,stockqty,lowstockthreshold,isservice,updated_at)
+        VALUES (${productId},${name},${'Custom'},${roundMoney(line.unitCost || 0)},${roundMoney(line.unitPrice || 0)},0,5,true,${now})
+        ON CONFLICT (id) DO NOTHING RETURNING id`;
+      if (inserted.length) {
+        productMap.set(productId, { id: productId, name, deleted: false, isservice: true });
+        await audit('product.create', `${name} (${productId}) — from a till custom sale`, await requestActor(req), { branch: text(s.branch, 80), source: 'sale-line' }, req.id);
+      } else {
+        const existing = await sql`SELECT id,name,deleted,isservice FROM products WHERE id=${productId}`;
+        if (existing.length) productMap.set(productId, existing[0]);
+      }
+    } catch (e) {
+      // Leave it absent — the check below refuses the sale with a clear code
+      // rather than half-registering a product.
+    }
+  }
   const unknownProducts = productIds.filter((productId) => {
     const product = productMap.get(productId);
     return !product || product.deleted;

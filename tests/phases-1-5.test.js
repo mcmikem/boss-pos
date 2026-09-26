@@ -14,8 +14,11 @@ test('money destinations are neutral — no hardcoded owner name', () => {
   assert.equal(/McMike/.test(register), false);
   assert.equal(/McMike/.test(api), false);
   assert.match(register, /ownerName/);
-  assert.match(register, /const ownerLabel = ownerName \? `Given to Owner \(\$\{ownerName\}\)` : 'Given to Owner';/);
-  assert.match(register, /label: ownerLabel/);
+  // Neutral labels, the owner's own name only ever from props.
+  assert.match(register, /label: 'Cash to owner'/);
+  assert.match(register, /Cash handed to the business owner\$\{ownerName \? ` \(\$\{ownerName\}\)` : ''\}/);
+  assert.match(register, /label: 'Phone float'/);
+  assert.match(register, /label: 'Kept in drawer'/);
 });
 
 test('handover can go to the owner OR a named manager', () => {
@@ -83,12 +86,16 @@ test('morning production is the first eatery screen, via the registry', () => {
   assert.match(sales, /setShowEateryHome\(true\);/);
 });
 
-test('production loads recipe ingredients with editable prices', () => {
+test('production records what was bought and paid, and shows the batch profit', () => {
   const mp = read('src/components/MorningProduction.tsx');
-  assert.match(mp, /Ingredients · edit if a price changed/);
-  assert.match(mp, /Recipe total/);
-  assert.match(mp, /costEachFromRecipe/);
-  assert.match(mp, /Worked out from the ingredients above/);
+  // What left the drawer is bought x paid — the recipe need is reference only.
+  assert.match(mp, /Bought &amp; paid/);
+  assert.match(mp, /Spent on this batch/);
+  assert.match(mp, /Recipe says/);
+  assert.match(mp, /Profit if all sold/);
+  assert.match(mp, /Record ingredient expense/);
+  assert.equal(/costEachFromRecipe/.test(mp), false);
+  assert.equal(/recipeTotal/.test(mp), false);
 });
 
 test('production budget is shown and shortfalls are recorded, not hidden', () => {

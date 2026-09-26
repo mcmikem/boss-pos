@@ -4,13 +4,18 @@
 // Drinks note: depot sodas (Coca-Cola, Mirinda, Rock Boom…) are buy-resell —
 // restock those in Stock. Only fresh juices (Obutunda, Omunanansi, i.e. the
 // Drinks lines with a recipe) are made here.
-import { useMemo, useState } from 'react';
-import { ChefHat, Check, Trash2, ArrowRight } from 'lucide-react';
-import type { Product, ProductionRegister, RecipeIngredient, Sale, WastageLog } from '../types';
-import { todayLocalKey } from '../utils/dates';
+import { useEffect, useMemo, useState } from 'react';
+import { ChefHat, Trash2, ArrowRight, Check } from 'lucide-react';
+import type { Expense, Product, ProductionRegister, RecipeIngredient, Sale, WastageLog } from '../types';
+import { middayStamp, todayLocalKey } from '../utils/dates';
 import { leftoverFor, prevDayKey } from '../utils/cashflow';
 import { confirmDialog } from './Dialog';
+import { MoneyHero, MoneyStat, PrimaryAction } from './Design';
 
+// One batch, one screen: pick the dish, see what the recipe needs, edit what
+// was actually bought and paid, watch the profit, save. The save logs the
+// batch AND (optionally) the ingredient expense together — no second trip to
+// Expenses, no double counting.
 interface MorningProductionProps {
   products: Product[];
   productionRegisters: ProductionRegister[];
@@ -18,8 +23,13 @@ interface MorningProductionProps {
   wastageLogs?: WastageLog[];
   onAddProduction: (p: ProductionRegister) => void;
   onDeleteProduction: (id: string) => void;
+  onAddExpense?: (e: Expense) => void;
+  onUpdateProduct?: (p: Product) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  // Which kitchen this is. Eatery sees Eatery items, Drinks sees Drinks —
+  // depot sodas never borrow Eatery details again.
+  category?: string;
   // Draft money set aside at close for tomorrow's ingredients. Logging today's
   // batch spends it, so the kitchen can see what is left to work with.
   availableBudget?: number;
@@ -29,13 +39,22 @@ interface MorningProductionProps {
   plannedLines?: Array<{ productId: string; productName: string; batchQty: number; totalCost: number }>;
 }
 
+// Recipe line plus what was actually bought for this batch. `boughtQty` starts
+// at the recipe need and stays user-owned once touched; prices always flow.
+type DraftIngredient = RecipeIngredient & { boughtQty: number; boughtTouched?: boolean };
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
 export default function MorningProduction({
   products, productionRegisters, sales = [], wastageLogs = [], onAddProduction, onDeleteProduction,
-  formatCurrency, triggerToast, availableBudget, onRequestTopUp, plannedLines = [],
+  onAddExpense, onUpdateProduct, formatCurrency, triggerToast,
+  category, availableBudget, onRequestTopUp, plannedLines = [],
 }: MorningProductionProps) {
+  const inScope = (cat: string) => !category || cat === category;
   const eateryProducts = useMemo(
-    () => products.filter(p => p.category === 'Eatery' || (p.category === 'Drinks' && !!p.recipe)),
-    [products]);
+    () => products.filter(p => inScope(p.category) && (p.category === 'Eatery' || !!p.recipe)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [products, category]);
   const [prodDate, setProdDate] = useState(todayLocalKey());
   const [prodItem, setProdItem] = useState('');
   const [prodCustomItem, setProdCustomItem] = useState('');
@@ -45,13 +64,15 @@ export default function MorningProduction({
   // When the chosen item has a recipe, its ingredients load with today's prices
   // and stay editable. Editing a price here also writes back to the recipe, so
   // the next morning starts from what was actually paid.
-  const [draftIngredients, setDraftIngredients] = useState<RecipeIngredient[] | null>(null);
+  const [draftIngredients, setDraftIngredients] = useState<DraftIngredient[] | null>(null);
   const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
+  const [recordExpense, setRecordExpense] = useState(true);
 
   const today = todayLocalKey();
   const todayMade = useMemo(
-    () => productionRegisters.filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === today),
-    [productionRegisters, today]
+    () => productionRegisters.filter(p => inScope(p.category || 'Eatery') && p.date === today),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [productionRegisters, today, category]
   );
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
 
@@ -73,8 +94,9 @@ export default function MorningProduction({
 
   // Same again: yesterday's batches one tap away (same menu most mornings).
   const yesterdayRegs = useMemo(
-    () => productionRegisters.filter(p => (p.category === 'Eatery' || p.category === 'Drinks') && p.date === yesterdayKey),
-    [productionRegisters, yesterdayKey]
+    () => productionRegisters.filter(p => inScope(p.category || 'Eatery') && p.date === yesterdayKey),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [productionRegisters, yesterdayKey, category]
   );
   const repeatYesterday = async () => {
     if (yesterdayRegs.length === 0) return;
@@ -90,7 +112,23 @@ export default function MorningProduction({
     () => (sales.length ? leftoverFor(products, productionRegisters, sales, wastageLogs, yesterdayKey) : []),
     [products, productionRegisters, sales, wastageLogs, yesterdayKey]
   );
-  const carryable = leftovers.filter(r => r.leftover > 0).slice(0, 5);
+  const carryable = leftovers.filter(r => {
+    if (r.leftover <= 0) return false;
+    const prod = products.find(p => p.id === r.productId);
+    return !prod || inScope(prod.category);
+  }).slice(0, 5);
+
+  const batchesFor = (qty: number, yieldQty: number) => Math.max(0, qty / Math.max(1, yieldQty));
+
+  // Undo hand-edits: back to the recipe's own numbers for this batch size.
+  const resetBoughtToRecipe = () => {
+    const prod = eateryProducts.find(p => p.id === recipeProductId);
+    const batches = Math.max(1, batchesFor(parseInt(prodQty, 10) || 0, Number(prod?.recipe?.yield) || 1));
+    setDraftIngredients((prod?.recipe?.ingredients || []).map(ing => ({
+      ...ing,
+      boughtQty: round3((Number(ing.qty) || 0) * batches),
+    })));
+  };
 
   const handleSelect = (value: string) => {
     setProdItem(value);
@@ -107,64 +145,129 @@ export default function MorningProduction({
     if (prod) setProdCost(String(prod.cost || ''));
     const hasRecipe = !!prod?.recipe && Array.isArray(prod.recipe.ingredients) && prod.recipe.ingredients.length > 0;
     if (hasRecipe && prod) {
+      const batches = Math.max(1, batchesFor(parseInt(prodQty, 10) || 0, Number(prod.recipe!.yield) || 1));
       setRecipeProductId(prod.id);
-      setDraftIngredients(prod.recipe!.ingredients.map(ing => ({ ...ing })));
+      setDraftIngredients(prod.recipe!.ingredients.map(ing => ({
+        ...ing,
+        boughtQty: round3((Number(ing.qty) || 0) * batches),
+      })));
     } else {
       setRecipeProductId(null);
       setDraftIngredients(null);
     }
   };
 
-  const recipeTotal = useMemo(() => {
+  // Bought quantities follow the batch size until the cook touches them —
+  // what was actually bought stays theirs, prices always stay live.
+  useEffect(() => {
+    if (!recipeProductId) return;
+    const prod = eateryProducts.find(p => p.id === recipeProductId);
+    const yieldQty = Math.max(1, Number(prod?.recipe?.yield) || 1);
+    const batches = batchesFor(parseInt(prodQty, 10) || 0, yieldQty);
+    setDraftIngredients(prev => (prev || []).map((ing, i) => {
+      if (ing.boughtTouched) return ing;
+      const base = prod?.recipe?.ingredients[i];
+      return { ...ing, boughtQty: round3((Number(base?.qty) || 0) * (batches || 1)) };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prodQty, recipeProductId]);
+
+  // What leaves the drawer for this batch: bought × paid, no waste factor —
+  // waste is a recipe-planning number, not money spent.
+  const batchSpend = useMemo(() => {
     if (!draftIngredients || draftIngredients.length === 0) return 0;
-    return draftIngredients.reduce((sum, ing) => {
+    return Math.round(draftIngredients.reduce(
+      (sum, ing) => sum + (Number(ing.boughtQty) || 0) * (Number(ing.unitCost) || 0), 0));
+  }, [draftIngredients]);
+
+  // What the recipe says the batch should need (reference only — bought wins).
+  const recipeNeed = useMemo(() => {
+    if (!draftIngredients || draftIngredients.length === 0) return 0;
+    return Math.round(draftIngredients.reduce((sum, ing) => {
       const qty = Number(ing.qty) || 0;
       const unit = Number(ing.unitCost) || 0;
       const waste = 1 + (Math.max(0, Number(ing.wastePct) || 0) / 100);
       return sum + qty * unit * waste;
-    }, 0);
+    }, 0));
   }, [draftIngredients]);
 
-  const costEachFromRecipe = useMemo(() => {
-    if (recipeTotal <= 0) return 0;
-    const prod = eateryProducts.find(p => p.id === recipeProductId);
-    const overhead = Number(prod?.recipe?.overhead) || 0;
-    const yieldQty = Math.max(1, Number(prod?.recipe?.yield) || 1);
-    const batchQty = Math.max(1, parseInt(prodQty, 10) || 0);
-    const batches = batchQty / yieldQty;
-    return batches > 0 ? (recipeTotal + overhead * batches) / batchQty : 0;
-  }, [recipeTotal, recipeProductId, prodQty, eateryProducts]);
+  const selectedProduct = eateryProducts.find(p => p.id === prodProductId) || null;
+  const batchQtyNum = Math.max(0, parseInt(prodQty, 10) || 0);
+  const batchRevenue = selectedProduct && batchQtyNum > 0 ? Math.round(batchQtyNum * (selectedProduct.price || 0)) : 0;
+  const batchProfit = batchRevenue - batchSpend;
+  const batchMargin = batchRevenue > 0 ? Math.round((batchProfit / batchRevenue) * 100) : 0;
+  const recipePath = !!draftIngredients && draftIngredients.length > 0;
+  const formSpend = recipePath ? batchSpend : Math.round(batchQtyNum * (parseFloat(prodCost) || 0));
+
+  const scopedCategory = category === 'Drinks' ? 'Drinks' : 'Eatery';
 
   const handleSubmit = () => {
     const item = prodItem === '__custom' ? prodCustomItem.trim() : prodItem;
     if (!item) { triggerToast('Select the item', 'error'); return; }
     const qty = parseInt(prodQty, 10) || 0;
     if (qty <= 0) { triggerToast('Enter the number made', 'error'); return; }
-    // A recipe-derived cost beats a typed one: it is what the ingredients
-    // actually cost at today's prices.
-    const derived = costEachFromRecipe;
-    const cost = derived > 0 ? derived : (parseFloat(prodCost) || 0);
-    if (cost <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
     const prod = eateryProducts.find(p => p.name === item) || null;
+    // Recipe batches cost what was actually bought; custom items without a
+    // recipe keep the typed cost. Zero spend means made from stock on hand —
+    // a real batch, just no money out today.
+    const spend = recipePath ? batchSpend : Math.round(qty * (parseFloat(prodCost) || 0));
+    if (!recipePath && spend <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
+    const cost = qty > 0 ? spend / qty : 0;
     onAddProduction({
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: prodDate,
       item,
-      category: prod?.category === 'Drinks' ? 'Drinks' : 'Eatery',
+      category: category || (prod?.category === 'Drinks' ? 'Drinks' : 'Eatery'),
       productId: prodProductId || prod?.id || undefined,
       qty,
       costEach: cost,
-      total: Math.round(qty * cost),
+      total: spend,
     });
+    // One place, one tap: the ingredient spend lands in Expenses with its
+    // breakdown, so nobody makes a second trip to log the same money.
+    let expensed = 0;
+    if (recordExpense && spend > 0 && onAddExpense) {
+      const items = recipePath
+        ? draftIngredients
+          .map(ing => ({ name: String(ing.name || 'Ingredient').slice(0, 120), amount: Math.round((Number(ing.boughtQty) || 0) * (Number(ing.unitCost) || 0)) }))
+          .filter(i => i.amount > 0)
+        : undefined;
+      onAddExpense({
+        id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: middayStamp(prodDate),
+        description: `Ingredients · ${qty} × ${item}`,
+        amount: spend,
+        category: scopedCategory,
+        source: 'drawer',
+        ...(items && items.length ? { items } : {}),
+        ...(prod ? { linkedProductId: prod.id, linkedProductName: prod.name } : {}),
+      });
+      expensed = spend;
+    }
+    // What was paid today becomes tomorrow's cost.
+    if (recipePath && prod?.recipe && onUpdateProduct) {
+      try {
+        const nextIngredients = prod.recipe.ingredients.map(ing => {
+          const draft = (draftIngredients || []).find(d => d.id === ing.id);
+          return draft && Number(draft.unitCost) > 0 ? { ...ing, unitCost: Number(draft.unitCost) } : ing;
+        });
+        const changed = nextIngredients.some((n, idx) => n.unitCost !== prod.recipe!.ingredients[idx].unitCost);
+        if (changed) {
+          onUpdateProduct({ ...prod, recipe: { ...prod.recipe, ingredients: nextIngredients } });
+          triggerToast('Recipe costs updated from what you paid', 'info');
+        }
+      } catch {}
+    }
     triggerToast(
-      derived > 0
-        ? `Production logged: ${qty} × ${item} · ${formatCurrency(Math.round(cost * qty))} of ingredients`
-        : `Production logged: ${qty} × ${item}`,
+      expensed > 0
+        ? `Batch logged + ${formatCurrency(expensed)} expense recorded: ${qty} × ${item}`
+        : spend > 0
+          ? `Production logged: ${qty} × ${item} · ${formatCurrency(spend)} of ingredients`
+          : `Production logged: ${qty} × ${item} (from stock on hand)`,
       'success',
     );
-    if (derived > 0 && onRequestTopUp && availableBudget != null) {
-      const spent = Math.round(cost * qty);
-      if (spent > availableBudget) onRequestTopUp(spent - availableBudget);
+    if (spend > 0 && onRequestTopUp && availableBudget != null && spend > availableBudget) {
+      onRequestTopUp(spend - availableBudget);
     }
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
@@ -184,6 +287,141 @@ export default function MorningProduction({
       <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/25 border border-amber-800/30 rounded-xl px-3 py-2 leading-snug">
         One place for kitchen batches: logging here updates Stock automatically — don't add the same pieces in Stock, or they count twice.
       </p>
+
+      {/* Log first. Money set aside, the evening's plan and yesterday's numbers
+          are context — they sit under the form, never between the cook and the
+          job. */}
+      <div className="bg-zinc-950/60 border border-amber-600/20 rounded-xl p-4 space-y-3">
+        <div>
+          <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Made</label>
+          <select value={prodItem} onChange={e => handleSelect(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
+            <option value="">Select item...</option>
+            {eateryProducts.map(p => <option key={p.id} value={p.name}>{p.name} — sells {formatCurrency(p.price)}</option>)}
+            <option value="__custom">Other / custom item...</option>
+          </select>
+          {prodItem === '__custom' && (
+            <input type="text" value={prodCustomItem} onChange={e => setProdCustomItem(e.target.value)}
+              placeholder="Type the item name..."
+              className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Date</label>
+            <input type="date" value={prodDate} onChange={e => setProdDate(e.target.value || todayLocalKey())}
+              className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+          </div>
+          <div>
+            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Number Made</label>
+            <input type="number" min="1" inputMode="numeric" value={prodQty} onChange={e => setProdQty(e.target.value)}
+              placeholder="e.g. 100" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+          </div>
+        </div>
+
+        {/* What was actually bought and paid for this batch. The recipe sets the
+            starting numbers; what the cook types is what the money and the
+            tomorrow recipe become. */}
+        {recipePath && (
+          <div className="bg-black/25 border border-white/5 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Bought &amp; paid</p>
+              <button onClick={resetBoughtToRecipe}
+                className="shrink-0 text-[10px] font-black uppercase tracking-wider text-zinc-400 hover:text-amber-300 cursor-pointer">
+                Back to recipe
+              </button>
+            </div>
+            {(draftIngredients || []).map((ing, idx) => {
+              const lineTotal = Math.round((Number(ing.boughtQty) || 0) * (Number(ing.unitCost) || 0));
+              return (
+                <div key={ing.id || idx} className="bg-black/20 border border-white/5 rounded-lg p-2 space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-xs font-black text-white truncate">{ing.name || 'Ingredient'}</p>
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase shrink-0">
+                      Recipe needs {ing.qty} {ing.unit}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                    <label className="min-w-0">
+                      <span className="text-[9px] font-black text-zinc-500 uppercase block mb-0.5">Bought</span>
+                      <input type="number" min="0" step="any" inputMode="decimal" value={ing.boughtQty}
+                        aria-label={`${ing.name} bought quantity`}
+                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, boughtQty: parseFloat(e.target.value) || 0, boughtTouched: true } : x))}
+                        className="w-full h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
+                    </label>
+                    <label className="min-w-0">
+                      <span className="text-[9px] font-black text-zinc-500 uppercase block mb-0.5">Price each</span>
+                      <input type="number" min="0" step="any" inputMode="decimal" value={ing.unitCost}
+                        aria-label={`${ing.name} price each`}
+                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: parseFloat(e.target.value) || 0 } : x))}
+                        className="w-full h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
+                    </label>
+                    <p className="text-xs font-black text-amber-400 font-display tabular-nums pb-2.5 w-20 text-right">{formatCurrency(lineTotal)}</p>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-white/5">
+              <div>
+                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Spent on this batch</p>
+                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(batchSpend)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Recipe says</p>
+                <p className="text-base font-black text-zinc-500 font-display tabular-nums">{formatCurrency(recipeNeed)}</p>
+                <p className="text-[9px] font-bold text-zinc-600 uppercase">includes waste allowance</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!recipePath && (
+          <div>
+            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cost Price Each</label>
+            <input type="number" min="0" inputMode="decimal" value={prodCost} onChange={e => setProdCost(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+            <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1">No recipe for this item — leave it at 0 if it came from stock on hand.</p>
+          </div>
+        )}
+
+        {/* The one number this screen exists to answer: what the batch will make
+            if it all sells, after the ingredients actually paid for. */}
+        <div className="boss-card p-3 space-y-3">
+          <MoneyHero
+            label="Profit if all sold"
+            value={formatCurrency(batchProfit)}
+            tone={batchProfit > 0 ? 'emerald' : batchProfit < 0 ? 'rose' : 'zinc'}
+            sub={batchQtyNum > 0 ? `${batchQtyNum} × ${formatCurrency(selectedProduct?.price || 0)} selling price` : 'Enter the number made'}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <MoneyStat label="Ingredients" value={formatCurrency(formSpend)} tone={formSpend > 0 ? 'amber' : 'zinc'}
+              sub={recipePath ? 'bought × paid' : 'cost each × made'} />
+            <MoneyStat label="Sells for" value={formatCurrency(batchRevenue)} tone="white"
+              sub={batchRevenue > 0 ? `${batchMargin}% margin` : 'no selling price set'} />
+          </div>
+        </div>
+
+        {/* One tap logs the batch AND the money out. Off means the money is not
+            leaving the drawer today (stock on hand, paid another way). */}
+        <button type="button" onClick={() => setRecordExpense(v => !v)} aria-pressed={recordExpense}
+          className={`w-full rounded-xl border px-3 py-2.5 flex items-center gap-2.5 text-left cursor-pointer active:scale-[0.99] transition-all ${recordExpense ? 'border-emerald-600/50 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/50'}`}>
+          <span className={`w-5 h-5 rounded-md border grid place-items-center shrink-0 ${recordExpense ? 'bg-emerald-500 border-emerald-400 text-black' : 'border-zinc-700'}`}>
+            {recordExpense && <Check className="w-3.5 h-3.5" />}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-xs font-black text-white uppercase tracking-wider">Record ingredient expense</span>
+            <span className="block text-[10px] font-bold text-zinc-500 uppercase">
+              {formSpend > 0
+                ? `${formatCurrency(formSpend)} leaves the drawer and lands in Expenses`
+                : 'Nothing to record — no money out on this batch'}
+            </span>
+          </span>
+        </button>
+
+        <PrimaryAction onClick={handleSubmit}>
+          <Check className="w-4 h-4" /> Save batch
+        </PrimaryAction>
+      </div>
 
       {availableBudget != null && (
         <div className={`boss-card p-3 border-l-4 ${availableBudget - todayCost > 0 ? 'border-l-emerald-500' : 'border-l-rose-500'}`}>
@@ -281,84 +519,6 @@ export default function MorningProduction({
           <p className="text-[10px] text-zinc-500 font-bold uppercase">Auto-carried — tap Use to prefill and make less today, sell leftover first.</p>
         </div>
       )}
-
-      <div className="bg-zinc-950/60 border border-amber-600/20 rounded-xl p-4 space-y-3">
-        <div>
-          <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Item Made</label>
-          <select value={prodItem} onChange={e => handleSelect(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none font-bold">
-            <option value="">Select item...</option>
-            {eateryProducts.map(p => <option key={p.id} value={p.name}>{p.name} — cost {formatCurrency(p.cost)}</option>)}
-            <option value="__custom">Other / custom item...</option>
-          </select>
-          {prodItem === '__custom' && (
-            <input type="text" value={prodCustomItem} onChange={e => setProdCustomItem(e.target.value)}
-              placeholder="Type the item name..."
-              className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Date</label>
-            <input type="date" value={prodDate} onChange={e => setProdDate(e.target.value || todayLocalKey())}
-              className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-          </div>
-          <div>
-            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Number Made</label>
-            <input type="number" min="1" value={prodQty} onChange={e => setProdQty(e.target.value)}
-              placeholder="e.g. 100" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-          </div>
-        </div>
-        {draftIngredients && draftIngredients.length > 0 ? (
-          <div className="bg-black/25 border border-white/5 rounded-xl p-3 space-y-2">
-            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
-              Ingredients · edit if a price changed
-            </p>
-            {draftIngredients.map((ing, idx) => {
-              const line = (Number(ing.qty) || 0) * (Number(ing.unitCost) || 0) * (1 + (Math.max(0, Number(ing.wastePct) || 0) / 100));
-              return (
-                <div key={ing.id || idx} className="grid grid-cols-[1fr_auto_auto] items-center gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-black text-white truncate">{ing.name || 'Ingredient'}</p>
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase">{ing.qty} {ing.unit}</p>
-                  </div>
-                  <input type="number" min="0" step="50" value={ing.unitCost}
-                    aria-label={`${ing.name} price each`}
-                    onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: parseFloat(e.target.value) || 0 } : x))}
-                    className="w-24 h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
-                  <p className="w-24 text-right text-xs font-black text-amber-400 tabular-nums">{formatCurrency(Math.round(line))}</p>
-                </div>
-              );
-            })}
-            <div className="flex items-center justify-between pt-1.5 border-t border-white/5">
-              <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Recipe total</p>
-              <p className="text-sm font-black text-amber-400 font-display tabular-nums">{formatCurrency(Math.round(recipeTotal))}</p>
-            </div>
-          </div>
-        ) : null}
-
-        <div>
-          <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
-            {costEachFromRecipe > 0 ? 'Cost each (from recipe)' : 'Cost Price Each'}
-          </label>
-          <input type="number" min="0" value={costEachFromRecipe > 0 ? String(Math.round(costEachFromRecipe)) : prodCost}
-            readOnly={costEachFromRecipe > 0}
-            onChange={e => setProdCost(e.target.value)}
-            className={`w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500 ${costEachFromRecipe > 0 ? 'opacity-70' : ''}`} />
-          {costEachFromRecipe > 0 && (
-            <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1">Worked out from the ingredients above — change a price above to adjust it.</p>
-          )}
-        </div>
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase">
-            Total cost: <span className="text-amber-400 font-black text-base">{formatCurrency(Math.round((parseInt(prodQty, 10) || 0) * (parseFloat(prodCost) || 0)))}</span>
-          </p>
-          <button onClick={handleSubmit}
-            className="h-11 px-5 bg-amber-600 hover:bg-amber-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-            <Check className="w-4 h-4" /> Save
-          </button>
-        </div>
-      </div>
 
       {todayMade.length === 0 ? (
         <div className="text-center py-8">

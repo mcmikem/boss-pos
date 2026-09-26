@@ -120,7 +120,9 @@ interface SalesProps {
   categories: string[];
   staffName?: string;
   setStaffName?: (name: string) => void;
-  onSaveCustomProduct?: (p: Product) => void;
+  // Resolves with the canonical library product so the cart line carries an id the
+  // server knows (a custom sale is posted by product id).
+  onSaveCustomProduct?: (p: Product) => Product | Promise<Product>;
   onUndoSale?: (saleId: string) => void;
   staffConfigured?: boolean;
   onOpenStaffSwitcher?: () => void;
@@ -356,7 +358,7 @@ export default function Sales({
     if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
       productionPlanApi.get(todayLocalKey()).then(rows => {
         const lines = rows
-          .filter(r => r.category === 'Eatery' || r.category === 'Drinks')
+          .filter(r => r.category === selectedCategory)
           .flatMap(r => r.lines || []);
         setPlannedToday(lines.map(l => ({
           productId: String(l.productId || ''),
@@ -2236,7 +2238,9 @@ export default function Sales({
               <MorningProduction products={products} productionRegisters={productionRegisters}
                 sales={salesHistory} wastageLogs={wastageLogs}
                 onAddProduction={onAddProduction} onDeleteProduction={onDeleteProduction}
+                onAddExpense={onAddExpense} onUpdateProduct={onUpdateProduct}
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
+                category={selectedCategory === 'Drinks' ? 'Drinks' : 'Eatery'}
                 availableBudget={ingredientBudgetToday}
                 onRequestTopUp={requestIngredientTopUp}
                 plannedLines={plannedToday} />

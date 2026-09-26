@@ -83,3 +83,84 @@ test('package and focused guard exist', () => {
   assert.ok(existsSync(resolve(root, 'scripts/check-build-budget.mjs')));
   assert.ok(existsSync(resolve(root, 'tests/frontend-upgrades.test.js')));
 });
+
+// A custom item rung at the till is posted as a sale LINE BY PRODUCT ID. If the
+// cart line carries an id the products table never saw, the server refuses the
+// whole sale with UNKNOWN_PRODUCT and the cashier sees "Product not found".
+test('a custom item is saved to the library BEFORE it is put in the cart, with one id', () => {
+  const modal = read('src/components/CustomChargeModal.tsx');
+  const app = read('src/App.tsx');
+  // Library first, cart second, and the cart line is the CANONICAL product the
+  // save resolved with — never the throwaway draft.
+  assert.match(modal, /const saved = onSave \? await onSave\(newProduct\) : newProduct;/);
+  assert.match(modal, /onAdd\(saved \|\| newProduct\);/);
+  assert.ok(
+    modal.indexOf('await onSave(') < modal.indexOf('onAdd(saved'),
+    'the library save must complete before the cart line exists',
+  );
+  // One id, minted in the canonical product shape (never a "custom-<ts>" id).
+  assert.match(modal, /id: newLibraryProductId\(\)/);
+  assert.match(modal, /`p-\$\{Date\.now\(\)\}-\$\{Math\.random\(\)\.toString\(36\)\.slice\(2, 7\)\}`/);
+  assert.doesNotMatch(modal, /custom-\$\{Date\.now\(\)\}/);
+  // The save returns the canonical product and reuses the caller's id.
+  assert.match(app, /const handleSaveCustomProduct = async \(custom: Product\): Promise<Product>/);
+  assert.match(app, /return existing;/);
+  assert.match(app, /id: custom\.id \|\|/);
+});
+
+test('a custom sale survives a product row the server has never seen', () => {
+  const server = read('api/index.js');
+  // Absent row -> registered as a service from the line's own name and price.
+  assert.match(server, /const missingIds = productIds\.filter\(\(productId\) => !productMap\.has\(productId\)\)/);
+  assert.match(server, /INSERT INTO products \(id,name,category,cost,price,stockqty,lowstockthreshold,isservice,updated_at\)/);
+  // A deliberately deleted product is still refused.
+  assert.match(server, /return !product \|\| product\.deleted;/);
+});
+
+test('a seller can register their own custom item, but stock lines stay manager-only', () => {
+  const server = read('api/index.js');
+  assert.match(server, /function isTillServiceLine\(p = \{\}\)/);
+  assert.match(server, /app\.post\('\/api\/products', requireManagerForCatalogItem/);
+  // Identity, stock and recipes are never in a till-made service line.
+  assert.match(server, /!text\(p\.barcode, 60\)/);
+  assert.match(server, /!text\(p\.imei, 60\)/);
+  assert.match(server, /!p\.recipe/);
+  // Stock-bearing catalog writes keep the manager gate.
+  assert.match(server, /app\.put\('\/api\/products\/:id', requireManager/);
+  assert.match(server, /app\.delete\('\/api\/products\/:id', requireManager/);
+});
+
+test('moving money out needs a manager session, and a refusal never eats the amounts', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  // The form cannot even open without a manager credential.
+  assert.match(register, /canManageMoneyOut = true/);
+  assert.match(register, /if \(!canManageMoneyOut\) \{/);
+  assert.match(register, /onRequestManagerSignIn\?\.\(\);/);
+  // The save resolves false when refused, and the form keeps what was typed.
+  assert.match(register, /saved = await onAddMomoTransfer\(/);
+  assert.match(register, /if \(saved === false\) return;/);
+  assert.ok(
+    register.indexOf('if (saved === false) return;') < register.indexOf('setMomoAmount(\'\');'),
+    'amounts may only be cleared once the server confirmed',
+  );
+  // The manager refusal is explained and offers the sign-in that fixes it.
+  assert.match(app, /Only a manager can move money out — sign in with your manager PIN/);
+  assert.match(app, /label: 'Sign in',\n\s*onClick: \(\) => \{ setStaffVerifyError\(null\); setShowStaffSwitcher\(true\); \}/);
+  assert.match(app, /canManageMoneyOut=\{activeStaff\?\.role === 'manager'\}/);
+  // A list we were not allowed to read is never shown as a day with no moves.
+  assert.match(app, /moneyOutBlocked=\{moneyOutBlocked\}/);
+  assert.match(register, /moneyOutBlocked && \(/);
+});
+
+test('the close time is a reminder, never a lock on selling or on money out', () => {
+  const server = read('api/index.js');
+  const register = read('src/components/CategoryRegister.tsx');
+  // The server knows the shop's hours only as a setting it stores — it never
+  // reads them to refuse a write.
+  assert.equal((server.match(/closeTime/g) || []).length, 1);
+  assert.match(server, /'openTime', 'closeTime', 'closedDays'/);
+  // The client flag only arms the close-out verdicts.
+  assert.equal(/pastClose/.test(register.match(/handleSubmitMomo[\s\S]*?\n  \};/)[0] || ''), false);
+  assert.match(register, /buildTheftFlags\(\{/);
+});

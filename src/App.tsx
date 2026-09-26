@@ -492,6 +492,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [productionRegisters, setProductionRegisters] = useState<ProductionRegister[]>([]);
   const [wastageLogs, setWastageLogs] = useState<WastageLog[]>([]);
   const [momoTransfers, setMomoTransfers] = useState<MomoTransfer[]>([]);
+  // Money out is manager-only, so a till-only session cannot even list it.
+  // Remember that: an empty list we were not allowed to read is not an empty day.
+  const [moneyOutBlocked, setMoneyOutBlocked] = useState(false);
   const [categories, setCategories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('boss_pos_categories');
@@ -699,7 +702,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       customerApi.list().then(setCustomers).catch(fail('customers')),
       productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
       wastageLogApi.list().then(setWastageLogs).catch(fail('wastage')),
-      momoTransferApi.list().then(setMomoTransfers).catch(fail('momo transfers')),
+      momoTransferApi.list().then(list => { setMomoTransfers(list); setMoneyOutBlocked(false); }).catch((err: unknown) => {
+        if ((err as { code?: string })?.code === 'MANAGER_REQUIRED') { setMoneyOutBlocked(true); return; }
+        fail('momo transfers')();
+      }),
     ]);
     setLoading(false);
     if (failed.length >= 6) {
@@ -1714,15 +1720,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Custom items added at the till are saved into their chosen category so the
   // shop's library fills up and staff never re-type the same item every day.
   // Matching name+category is reused (no duplicates); services keep no stock.
-  const handleSaveCustomProduct = async (custom: Product) => {
+  // Resolves with the CANONICAL product: the caller's cart line must carry an
+  // id the server knows, or the sale is refused as an unknown product.
+  const handleSaveCustomProduct = async (custom: Product): Promise<Product> => {
     const existing = products.find(p => p.name.trim().toLowerCase() === custom.name.trim().toLowerCase() && p.category === custom.category);
     if (existing) {
-      triggerToast(`Saved in ${custom.category || 'category'} — tap it from the list next time`, 'info');
-      return;
+      triggerToast(`${existing.name} is already in ${custom.category || 'the library'} — selling the saved one`, 'info');
+      return existing;
     }
     const stamped = {
       ...custom,
-      id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: custom.id || `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       isService: true,
       updatedAt: new Date().toISOString(),
     };
@@ -1733,9 +1741,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       if (saved?.updatedAt) {
         setProducts(prev => prev.map(p => p.id === saved.id ? { ...p, updatedAt: saved.updatedAt } : p));
       }
+      return { ...prodWithIcon, ...(saved || {}) };
     } catch {
       setProducts(prev => prev.filter(p => p.id !== prodWithIcon.id));
       triggerToast('Could not save item to the library right now', 'info');
+      throw new Error('CUSTOM_PRODUCT_SAVE_FAILED');
     }
   };
 
@@ -2613,11 +2623,35 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleAddMomoTransfer = async (t: MomoTransfer) => {
+  // Money out is a manager decision. Resolves false when the server refused it
+  // so the close screen keeps the amounts instead of pretending they were
+  // recorded — a silent rollback here is how a shift's takings go missing.
+  const handleAddMomoTransfer = async (t: MomoTransfer): Promise<boolean> => {
     setMomoTransfers(prev => [t, ...prev]);
-    try { await momoTransferApi.create(t); } catch {
+    try {
+      await momoTransferApi.create(t);
+      setMoneyOutBlocked(false);
+      return true;
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
       setMomoTransfers(prev => prev.filter(x => x.id !== t.id));
-      triggerToast('Failed to save transfer — not added', 'error');
+      if (code === 'MANAGER_REQUIRED') {
+        setMoneyOutBlocked(true);
+        triggerToast('Only a manager can move money out — sign in with your manager PIN', 'error', {
+          label: 'Sign in',
+          onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+        });
+        return false;
+      }
+      if (code === 'SESSION_CLOSED') {
+        triggerToast('That day’s books are already closed — reopen the day first', 'error', {
+          label: 'Reopen day',
+          onClick: () => { void handleReopenDay(); },
+        });
+        return false;
+      }
+      triggerToast(`Failed to save transfer — not added (${err instanceof Error ? err.message.slice(0, 80) : 'not saved'})`, 'error');
+      return false;
     }
   };
 
@@ -2879,6 +2913,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
             onReopenDay={handleReopenDay}
+            canManageMoneyOut={activeStaff?.role === 'manager'}
+            onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
+            moneyOutBlocked={moneyOutBlocked}
             onCloseDayFinished={handleCloseDayFinished}
             onShareCloseSummary={handleShareCloseSummary}
             onCommitProductionPlan={handleCommitProductionPlan}

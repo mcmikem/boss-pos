@@ -6,20 +6,32 @@ interface CustomChargeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (product: Product) => void;
-  onSave?: (product: Product) => void;
+  // Saves the item into the library and resolves with the CANONICAL product —
+  // the row the server knows. A same-name item already in the category comes
+  // back as itself, so the cart never sells an id the server has never seen.
+  onSave?: (product: Product) => Product | Promise<Product>;
   defaultCategory?: string;
   categories: string[];
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+}
+
+// Sale lines are posted by product id. A till-only id ("custom-1234") that
+// never reaches the products table is a sale the server refuses with
+// "Unknown or deleted product" — so the id is minted once, here, and the same
+// one is used for the cart line and the library row.
+function newLibraryProductId(): string {
+  return `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export default function CustomChargeModal({ isOpen, onClose, onAdd, onSave, defaultCategory, categories, triggerToast }: CustomChargeModalProps) {
   const [customItemName, setCustomItemName] = useState('');
   const [customItemPrice, setCustomItemPrice] = useState('');
   const [customItemCategory, setCustomItemCategory] = useState<string>(defaultCategory || 'Custom');
+  const [saving, setSaving] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const priceNum = parseFloat(customItemPrice);
     if (isNaN(priceNum) || priceNum <= 0) {
       triggerToast('Enter a valid price', 'error');
@@ -27,7 +39,7 @@ export default function CustomChargeModal({ isOpen, onClose, onAdd, onSave, defa
     }
     const name = customItemName.trim() || 'Custom Item';
     const newProduct: Product = {
-      id: `custom-${Date.now()}`,
+      id: newLibraryProductId(),
       name: name,
       category: customItemCategory || 'Custom',
       cost: 0,
@@ -36,11 +48,20 @@ export default function CustomChargeModal({ isOpen, onClose, onAdd, onSave, defa
       lowStockThreshold: 0,
       isService: true,
     };
-    if (onSave) onSave(newProduct);
-    onAdd(newProduct);
-    setCustomItemName('');
-    setCustomItemPrice('');
-    onClose();
+    setSaving(true);
+    try {
+      // Library first, cart second. Ringing the item before the row exists is
+      // how a custom sale ends in "Product not found" at the till.
+      const saved = onSave ? await onSave(newProduct) : newProduct;
+      onAdd(saved || newProduct);
+      setCustomItemName('');
+      setCustomItemPrice('');
+      onClose();
+    } catch {
+      triggerToast('Could not save that item — nothing added. Try again.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const quickPrices = [500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
@@ -78,8 +99,10 @@ export default function CustomChargeModal({ isOpen, onClose, onAdd, onSave, defa
               </button>
             ))}
           </div>
-          <button onClick={handleAdd}
-            className="w-full h-12 bg-gold-brand text-black font-black uppercase text-sm tracking-widest rounded-xl mt-2">+ Add to Cart</button>
+          <button onClick={handleAdd} disabled={saving}
+            className="w-full h-12 bg-gold-brand text-black font-black uppercase text-sm tracking-widest rounded-xl mt-2 disabled:opacity-60">
+            {saving ? 'Saving…' : '+ Add to Cart'}
+          </button>
         </div>
       </div>
     </div>

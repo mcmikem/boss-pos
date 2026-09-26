@@ -36,8 +36,16 @@ interface CategoryRegisterProps {
   onPayCreditEat: (id: string, amount: number) => void;
   onAddWastage: (w: WastageLog) => void;
   onDeleteWastage: (id: string) => void;
-  onAddMomoTransfer: (t: MomoTransfer) => void;
+  onAddMomoTransfer: (t: MomoTransfer) => void | boolean | Promise<void | boolean>;
   onDeleteMomoTransfer: (id: string) => void;
+  // Money out decides what the drawer, the float and the owner get, so it is a
+  // manager action. Without a manager session the form never opens, and a
+  // refused save keeps the amounts instead of losing them.
+  canManageMoneyOut?: boolean;
+  onRequestManagerSignIn?: () => void;
+  // The money-out list itself is manager-only: when it could not be loaded the
+  // screen says so rather than showing an empty day as if nothing moved.
+  moneyOutBlocked?: boolean;
   staffName?: string;
   shopName?: string;
   ownerName?: string;
@@ -164,6 +172,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
+  canManageMoneyOut = true, onRequestManagerSignIn, moneyOutBlocked = false,
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
   onPrintClose, onSendClose, onReopenDay, onCloseDayFinished, onShareCloseSummary, onCommitProductionPlan,
   ownerPhone = '', branch = '', pastClose = true, blind = false, notifyOwner = true,
@@ -171,7 +180,6 @@ export default function CategoryRegister({
 }: CategoryRegisterProps) {
   // Whoever owns this shop, named by the owner in Settings. Never hardcoded —
   // every other business on this software must see their own name here.
-  const ownerLabel = ownerName ? `Given to Owner (${ownerName})` : 'Given to Owner';
   // Managers who can receive a handover and confirm it on their own phone.
   const managerList = staff.filter(m => m.active !== false && m.role === 'manager');
   const [handoffRecipient, setHandoffRecipient] = useState<{ id: string; name: string } | null>(null);
@@ -394,6 +402,7 @@ export default function CategoryRegister({
   const [statementFor, setStatementFor] = useState<string | null>(null);
 
   const [showMomoForm, setShowMomoForm] = useState(false);
+  const [savingMoneyOut, setSavingMoneyOut] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
   const [momoDest, setMomoDest] = useState<'float' | 'cash' | 'owner' | 'manager' | 'bank'>('float');
@@ -839,16 +848,21 @@ export default function CategoryRegister({
   const ownerTotal = useMemo(() => momoTransfers.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
   const bankTotal = useMemo(() => momoTransfers.filter(t => t.to === 'bank').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
   const MONEY_DEST = [
-    { key: 'float' as const, label: 'Float', icon: '📲', hint: 'Money put onto the Mobile Money agent line (MTN/Airtel float)' },
-    { key: 'cash' as const, label: 'Cash', icon: '💵', hint: 'Kept as physical cash — e.g. retained capital for tomorrow / handed out' },
-    { key: 'owner' as const, label: ownerLabel, icon: '👑', hint: `Handed to the business owner${ownerName ? ` (${ownerName})` : ''} — they confirm receipt on their phone` },
-    { key: 'manager' as const, label: 'Given to Manager', icon: '🧑‍💼', hint: 'Handed to a named manager — they confirm receipt on their phone' },
+    { key: 'float' as const, label: 'Phone float', icon: '📲', hint: 'Put on the business mobile-money line (MTN/Airtel) — this is what pays expenses and utilities' },
+    { key: 'cash' as const, label: 'Kept in drawer', icon: '💵', hint: 'Stays in the drawer as capital for tomorrow’s production — usually Eatery or Drinks' },
+    { key: 'owner' as const, label: 'Cash to owner', icon: '👑', hint: `Cash handed to the business owner${ownerName ? ` (${ownerName})` : ''} — they confirm receipt on their phone` },
+    { key: 'manager' as const, label: 'Cash to manager', icon: '🧑‍💼', hint: 'Cash handed to a named manager — they confirm receipt on their phone' },
     { key: 'bank' as const, label: 'Bank', icon: '🏦', hint: 'Deposited to the bank account — out of drawer and phone' },
   ];
 
-  const handleSubmitMomo = () => {
+  const handleSubmitMomo = async () => {
     const amt = Math.round(parseFloat(momoAmount) || 0);
     if (amt <= 0) { triggerToast('Enter the amount you moved', 'error'); return; }
+    if (!canManageMoneyOut) {
+      triggerToast('Moving money out is a manager action — sign in with your manager PIN', 'error');
+      onRequestManagerSignIn?.();
+      return;
+    }
     // Handing money to a person (not to float/cash/bank) needs a named human,
     // otherwise there is nobody to send the receipt request to.
     const handsToPerson = momoDest === 'owner' || momoDest === 'manager';
@@ -860,21 +874,31 @@ export default function CategoryRegister({
     const recipientName = momoDest === 'manager'
       ? handoffRecipient?.name || ''
       : ownerName || 'the owner';
-    onAddMomoTransfer({
-      id: `mt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      category: selected,
-      amount: amt,
-      comment: momoComment.trim(),
-      createdAt: middayStamp(momoDate),
-      to: momoDest,
-      sentBy: momoSentBy.trim() || staffName || '',
-      ...(momoDest === 'manager' && handoffRecipient
-        ? { recipientId: handoffRecipient.id, recipientName: handoffRecipient.name, recipientRole: 'manager' as const }
-        : {}),
-      ...(momoDest === 'owner'
-        ? { recipientName: ownerName || 'Owner', recipientRole: 'owner' as const }
-        : {}),
-    });
+    // The form keeps its values until the server confirms. A refused save
+    // (manager sign-in, closed day, no signal) must not cost the cashier the
+    // amount they just typed.
+    setSavingMoneyOut(true);
+    let saved: void | boolean;
+    try {
+      saved = await onAddMomoTransfer({
+        id: `mt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        category: selected,
+        amount: amt,
+        comment: momoComment.trim(),
+        createdAt: middayStamp(momoDate),
+        to: momoDest,
+        sentBy: momoSentBy.trim() || staffName || '',
+        ...(momoDest === 'manager' && handoffRecipient
+          ? { recipientId: handoffRecipient.id, recipientName: handoffRecipient.name, recipientRole: 'manager' as const }
+          : {}),
+        ...(momoDest === 'owner'
+          ? { recipientName: ownerName || 'Owner', recipientRole: 'owner' as const }
+          : {}),
+      });
+    } finally {
+      setSavingMoneyOut(false);
+    }
+    if (saved === false) return;
     const backdated = momoDate !== todayStr();
     triggerToast(
       handsToPerson
@@ -1486,7 +1510,18 @@ export default function CategoryRegister({
         hint="Where today's money went"
         open={secOpen.money} onToggle={() => toggleSec('money')}
         action={
-          <button onClick={() => setShowMomoForm(v => !v)} id="tour-record-money"
+          <button onClick={() => {
+            // Moving money is a manager decision (it decides what the drawer
+            // and the owner get). A till-only session is sent to sign in as a
+            // manager instead of being allowed to start a form that will be
+            // refused at save time.
+            if (!canManageMoneyOut) {
+              triggerToast('Moving money out is a manager action — sign in with your manager PIN', 'error');
+              onRequestManagerSignIn?.();
+              return;
+            }
+            setShowMomoForm(v => !v);
+          }} id="tour-record-money"
             className={`flex items-center gap-1.5 text-[11px] rounded-xl px-3.5 h-11 font-black uppercase tracking-wider transition-all active:scale-95 touch-target ${
               showMomoForm
                 ? 'bg-zinc-900 border border-zinc-800 text-zinc-300'
@@ -1495,6 +1530,23 @@ export default function CategoryRegister({
             <Plus className="w-4 h-4" /> {showMomoForm ? 'Cancel' : 'Record Money Out'}
           </button>
         }>
+
+        {!canManageMoneyOut && (
+          <div className="bg-amber-950/25 border border-amber-800/40 rounded-xl px-3 py-2.5 mb-3 flex items-center justify-between gap-2">
+            <p className="text-[11px] font-bold text-amber-300 uppercase leading-snug min-w-0">
+              Money moved is manager-only — sign in with a manager account to record it
+            </p>
+            <button onClick={() => onRequestManagerSignIn?.()}
+              className="shrink-0 h-10 px-3 bg-amber-500 hover:bg-amber-400 text-black rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all cursor-pointer">
+              Sign in
+            </button>
+          </div>
+        )}
+        {moneyOutBlocked && (
+          <p className="text-[11px] font-bold text-amber-300/90 bg-amber-950/20 border border-amber-800/30 rounded-xl px-3 py-2 mb-3 leading-snug">
+            Today’s money-out list could not be loaded on this session, so it may be incomplete. Sign in as a manager to see and record it.
+          </p>
+        )}
 
         <p className="text-[11px] text-zinc-400 font-bold uppercase mb-3">Where did the money go?</p>
         {!blind && theftFlags.filter(f => f.kind === 'unaccounted' || f.kind === 'momo').slice(0, 3).map((f, i) => (
@@ -1647,9 +1699,9 @@ export default function CategoryRegister({
                 placeholder="e.g. Sent by MTN MoMo to 0700 000 000 / Kept 50k capital for tomorrow"
                 className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-cyan-500" />
             </div>
-            <button onClick={handleSubmitMomo}
-              className="w-full h-11 bg-cyan-600 hover:bg-cyan-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5">
-              <Check className="w-4 h-4" /> Record
+            <button onClick={handleSubmitMomo} disabled={savingMoneyOut}
+              className="w-full h-11 bg-cyan-600 hover:bg-cyan-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-60">
+              <Check className="w-4 h-4" /> {savingMoneyOut ? 'Saving…' : 'Record'}
             </button>
           </div>
         )}

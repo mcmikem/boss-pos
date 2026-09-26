@@ -1520,7 +1520,7 @@ export const wastageLogApi = {
 };
 
 export const momoTransferApi = {
-  list: () => api<MomoTransfer[]>('/api/momo-transfers'),
+  list: () => api<MomoTransfer[]>('/api/momo-transfers', { silentManager: true }),
   create: (t: MomoTransfer) => api<MomoTransfer>('/api/momo-transfers', { method: 'POST', body: JSON.stringify(withWriteId(t)) }),
   remove: (id: string) => api<{ success: boolean }>(`/api/momo-transfers/${id}`, { method: 'DELETE' }),
 };
