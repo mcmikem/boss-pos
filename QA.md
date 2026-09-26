@@ -59,6 +59,50 @@ Yawe's). A pass means the exact expected result below, not "looks fine".
 - [ ] Airplane mode: sell → receipt says queued; close/reopen app → sale intact.
 - [ ] Reconnect → "Back online — N sales sent", sale lands in Sales + money.
 
+## Seller can-do list (regressions from the June audit)
+
+Every item below used to be refused by the server or announced before it was
+saved. Test each as a CASHIER unless the line says manager. A failure must
+never say "saved" and then lose the entry — that is the whole point of the list.
+
+### Selling
+- [ ] Ring up a sale, then Undo inside 10s → the sale is refunded and stock returns.
+- [ ] Undo someone else's sale (or one older than 60s) → refused with a clear reason.
+- [ ] Custom item: name + price → it is added to the cart AND appears in the library
+- [ ] Sell the custom item → completes (this used to fail with "Product not found")
+- [ ] Price ending in .50, e.g. 3 × 1,500.50 → checkout completes.
+- [ ] Move money between two drawers (Sell → ⋯ → Move money) → saves, and the amount stays if refused.
+
+### Kitchen (Sell → Eatery/Drinks → Morning Production)
+- [ ] Save a batch with a recipe → the batch appears under "Made today".
+- [ ] With "Record ingredient expense" on → the expense lands in Expenses with the same amount.
+- [ ] Type what you paid for an ingredient → tomorrow's cost follows (ask a manager to confirm on the Recipes screen).
+- [ ] Save a batch the server refuses → the form KEEPS what was typed and says why.
+
+### Expenses tab
+- [ ] Log an expense → saved, and it survives a restart.
+- [ ] Log one in a brand-new category (e.g. "Fuel") → saved; the category is registered.
+- [ ] Mistype one ("Utilites") → refused with "Did you mean Utilities?".
+- [ ] Delete a mistyped expense → the row goes and stays gone.
+- [ ] As manager: Expenses list loads for a seller too (no "check connection" error).
+
+### Close day
+- [ ] Record Money Out → Phone float / Kept in drawer / Cash to owner / Cash to manager, with no reference demanded.
+- [ ] Delete a money-moved row → the row stays deleted.
+- [ ] "Tomorrow's opening" (float) as a cashier → it survives a restart on the server.
+- [ ] Log a loss → "Loss logged" only AFTER the server has it; a refusal keeps the form.
+- [ ] Confirm tray count (recount) → the old count is REPLACED, never duplicated.
+- [ ] Delete a loss entry as a cashier → works.
+- [ ] Add a credit to the book → saved; the form keeps what was typed if refused.
+- [ ] Collect a payment on a credit → saved from Close day AND from the Sales ledger.
+- [ ] Close the day → the owner summary says either "sent" or "NOT sent — <reason>".
+
+### Still to confirm from earlier in this work
+- [ ] Receipt auto-closes after 3s on a fresh sale, and stays open once touched.
+- [ ] Variant tap (Big/Small) does not close the sheet.
+- [ ] Manager handover notification reaches the named manager's phone.
+- [ ] Yawe's old Android: app opens, sells, and syncs on a weak connection.
+
 ## Failure to report back
 Exact toast text + which phone + build number + what you tapped. Settings →
 Support → Copy support details attaches the server build, the last five lock

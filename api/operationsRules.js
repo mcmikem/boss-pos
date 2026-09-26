@@ -332,3 +332,87 @@ export function validateCreditCollection(input = {}, sale = null, paid = 0) {
 export function identitySnapshot(input = {}) {
   return { barcode: normalizeBarcode(input.barcode) || null, imei: normalizeImei(input.imei) || null };
 }
+
+// ---------------------------------------------------------------------------
+// Till-owned writes: the narrow permissions that let a seller do their own work
+// without becoming a back door to the shop's controls. Each is a pure decision
+// so the boundary is pinned by tests, not by a comment.
+// ---------------------------------------------------------------------------
+
+// A seller's batch save carries the prices they actually paid for a dish's
+// ingredients. That is not a price change, but the only route that writes a
+// recipe is the shop's PRICING door — so for a non-manager we take ONLY the
+// recipe's ingredient unit costs from the payload and pin every other field to
+// the stored row. The returned body is what may be written; `allowed: false`
+// means there was nothing here a seller is permitted to do.
+export function recipeCostOnlyUpdate(current, incoming) {
+  const storedRecipe = current && current.recipe
+    ? (typeof current.recipe === 'string' ? JSON.parse(current.recipe) : current.recipe)
+    : null;
+  const incomingRecipe = incoming && typeof incoming.recipe === 'object' ? incoming.recipe : null;
+  const storedIngredients = Array.isArray(storedRecipe && storedRecipe.ingredients) ? storedRecipe.ingredients : [];
+  const incomingIngredients = Array.isArray(incomingRecipe && incomingRecipe.ingredients) ? incomingRecipe.ingredients : [];
+  const priced = new Map(
+    incomingIngredients
+      .filter((i) => i && Number.isFinite(Number(i.unitCost)) && Number(i.unitCost) >= 0)
+      .map((i) => [String(i.id != null ? i.id : i.name), Number(i.unitCost)]),
+  );
+  if (!storedRecipe || storedIngredients.length === 0 || priced.size === 0) return { allowed: false };
+  const mergedIngredients = storedIngredients.map((ing) => {
+    const key = String(ing.id != null ? ing.id : ing.name);
+    return priced.has(key) ? { ...ing, unitCost: priced.get(key) } : ing;
+  });
+  return {
+    allowed: true,
+    body: {
+      name: current.name,
+      category: current.category,
+      price: Number(current.price || 0),
+      cost: Number(current.cost || 0),
+      stockQty: Number(current.stockqty != null ? current.stockqty : current.stockQty || 0),
+      lowStockThreshold: Number(current.lowstockthreshold != null ? current.lowstockthreshold : current.lowStockThreshold ?? 5),
+      barcode: current.barcode || '',
+      imei: current.imei || '',
+      variants: current.variants || null,
+      saleUnit: current.saleunit || current.saleUnit || null,
+      imageUrl: current.imageurl || current.imageUrl || '',
+      supplierId: current.supplierid || current.supplierId || null,
+      isService: !!(current.isservice != null ? current.isservice : current.isService),
+      recipe: { ...storedRecipe, ingredients: mergedIngredients },
+    },
+  };
+}
+
+// One key, one shape: the float a department carries into tomorrow. Everything
+// else about the shop's settings stays behind the manager gate.
+export const TILL_OWNED_SETTING_KEYS = ['eodCapital'];
+
+export function isTillOwnedSettingsPayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const keys = Object.keys(body).filter((k) => body[k] !== undefined);
+  if (keys.length === 0) return false;
+  if (!keys.every((k) => TILL_OWNED_SETTING_KEYS.includes(k))) return false;
+  const capital = body.eodCapital;
+  if (!capital || typeof capital !== 'object' || Array.isArray(capital)) return false;
+  return Object.values(capital).every((v) => v === null || (Number.isFinite(Number(v)) && Number(v) >= 0));
+}
+
+// A category the shop has never used is a real thing someone just paid for
+// ("Fuel", "Airtime"), so an expense may register it. The real risk of that is
+// typo sprawl creating a second, permanent category — so a near miss is refused
+// with the name it probably meant. "Fuel" is new; "Utilites" is not.
+export function nearMissCategory(allowed, wanted) {
+  const squash = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = squash(wanted);
+  if (!target) return null;
+  for (const candidate of allowed || []) {
+    const a = squash(candidate);
+    if (!a) continue;
+    if (a === target) return String(candidate);
+    if (Math.abs(a.length - target.length) <= 2 && a.length > 2 && target.length > 2) {
+      const same = [...a].filter((ch, i) => target[i] === ch).length;
+      if (same >= Math.max(2, Math.min(a.length, target.length) - 2)) return String(candidate);
+    }
+  }
+  return null;
+}

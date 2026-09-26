@@ -5,9 +5,9 @@ import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafe
 import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider, saleVatTotal } from './efris.js';
 import { creditLimitDecision, normalizeCreditKey, summarizeCreditBalances } from './creditLimits.js';
 import { normalizeReportRange } from './reportRange.js';
-import { TILL_ROLE, managerAllowed, MANAGER_REQUIRED_CODE } from './authz.js';
+import { TILL_ROLE, managerAllowed, MANAGER_REQUIRED_CODE, selfUndoAllowed } from './authz.js';
 import { aggregateSaleLines, saleTotals, validatePayment, validateProductIdentity, discountRequiresManager, actorContext, structuredMetadata, buildAgingReport, normalizeBarcode, normalizeImei, roundMoney } from './businessRules.js';
-import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, validateProductionPlan, validateSaleChangeRequest, planLineCost, parseProductRecipe, quantity, businessDate } from './operationsRules.js';
+import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, validateProductionPlan, validateSaleChangeRequest, planLineCost, parseProductRecipe, quantity, businessDate, recipeCostOnlyUpdate, isTillOwnedSettingsPayload, nearMissCategory } from './operationsRules.js';
 import { calculateCloseTotals, normalizeExpenseCategories, categoryRenameViolation, normalizePaymentMethod, validateSettlementTransition, validateExpenseTransition, validateReference, scopeValues } from './operationsBusiness.js';
 import { PURCHASE_ORDER_STATUSES, RECEIVABLE_STATUSES, roundQuantity, expiryDateValue, normalizeOrderNumber, purchaseOrderTotals, receiptPlan, receiptSummary } from './procurementRules.js';
 
@@ -1990,35 +1990,16 @@ app.put('/api/products/:id', requireManager, asHandler(async (req, res) => {
   // cannot be used to change a selling price, a cost, stock or an identity, no
   // matter what the request body claims.
   if (!(await requestIsManager(req))) {
-    const storedRecipe = current.recipe ? (typeof current.recipe === 'string' ? JSON.parse(current.recipe) : current.recipe) : null;
-    const incoming = body.recipe && typeof body.recipe === 'object' ? body.recipe : null;
-    const storedIngredients = Array.isArray(storedRecipe?.ingredients) ? storedRecipe.ingredients : [];
-    const incomingIngredients = Array.isArray(incoming?.ingredients) ? incoming.ingredients : [];
-    const priced = new Map(incomingIngredients.filter((i) => i && Number(i.unitCost) >= 0).map((i) => [String(i.id ?? i.name), Number(i.unitCost)]));
-    if (!storedRecipe || !Array.isArray(storedRecipe.ingredients) || priced.size === 0) {
+    // Only the recipe's ingredient unit costs may come from a seller; every
+    // other field is pinned to the stored row, so this route cannot be used to
+    // change a selling price, a cost, stock or a product's identity. The
+    // decision is a pure function (api/operationsRules.js) so its boundaries are
+    // covered by tests.
+    const pinned = recipeCostOnlyUpdate(current, body);
+    if (!pinned.allowed) {
       return res.status(403).json({ error: 'Only a manager can change this item', code: MANAGER_REQUIRED_CODE });
     }
-    const mergedIngredients = storedIngredients.map((ing) => {
-      const key = String(ing.id ?? ing.name);
-      return priced.has(key) ? { ...ing, unitCost: priced.get(key) } : ing;
-    });
-    body = {
-      ...body,
-      name: current.name,
-      category: current.category,
-      price: Number(current.price || 0),
-      cost: Number(current.cost || 0),
-      stockQty: Number(current.stockqty || 0),
-      lowStockThreshold: Number(current.lowstockthreshold ?? 5),
-      barcode: current.barcode || '',
-      imei: current.imei || '',
-      variants: current.variants || null,
-      saleUnit: current.saleunit || null,
-      imageUrl: current.imageurl || '',
-      supplierId: current.supplierid || null,
-      isService: !!current.isservice,
-      recipe: { ...storedRecipe, ingredients: mergedIngredients },
-    };
+    body = { ...body, ...pinned.body };
   }
   const serverUpdatedAt = current.updated_at;
   const clientUpdatedAt = body.updatedAt;
@@ -2416,7 +2397,6 @@ app.post('/api/sales/:id/void', requireManager, asHandler((req, res) => applySal
 // 10-second Undo bar silently did nothing for every seller. Narrow on purpose:
 // the SAME person, inside 60 seconds, refund only. Never a void, never anyone
 // else's sale, never an old one. Everything else stays manager-only.
-const SELF_UNDO_WINDOW_MS = 60 * 1000;
 async function requireManagerOrSelfUndo(req, res, next) {
   if (managerAllowed(req.auth, await staffCount())) return next();
   try {
@@ -2425,10 +2405,17 @@ async function requireManagerOrSelfUndo(req, res, next) {
       ? await sql`SELECT staff_id, actor_id, timestamp, refunded, voided FROM sales WHERE id=${req.params.id}`
       : [];
     const sale = rows[0];
-    const mine = !!sale && (String(sale.staff_id || '') === String(actor.id) || String(sale.actor_id || '') === String(actor.id));
     const at = Date.parse(String(sale?.timestamp || ''));
-    const fresh = Number.isFinite(at) && Date.now() - at <= SELF_UNDO_WINDOW_MS;
-    if (mine && fresh && !sale.refunded && !sale.voided) {
+    // The decision itself is a pure function (api/authz.js) so its boundaries are
+    // covered by tests rather than trusted to this comment.
+    if (selfUndoAllowed({
+      saleStaffId: sale?.staff_id,
+      saleActorId: sale?.actor_id,
+      actorId: actor.id,
+      ageMs: Number.isFinite(at) ? Date.now() - at : NaN,
+      refunded: !!sale?.refunded,
+      voided: !!sale?.voided,
+    })) {
       req.selfUndo = true;
       return next();
     }
@@ -3020,13 +3007,7 @@ app.post('/api/expenses', asHandler(async (req, res) => {
   const wanted = String(e.category || '').trim().slice(0, 100);
   if (wanted && !allowed.some((c) => c.toLowerCase() === wanted.toLowerCase())) {
     // Guard the real risk of this: a typo creating a permanent second category.
-    const squash = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
-    const nearMiss = allowed.find((c) => {
-      const a = squash(c);
-      const b = squash(wanted);
-      return a === b || (Math.abs(a.length - b.length) <= 2 && a.length > 2 && b.length > 2
-        && [...a].filter((ch, i) => b[i] === ch).length >= Math.max(2, Math.min(a.length, b.length) - 2));
-    });
+    const nearMiss = nearMissCategory(allowed, wanted);
     if (nearMiss) {
       return res.status(400).json({
         error: `Did you mean "${nearMiss}"?`,
@@ -3871,14 +3852,8 @@ app.get('/api/settings', asHandler(async (req, res) => {
 // skip the request entirely for a non-manager — so the figure appeared on
 // screen, fed the unaccounted-money maths, and never left the phone. One key,
 // one shape, and nothing else about the shop's settings is reachable this way.
-const TILL_OWNED_SETTING_KEYS = new Set(['eodCapital']);
 function requireManagerForTillSettings(req, res, next) {
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
-  const keys = Object.keys(body).filter((k) => body[k] !== undefined);
-  const tillOwned = keys.length > 0 && keys.every((k) => TILL_OWNED_SETTING_KEYS.has(k));
-  const shapeOk = tillOwned && body.eodCapital && typeof body.eodCapital === 'object' && !Array.isArray(body.eodCapital)
-    && Object.values(body.eodCapital).every((v) => v === null || (Number.isFinite(Number(v)) && Number(v) >= 0));
-  if (shapeOk) {
+  if (isTillOwnedSettingsPayload(req.body)) {
     req.tillOwnedSettings = true;
     return next();
   }

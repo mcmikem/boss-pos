@@ -370,12 +370,14 @@ test('tomorrow\u2019s opening float reaches the server for any seller', () => {
   const app = read('src/App.tsx');
   // It used to be skipped entirely for a non-manager: the figure showed on
   // screen, fed the money maths, and never left the phone.
-  assert.match(server, /const TILL_OWNED_SETTING_KEYS = new Set\(\['eodCapital'\]\)/);
   assert.match(server, /function requireManagerForTillSettings/);
+  assert.match(server, /isTillOwnedSettingsPayload\(req\.body\)/);
   assert.match(server, /app\.put\('\/api\/settings', requireManagerForTillSettings/);
   // One key, numbers only — nothing else about the shop's settings gets in.
-  assert.match(server, /keys\.every\(\(k\) => TILL_OWNED_SETTING_KEYS\.has\(k\)\)/);
-  assert.match(server, /Object\.values\(body\.eodCapital\)\.every/);
+  const rules = read('api/operationsRules.js');
+  assert.match(rules, /export const TILL_OWNED_SETTING_KEYS = \['eodCapital'\]/);
+  assert.match(rules, /export function isTillOwnedSettingsPayload/);
+  assert.match(rules, /Object\.values\(capital\)\.every/);
   // And the client must actually send it: the old blanket early-return dropped
   // the key before a request was ever made, so the server gate was only half
   // the bug. A non-manager now sends that one key and nothing else.
@@ -450,14 +452,16 @@ test('a cashier can undo their own just-rung sale', () => {
   const app = read('src/App.tsx');
   // The client has always offered this ("<=60s old, no manager PIN") and the
   // gate made it impossible, so the 10-second Undo bar did nothing for sellers.
-  assert.match(server, /const SELF_UNDO_WINDOW_MS = 60 \* 1000/);
+  assert.match(read('api/authz.js'), /export const SELF_UNDO_WINDOW_MS = 60 \* 1000/);
   assert.match(server, /async function requireManagerOrSelfUndo/);
   assert.match(server, /app\.post\('\/api\/sales\/:id\/refund', requireManagerOrSelfUndo/);
+  // The decision is a pure, unit-tested function — the gate only gathers facts.
   const gate = server.match(/async function requireManagerOrSelfUndo[\s\S]*?\n\}/)?.[0] || '';
-  // Narrow on purpose: same person, inside the window, refund only.
-  assert.match(gate, /String\(sale\.staff_id \|\| ''\) === String\(actor\.id\)/);
-  assert.match(gate, /Date\.now\(\) - at <= SELF_UNDO_WINDOW_MS/);
-  assert.match(gate, /!sale\.refunded && !sale\.voided/);
+  assert.match(gate, /selfUndoAllowed\(\{/);
+  assert.match(gate, /saleStaffId: sale\?\.staff_id/);
+  assert.match(gate, /actorId: actor\.id/);
+  assert.match(gate, /ageMs: Number\.isFinite\(at\) \? Date\.now\(\) - at : NaN/);
+  assert.match(read('api/authz.js'), /export function selfUndoAllowed/);
   // Voiding stays manager-only: only a refund can be self-undone.
   assert.match(server, /app\.post\('\/api\/sales\/:id\/void', requireManager/);
   assert.match(app, /New-cashier safety net: undo your own just-made sale/);
@@ -533,18 +537,20 @@ test('a seller\u2019s paid ingredient prices reach the recipe without opening th
   const put = server.match(/app\.put\('\/api\/products\/:id', requireManager, asHandler[\s\S]*?\napp\.delete\('\/api\/products\/:id'/)?.[0] || '';
   // The batch save writes back what the cook paid, so tomorrow's cost is honest.
   // For a non-manager ONLY those unit costs are read from the payload...
-  assert.match(put, /if \(!\(await requestIsManager\(req\)\)\) \{/);
-  assert.match(put, /const priced = new Map\(incomingIngredients/);
-  assert.match(put, /priced\.has\(key\) \? \{ \.\.\.ing, unitCost: priced\.get\(key\) \} : ing/);
+  assert.match(put, /const pinned = recipeCostOnlyUpdate\(current, body\)/);
+  assert.match(put, /body = \{ \.\.\.body, \.\.\.pinned\.body \}/);
+  // No recipe, or nothing priced in it, means there is nothing this may do.
+  assert.match(put, /Only a manager can change this item/);
+  const rules = read('api/operationsRules.js');
+  const fn = rules.match(/export function recipeCostOnlyUpdate[\s\S]*?\n\}/)?.[0] || '';
   // ...and every other field is pinned to the stored row, so this can never
   // become a back door to changing a price, a cost, stock or an identity.
   for (const pinned of ['price: Number(current.price || 0)', 'cost: Number(current.cost || 0)',
-                        'stockQty: Number(current.stockqty || 0)', 'barcode: current.barcode',
-                        'imei: current.imei', 'name: current.name', 'category: current.category']) {
-    assert.ok(put.includes(pinned), `missing pinned field: ${pinned}`);
+                        'name: current.name', 'category: current.category', 'barcode: current.barcode',
+                        'imei: current.imei', 'variants: current.variants || null']) {
+    assert.ok(fn.includes(pinned), `missing pinned field: ${pinned}`);
   }
-  // No recipe, or nothing priced in it, means there is nothing this may do.
-  assert.match(put, /Only a manager can change this item/);
+  assert.match(fn, /priced\.has\(key\) \? \{ \.\.\.ing, unitCost: priced\.get\(key\) \} : ing/);
 });
 
 test('no success is announced before the write it describes', () => {
