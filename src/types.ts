@@ -566,7 +566,10 @@ export interface StoreSettings {
   receiptLogoUrl?: string; // shop logo printed on receipts (/uploads/... or https://)
   ownerPhone?: string; // WhatsApp number for the daily close summary
   communityGroupUrl?: string; // shop WhatsApp group invite link customers join from
-  ownerName?: string; // display name for the person who owns the business
+  ownerName?: string;
+  // What the shop calls its credit book. Neutral default; never hardcoded
+  // in a screen, so another business reads as its own thing.
+  creditBookName?: string; // display name for the person who owns the business
   // Closing cadence: how long before closeTime the till starts reminding the
   // cashier, and how loudly. Owners set the pace for their own business.
   closeReminderLeadMin?: number; // 0/blank = never remind (15/30/45/60 typical)

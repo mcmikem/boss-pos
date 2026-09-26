@@ -159,7 +159,7 @@ function removeDeletedExpense(id: string): void {
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone','communityGroupUrl',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features','ownerName','closeReminderLeadMin','closeReminderSound','closeSummaryAuto',
-  'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs',
+  'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs','creditBookName',
 ]);
 function serializeSettings(s: StoreSettings): string {
   const filtered: Record<string, unknown> = {};
@@ -2540,20 +2540,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return `Credit not saved${e?.message ? ` — ${String(e.message).slice(0, 80)}` : ' (no reason given — tell the manager)'}`;
   };
 
-  const handleAddCreditEat = async (newEat: CreditEat) => {
+  // Resolves false when the server refused it, so the credit form keeps what
+  // was typed instead of the cashier re-entering a debt someone is owed.
+  const handleAddCreditEat = async (newEat: CreditEat): Promise<boolean> => {
     setCreditEats(prev => [newEat, ...prev]);
     try {
       await creditEatApi.create(newEat);
+      return true;
     } catch (err) {
       // Queued writes come back as a success-shaped result, so a throw here is
       // a real rejection. Offline first-try goes through enqueue() and never
       // throws, which is why this branch is safe to surface.
       setCreditEats(prev => prev.filter(c => c.id !== newEat.id));
       triggerToast(creditSaveFailure(err, newEat), 'error');
+      return false;
     }
   };
 
-  const handlePayCreditEat = async (id: string, amount: number) => {
+  const handlePayCreditEat = async (id: string, amount: number): Promise<boolean> => {
     const prev = creditEats.find(c => c.id === id);
     const next = { ...(prev as CreditEat), paidAmount: (prev?.paidAmount || 0) + amount, paid: (prev?.paidAmount || 0) + amount >= (prev?.total || 0) };
     // Book collections are cash in hand too — record a payment leg so close
@@ -2564,10 +2568,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try {
       await creditEatApi.pay(id, amount);
       triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+      return true;
     } catch (err) {
       if (prev) setCreditEats(cs => cs.map(c => c.id === id ? prev : c));
       setCreditPayments(prevPs => prevPs.filter(p => p.id !== leg.id));
       triggerToast(paymentSaveFailure(err), 'error');
+      return false;
     }
   };
 
@@ -3009,6 +3015,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
             onReopenDay={handleReopenDay}
+            creditBookName={settings.creditBookName || 'Credit book'}
             canManageMoneyOut={isManager}
             onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             moneyOutBlocked={moneyOutBlocked}
@@ -3769,6 +3776,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   placeholder="e.g. the owner of this shop"
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
                 <p className="text-[10px] text-zinc-600">Shown as "Given to Owner (name)" when recording a handover.</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">
+                  Credit book name
+                  <SettingHelp label="Credit book name" text="What this shop calls its credit book on the Close-day screen. Every shop names its own — leave it empty for a plain 'Credit book'." />
+                </label>
+                <input type="text" value={settings.creditBookName || ''}
+                  onChange={(e) => setSettings(prev => ({ ...prev, creditBookName: e.target.value.slice(0, 60) || undefined }))}
+                  placeholder="e.g. Credit book"
+                  className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                <p className="text-[10px] text-zinc-600">Titles the credit section on Close day. Leave empty and it reads "Credit book".</p>
               </div>
               <div className="border-t border-white/5 pt-3 space-y-2">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">

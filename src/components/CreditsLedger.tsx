@@ -62,7 +62,7 @@ export default function CreditsLedger({
       })
       .filter(r => r.remaining > 0);
 
-    // Ababanjibwa Sente (Close-day book): manual credit lines live outside
+    // The Close-day credit book: manual credit lines live outside
     // sales, so without this merge Reports always read 0 even when the book
     // is full. Paid-off lines drop out the same way sale credits do.
     const bookRecs: UnifiedRecord[] = (creditEats || [])

@@ -312,3 +312,40 @@ test('a refused write leaves a trace, so the next report is answerable', () => {
   assert.match(server, /const REFUSAL_TRACE_WINDOW_MS = 30 \* 1000/);
   assert.match(server, /if \(Date\.now\(\) - last >= REFUSAL_TRACE_WINDOW_MS\)/);
 });
+
+test('a refused credit keeps what the cashier typed', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  // Both credit writes report the server's answer, and the form only clears on
+  // success. This is money the shop is owed: re-typing it is how debts get lost.
+  assert.match(register, /saved = await onAddCreditEat\(\{/);
+  assert.match(register, /saved = await onPayCreditEat\(payId, amt\)/);
+  const add = register.match(/const handleSubmitCredit = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(add, /if \(saved === false\) return;/);
+  assert.ok(add.indexOf('if (saved === false) return;') < add.indexOf("setCreditName('')"),
+    'the credit form may only clear once the server confirmed');
+  const pay = register.match(/const handlePay = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.ok(pay.indexOf('if (saved === false) return;') < pay.indexOf('setPayId(null)'),
+    'a refused payment must keep its amount on screen');
+  // And the App side actually reports the refusal instead of swallowing it.
+  assert.match(app, /const handleAddCreditEat = async \(newEat: CreditEat\): Promise<boolean>/);
+  assert.match(app, /const handlePayCreditEat = async \(id: string, amount: number\): Promise<boolean>/);
+});
+
+test('the credit book is named in Settings, not hardcoded in a screen', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const ledger = read('src/components/CreditsLedger.tsx');
+  const app = read('src/App.tsx');
+  const server = read('api/index.js');
+  assert.equal(/Ababanjibwa/.test(register), false);
+  assert.equal(/Ababanjibwa/.test(ledger), false);
+  // Default is neutral, the shop sets its own.
+  assert.match(register, /creditBookName = 'Credit book'/);
+  assert.match(register, /title=\{creditBookName\}/);
+  assert.match(register, /Added to \$\{creditBookName\}/);
+  assert.match(app, /creditBookName=\{settings\.creditBookName \|\| 'Credit book'\}/);
+  assert.match(app, /value=\{settings\.creditBookName \|\| ''\}/);
+  // A setting the server does not allow is silently dropped, so it must be listed.
+  assert.match(app, /'cashierTabs','creditBookName'/);
+  assert.match(server, /'cashierTabs', 'creditBookName'/);
+});

@@ -32,8 +32,11 @@ interface CategoryRegisterProps {
   productionRegisters: ProductionRegister[];
   wastageLogs: WastageLog[];
   momoTransfers: MomoTransfer[];
-  onAddCreditEat: (e: CreditEat) => void;
-  onPayCreditEat: (id: string, amount: number) => void;
+  // Both credit writes resolve the server's answer. A refused save must not
+  // cost the cashier the name, item and amount they just typed — the till
+  // clears the form only once the entry is actually on the books.
+  onAddCreditEat: (e: CreditEat) => void | boolean | Promise<void | boolean>;
+  onPayCreditEat: (id: string, amount: number) => void | boolean | Promise<void | boolean>;
   onAddWastage: (w: WastageLog) => void;
   onDeleteWastage: (id: string) => void;
   onAddMomoTransfer: (t: MomoTransfer) => void | boolean | Promise<void | boolean>;
@@ -49,6 +52,9 @@ interface CategoryRegisterProps {
   staffName?: string;
   shopName?: string;
   ownerName?: string;
+  // The shop's own name for its credit book. Defaults to something neutral so
+  // no screen hardcodes one business's name.
+  creditBookName?: string;
   staff?: StaffMember[];
   eodCapital?: Record<string, number>;
   onSetEodCapital?: (category: string, value: number) => void;
@@ -176,7 +182,7 @@ export default function CategoryRegister({
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
   onPrintClose, onSendClose, onReopenDay, onCloseDayFinished, onShareCloseSummary, onCommitProductionPlan,
   ownerPhone = '', branch = '', pastClose = true, blind = false, notifyOwner = true,
-  staff = [], ownerName = '', closeSummaryAuto = true,
+  staff = [], ownerName = '', creditBookName = 'Credit book', closeSummaryAuto = true,
 }: CategoryRegisterProps) {
   // Whoever owns this shop, named by the owner in Settings. Never hardcoded —
   // every other business on this software must see their own name here.
@@ -403,6 +409,7 @@ export default function CategoryRegister({
 
   const [showMomoForm, setShowMomoForm] = useState(false);
   const [savingMoneyOut, setSavingMoneyOut] = useState(false);
+  const [savingCredit, setSavingCredit] = useState(false);
   const [momoAmount, setMomoAmount] = useState('');
   const [momoComment, setMomoComment] = useState('');
   // Mobile-money confirmation code. Only phone money has one, so it is asked
@@ -417,7 +424,7 @@ export default function CategoryRegister({
   const activeItem = (list: string[], custom: string, picked: string) =>
     picked === '__custom' ? custom.trim() : (list.find(i => i === picked) || '');
 
-  // ---- Credit (Ababanjibwa Sente) ----
+  // ---- Credit book (named in Settings, never hardcoded here) ----
   const openCredits = catCreditEats.filter(e => !e.paid);
   const outstanding = openCredits.reduce((s, e) => s + (e.total - e.paidAmount), 0);
 
@@ -537,24 +544,33 @@ export default function CategoryRegister({
       });
       if (!ok) { triggerToast('Stopped — collect old debt first', 'info'); return; }
     }
-    onAddCreditEat({
-      id: `ce-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      customerName: name,
-      date: creditDate,
-      item,
-      category: selected,
-      qty,
-      unitPrice,
-      total: Math.round(qty * unitPrice),
-      paidAmount: 0,
-      paid: false,
-    });
-    triggerToast('Added to Ababanjibwa Sente', 'success');
+    setSavingCredit(true);
+    let saved: void | boolean;
+    try {
+      saved = await onAddCreditEat({
+        id: `ce-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        customerName: name,
+        date: creditDate,
+        item,
+        category: selected,
+        qty,
+        unitPrice,
+        total: Math.round(qty * unitPrice),
+        paidAmount: 0,
+        paid: false,
+      });
+    } finally {
+      setSavingCredit(false);
+    }
+    // A refusal keeps everything typed: this is money the shop is owed, and
+    // re-typing a name, an item and an amount is how debts get lost.
+    if (saved === false) return;
+    triggerToast(`Added to ${creditBookName}`, 'success');
     setCreditName(''); setCreditItem(''); setCreditCustomItem(''); setCreditQty('1'); setCreditPrice(''); setCreditCap('');
     setShowCreditForm(false);
   };
 
-  const handlePay = () => {
+  const handlePay = async () => {
     if (!payId) return;
     const rec = openCredits.find(c => c.id === payId);
     const amt = parseFloat(payAmount);
@@ -562,7 +578,15 @@ export default function CategoryRegister({
     if (isNaN(amt) || amt <= 0) { triggerToast('Enter a valid amount', 'error'); return; }
     const remaining = rec.total - rec.paidAmount;
     if (amt > remaining) { triggerToast(`Only ${fmt(remaining)} is outstanding`, 'error'); return; }
-    onPayCreditEat(payId, amt);
+    setSavingCredit(true);
+    let saved: void | boolean;
+    try {
+      saved = await onPayCreditEat(payId, amt);
+    } finally {
+      setSavingCredit(false);
+    }
+    // Same rule: a refused payment keeps the amount on screen.
+    if (saved === false) return;
     triggerToast(`Payment recorded: ${fmt(amt)}`, 'success');
     setPayId(null); setPayAmount('');
   };
@@ -1888,7 +1912,7 @@ export default function CategoryRegister({
       )}
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
-      <CloseSection icon={Users} title="Ababanjibwa Sente"
+      <CloseSection icon={Users} title={creditBookName}
         hint={openCredits.length > 0 ? (blind ? `${openCredits.length} to collect` : `${formatCurrency(outstanding)} outstanding`) : 'Customers who still owe you — books clear'}
         open={secOpen.credit} onToggle={() => toggleSec('credit')}
         action={
@@ -1960,9 +1984,9 @@ export default function CategoryRegister({
                   {formatCurrency((parseInt(creditQty, 10) || 0) * (parseFloat(creditPrice) || 0))}
                 </span>
               </p>
-              <button onClick={handleSubmitCredit}
-                className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5">
-                <Check className="w-4 h-4" /> {t(lang, 'saveCredit')}
+              <button onClick={handleSubmitCredit} disabled={savingCredit}
+                className="h-11 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-60">
+                <Check className="w-4 h-4" /> {savingCredit ? 'Saving\u2026' : t(lang, 'saveCredit')}
               </button>
             </div>
           </div>
@@ -2147,9 +2171,9 @@ export default function CategoryRegister({
                   <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Payment Amount</label>
                   <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)}
                     className="w-full h-12 bg-zinc-950 border border-white/5 text-white text-sm px-4 rounded-xl focus:border-emerald-500 outline-none font-bold mt-2" autoFocus />
-                  <button onClick={handlePay}
-                    className="mt-4 w-full h-11 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest rounded-xl text-xs transition-all active:scale-95 cursor-pointer">
-                    Confirm Payment
+                  <button onClick={handlePay} disabled={savingCredit}
+                    className="mt-4 w-full h-11 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest rounded-xl text-xs transition-all active:scale-95 cursor-pointer disabled:opacity-60">
+                    {savingCredit ? 'Saving\u2026' : 'Confirm Payment'}
                   </button>
                 </>
               );
