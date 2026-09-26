@@ -76,9 +76,11 @@ test('reminder respects days off and overnight shifts', () => {
   assert.match(dates, /isShopDayOff\(hours, now\)/);
 });
 
-test('morning production is the first eatery screen', () => {
+test('morning production is the first eatery screen, via the registry', () => {
   const sales = read('src/components/Sales.tsx');
-  assert.match(sales, /selectedCategory === 'Eatery' \|\| selectedCategory === 'Drinks'\) \{\s*\n\s*setShowProduction\(true\);/);
+  assert.match(sales, /dept\.kind === 'kitchen' && dept\.productionFirst/);
+  assert.match(sales, /setShowProduction\(true\);/);
+  assert.match(sales, /setShowEateryHome\(true\);/);
 });
 
 test('production loads recipe ingredients with editable prices', () => {
@@ -449,4 +451,35 @@ test('a signed-in manager sees unclaimed owner handovers, not just named ones', 
   const api = read('api/index.js');
   assert.match(api, /recipient_id IS NULL AND to_type IN \('owner', 'manager'\)/);
   assert.match(api, /unclaimed owner\/manager handovers/);
+});
+
+test('approval queues heal on every phone, and offline decisions never lie', () => {
+  const ledger = read('src/components/SalesLedger.tsx');
+  assert.match(ledger, /re-check while anything is still waiting/);
+  assert.match(ledger, /setInterval\(\(\) => \{ refreshRequests\(\); \}, 20000\)/);
+  assert.match(ledger, /visibilitychange/);
+  assert.match(ledger, /No connection — decision queued, applies when you are back online/);
+  assert.match(ledger, /No connection — request queued, will send when online/);
+});
+
+test('every department opens on its own Today screen, driven by one registry', () => {
+  const registry = read('src/components/departmentRegistry.ts');
+  assert.match(registry, /export const DEPARTMENTS/);
+  assert.match(registry, /export function getDepartment/);
+  assert.match(registry, /export function shelfStats/);
+  assert.match(registry, /export function partitionDrinks/);
+  assert.match(registry, /productionFirst/);
+  const sales = read('src/components/Sales.tsx');
+  assert.match(sales, /getDepartment\(selectedCategory\)/);
+  assert.match(sales, /<DepartmentToday/);
+  // The old scattered entry rules are gone.
+  assert.equal(/if \(selectedCategory === 'Tailoring'\) setShowTailorHome\(true\)/.test(sales), false);
+  assert.equal(/Eatery' \|\| selectedCategory === 'Drinks'\) \{\s*\n\s*setShowProduction\(true\)/.test(sales), false);
+});
+
+test('drinks are two businesses sharing one chip, never Eatery details', () => {
+  const sales = read('src/components/Sales.tsx');
+  assert.match(sales, /partitionDrinks\(filteredProducts\)/);
+  assert.match(sales, /Fresh juice — made today/);
+  assert.match(sales, /Depot sodas/);
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Flag, Clock, ArrowRightLeft } from 'lucide-react';
 import type { Product, Sale } from '../types';
 import { localDayKey, localMonthKey, todayLocalKey, shiftDayKey } from '../utils/dates';
@@ -62,12 +62,27 @@ export default function SalesLedger({
   const [busy, setBusy] = useState(false);
   const today = todayLocalKey();
 
-  const refreshRequests = async () => {
+  const refreshRequests = useCallback(async () => {
     try {
       setRequests(await saleChangeApi.list());
     } catch {}
-  };
-  useEffect(() => { refreshRequests(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { refreshRequests(); }, [refreshRequests]);
+  // Open requests must heal on every phone, not just the one that acted:
+  // re-check while anything is still waiting, and every time the app returns
+  // to the foreground. Otherwise an approval on one till leaves "Waiting"
+  // stuck on every other screen forever.
+  const hasOpenRequests = requests.some(r => r.status === 'pending');
+  useEffect(() => {
+    if (!hasOpenRequests) return;
+    const iv = window.setInterval(() => { refreshRequests(); }, 20000);
+    const onVis = () => { if (document.visibilityState === 'visible') refreshRequests(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [hasOpenRequests, refreshRequests]);
 
   const visibleCats = useMemo(() => {
     const inSales = new Set<string>();
@@ -111,13 +126,19 @@ export default function SalesLedger({
     }
     setBusy(true);
     try {
-      await saleChangeApi.create({
+      const created = await saleChangeApi.create({
         saleId: fixSale.id,
         kind: fixVoid ? 'void' : 'edit',
         reason: fixReason.trim(),
         lines: fixVoid ? undefined : lines,
       });
-      triggerToast('Sent to a manager for approval', 'success');
+      if (!(created && (created as { id?: unknown }).id)) {
+        // Offline: the write was queued, not filed. Say so — the re-check
+        // above picks it up once it actually lands.
+        triggerToast('No connection — request queued, will send when online', 'info');
+      } else {
+        triggerToast('Sent to a manager for approval', 'success');
+      }
       setFixSale(null);
       refreshRequests();
     } catch (err) {
@@ -130,9 +151,15 @@ export default function SalesLedger({
   const decide = async (id: string, approve: boolean) => {
     setBusy(true);
     try {
-      if (approve) await saleChangeApi.approve(id);
-      else await saleChangeApi.reject(id);
-      triggerToast(approve ? 'Change approved and applied' : 'Request turned down', approve ? 'success' : 'info');
+      const res = approve ? await saleChangeApi.approve(id) : await saleChangeApi.reject(id);
+      const applied = !!(res && ((res as { request?: unknown }).request || (res as { id?: unknown }).id));
+      if (!applied) {
+        // Offline: the decision was queued, not applied. Say so instead of
+        // claiming success while the row sits in the queue.
+        triggerToast('No connection — decision queued, applies when you are back online', 'info');
+      } else {
+        triggerToast(approve ? 'Change approved and applied' : 'Request turned down', approve ? 'success' : 'info');
+      }
       refreshRequests();
       onChanged();
     } catch (err) {

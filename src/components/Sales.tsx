@@ -6,8 +6,8 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
   CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, TailoringOrder, DesignOrder, Booking, RepairJob, SaleSaveResult } from '../types';
-import { nextOrderNumber, quoteApi, tailoringOrderApi, designOrderApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult } from '../types';
+import { nextOrderNumber, quoteApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import { isLiveSale } from '../utils/saleStatus';
 import ProductCard from './ProductCard';
@@ -46,7 +46,9 @@ const EateryPricing = lazyRetry(() => import('./EateryPricing'));
 const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
 const AreaHome = lazyRetry(() => import('./AreaHome'));
-import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';const Bookings = lazyRetry(() => import('./Bookings'));
+import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';
+import { getDepartment, shelfStats, partitionDrinks } from './departmentRegistry';
+import DepartmentToday from './DepartmentToday';const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -338,12 +340,14 @@ export default function Sales({
     setBookingStartNew(false);
     setTailorStartNew(false);
     setDesignStartNew(false);
-    if (selectedCategory === 'Tailoring') setShowTailorHome(true);
-    if (selectedCategory === 'Graphics') setShowPrintHome(true);
-    // Eatery and Drinks open on Morning Production. Making the batch is the
-    // first job of the day in a kitchen — the read-only summary is the result
-    // of that, not the doorway in. One tap from the area chip to the real work.
-    if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
+    // Entry rule lives in the department registry: kitchens that make food
+    // open on production, order trades open on their home, shelves open on
+    // the grid. Drinks opens on its split shelf — fresh and depot are
+    // different businesses sharing one chip.
+    const dept = getDepartment(selectedCategory);
+    if (dept.ordersHome === 'tailor') setShowTailorHome(true);
+    if (dept.ordersHome === 'print') setShowPrintHome(true);
+    if (dept.kind === 'kitchen' && dept.productionFirst) {
       setShowProduction(true);
       setShowEateryHome(true);
     }
@@ -728,56 +732,18 @@ export default function Sales({
         .slice(0, 3);
     } catch { return []; }
   }, [selectedCategory, products, productionRegisters, salesHistory, wastageLogs]);
-  const areaLabel = selectedCategory === 'Eatery' ? 'Eatery workspace'
-    : selectedCategory === 'Drinks' ? 'Drinks workspace'
-    : selectedCategory === 'Tailoring' ? 'Tailoring workspace'
-    : selectedCategory === 'Graphics' ? 'Design workspace'
-    : 'Workspace';
-
-  // Area reality: live status per business area, fetched only for the open
-  // area. A tailor sees orders and balances due; a repair bench sees what's
-  // in shop — never a supermarket stock screen pretending otherwise.
-  const [areaOrders, setAreaOrders] = useState<TailoringOrder[]>([]);
-  const [areaJobs, setAreaJobs] = useState<DesignOrder[]>([]);
+  // Feature lists: bookings and repairs live outside departments (they are
+  // services, not shelves). Their Today buttons read these.
   const [areaBookings, setAreaBookings] = useState<Booking[]>([]);
   const [areaRepairs, setAreaRepairs] = useState<RepairJob[]>([]);
   useEffect(() => {
     let live = true;
-    setAreaOrders([]); setAreaJobs([]); setAreaBookings([]); setAreaRepairs([]);
-    if (selectedCategory === 'Tailoring') {
-      tailoringOrderApi.list().then(l => { if (live) setAreaOrders(Array.isArray(l) ? l : []); }).catch(() => {});
-    } else if (selectedCategory === 'Graphics') {
-      designOrderApi.list().then(l => { if (live) setAreaJobs(Array.isArray(l) ? l : []); }).catch(() => {});
-    } else {
-      if (settings?.showBookings) bookingApi.list().then(l => { if (live) setAreaBookings(Array.isArray(l) ? l : []); }).catch(() => {});
-      if (settings?.showRepairs) repairJobApi.list().then(l => { if (live) setAreaRepairs(Array.isArray(l) ? l : []); }).catch(() => {});
-    }
+    setAreaBookings([]); setAreaRepairs([]);
+    if (settings?.showBookings) bookingApi.list().then(l => { if (live) setAreaBookings(Array.isArray(l) ? l : []); }).catch(() => {});
+    if (settings?.showRepairs) repairJobApi.list().then(l => { if (live) setAreaRepairs(Array.isArray(l) ? l : []); }).catch(() => {});
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory]);
-  const areaStatus = useMemo(() => {
-    if (selectedCategory === 'Tailoring') {
-      const open = areaOrders.filter(o => o.status === 'pending' || o.status === 'in_progress');
-      const ready = areaOrders.filter(o => o.status === 'completed');
-      const due = open.reduce((s, o) => s + Math.max(0, (o.totalAmount || 0) - (o.depositPaid || 0)), 0);
-      return open.length + ready.length > 0
-        ? `${open.length} making • ${ready.length} ready${due > 0 ? ` • ${formatCurrency(due)} due` : ''}`
-        : null;
-    }
-    if (selectedCategory === 'Graphics') {
-      const active = areaJobs.filter(o => o.status === 'pending' || o.status === 'in_progress' || o.status === 'review');
-      const ready = areaJobs.filter(o => o.status === 'completed');
-      return active.length + ready.length > 0 ? `${active.length} active • ${ready.length} ready` : null;
-    }
-    if (selectedCategory !== 'Eatery' && selectedCategory !== 'Drinks' && selectedCategory !== 'All') {
-      const inCat = products.filter(p => p.category === selectedCategory && !p.isService);
-      if (inCat.length === 0) return null;
-      const low = inCat.filter(p => p.stockQty <= (p.lowStockThreshold || 5) && p.stockQty > 0).length;
-      const out = inCat.filter(p => p.stockQty <= 0).length;
-      return low + out > 0 ? `${low} low • ${out} out of stock` : `${inCat.length} stocked • shelves ok`;
-    }
-    return null;
-  }, [selectedCategory, areaOrders, areaJobs, products, formatCurrency]);
   const todayBookingCount = useMemo(() => {
     const k = todayLocalKey();
     return areaBookings.filter(b => b.date === k && b.status === 'booked').length;
@@ -2009,127 +1975,157 @@ export default function Sales({
         </div>
         )}
 
-        {/* Trade tools: compact labeled chips in one scroll row — icon-only
-            proved unreadable, full-width banners ate the screen. */}
-        {((selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction) ||
-          ((settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders) ||
-          ((settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders) ||
-          (settings?.showBookings && !showBookings) ||
-          (settings?.showRepairs && !showRepairs) ? (
-          <div className="space-y-1.5" aria-label={`${areaLabel} tools`}>
-            <div className="flex items-baseline gap-2">
-              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest shrink-0">{areaLabel}</p>
-              {areaStatus && (
-                <p className="text-[10px] font-bold text-gold-brand/90 uppercase tracking-wider truncate">{areaStatus}</p>
-              )}
-            </div>
-            {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && trayStatus.length > 0 && onAddProduction && (
-              <button onClick={() => setShowProduction(true)}
-                title="Yesterday's tray — make less today"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-950/30 border border-cyan-800/40 text-cyan-200 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
-                <Sunrise className="w-4 h-4 shrink-0" />
-                <span className="text-[11px] font-black uppercase tracking-wider truncate">
-                  Tray: {trayStatus.map(r => `${r.productName} ${r.leftover}`).join(' • ')} — make less
-                </span>
-              </button>
-            )}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" aria-label="Trade tools">
-            {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction && (
-              <>
-                <button onClick={() => setShowEateryHome(true)}
-                  title="Today in the kitchen" aria-label="Eatery today"
-                  className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                  <Flame className="w-4 h-4" /> Today
-                </button>
-                <button onClick={() => setShowEateryPricing(true)}
-                  title="Pricing & Recipes" aria-label="Pricing and recipes"
-                  className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                  <ChefHat className="w-4 h-4" /> Recipes
-                </button>
-                {onAddProduction && onDeleteProduction && (
-                  <button onClick={() => setShowProduction(true)}
+        {/* Department tools: one registry-driven row. Yesterday's tray first
+            (it changes what you make), then this department's doors, then the
+            feature tools. Nothing here is duplicated anywhere else. */}
+        {(() => {
+          const dept = getDepartment(selectedCategory);
+          const inEateryFlow = (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && !showEateryPricing && !showProduction;
+          const tailorTools = (settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring';
+          const designTools = (settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics';
+          const showTray = (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && trayStatus.length > 0 && onAddProduction;
+          const showBookingTools = !!settings?.showBookings && !showBookings;
+          const showRepairTools = !!settings?.showRepairs && !showRepairs;
+          const toolVisible = (tool: string): boolean => {
+            switch (tool) {
+              case 'today':
+              case 'pricing':
+                return dept.key === 'Eatery' && inEateryFlow;
+              case 'production':
+                return dept.key === 'Eatery' && inEateryFlow && !!onAddProduction && !!onDeleteProduction;
+              case 'close':
+                return dept.key === 'Eatery' && inEateryFlow && !!onGoClose;
+              case 'back-home':
+                if (dept.key === 'Tailoring') return tailorTools && !showTailoringOrders && !showTailorHome;
+                return designTools && !showDesignOrders && !showPrintHome;
+              case 'orders':
+                if (dept.key === 'Tailoring') return tailorTools && !showTailoringOrders;
+                return designTools && !showDesignOrders;
+              default:
+                return false;
+            }
+          };
+          const visible = dept.tools.filter(toolVisible);
+          if (!showTray && visible.length === 0 && !showBookingTools && !showRepairTools) return null;
+          const renderTool = (tool: string) => {
+            switch (tool) {
+              case 'today':
+                return (
+                  <button key={tool} onClick={() => setShowEateryHome(true)}
+                    title="Today in the kitchen" aria-label="Eatery today"
+                    className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                    <Flame className="w-4 h-4" /> Today
+                  </button>
+                );
+              case 'pricing':
+                return (
+                  <button key={tool} onClick={() => setShowEateryPricing(true)}
+                    title="Pricing & Recipes" aria-label="Pricing and recipes"
+                    className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/40 bg-gold-brand/10 text-gold-light active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                    <ChefHat className="w-4 h-4" /> Recipes
+                  </button>
+                );
+              case 'production':
+                return (
+                  <button key={tool} onClick={() => setShowProduction(true)}
                     title="Morning Production" aria-label="Morning production"
                     className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                     <Sunrise className="w-4 h-4" /> Production
                   </button>
-                )}
-                {onGoClose && (
-                  <button onClick={onGoClose}
+                );
+              case 'close':
+                return (
+                  <button key={tool} onClick={onGoClose}
                     title="Close the kitchen" aria-label="Close kitchen"
                     className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-white/10 bg-[#141414] text-zinc-300 hover:text-white active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
                     <Wallet className="w-4 h-4" /> Close
                   </button>
-                )}
-              </>
-            )}
-            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && !showTailorHome && (
-              <button onClick={() => setShowTailorHome(true)}
-                title="Back to workspace" aria-label="Back to tailoring workspace"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[#141414] border border-white/10 text-zinc-300 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
-                <ArrowRightLeft className="w-4 h-4 shrink-0" />
-                <span className="text-[11px] font-black uppercase tracking-wider">← Tailoring workspace</span>
-              </button>
-            )}
-            {(settings?.showTailoring || (featsOn('autoTools') && hasTailoringStock)) && selectedCategory === 'Tailoring' && !showTailoringOrders && (
-              <button onClick={() => setShowTailoringOrders(true)}
-                title="Manage Tailor Orders" aria-label="Manage tailor orders"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                    <Scissors className="w-4 h-4" /> Tailoring
+                );
+              case 'back-home':
+                return (
+                  <button key={tool} onClick={() => (dept.key === 'Tailoring' ? setShowTailorHome(true) : setShowPrintHome(true))}
+                    title="Back to workspace" aria-label={dept.key === 'Tailoring' ? 'Back to tailoring workspace' : 'Back to printing workspace'}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[#141414] border border-white/10 text-zinc-300 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
+                    <ArrowRightLeft className="w-4 h-4 shrink-0" />
+                    <span className="text-[11px] font-black uppercase tracking-wider">← {dept.key === 'Tailoring' ? 'Tailoring' : 'Printing'} workspace</span>
                   </button>
-                )}
-            {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && !showPrintHome && (
-              <button onClick={() => setShowPrintHome(true)}
-                title="Back to workspace" aria-label="Back to printing workspace"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-[#141414] border border-white/10 text-zinc-300 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
-                <ArrowRightLeft className="w-4 h-4 shrink-0" />
-                <span className="text-[11px] font-black uppercase tracking-wider">← Printing workspace</span>
-              </button>
-            )}
-            {(settings?.showDesign || (featsOn('autoTools') && hasDesignStock)) && selectedCategory === 'Graphics' && !showDesignOrders && (
-              <>
-              <button onClick={() => setShowPrintHome(true)}
-                title="Today in printing" aria-label="Printing today"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Flame className="w-4 h-4" /> Today
-              </button>
-              <button onClick={() => setShowDesignOrders(true)}
-                title="Manage Design & Print Orders" aria-label="Manage design and print orders"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Palette className="w-4 h-4" /> Design
-              </button>
-              </>
-            )}
-            {settings?.showBookings && !showBookings && (
-              <>
-              <button onClick={() => setShowBookingHome(true)}
-                title="Today's chairs" aria-label="Bookings today"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Flame className="w-4 h-4" /> Today
-              </button>
-              <button onClick={() => setShowBookings(true)}
-                title="Appointment Book" aria-label="Appointment book"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <CalendarCheck className="w-4 h-4" /> Bookings{todayBookingCount > 0 ? ` • ${todayBookingCount} today` : ''}
-              </button>
-              </>
-            )}
-            {settings?.showRepairs && !showRepairs && (
-              <>
-              <button onClick={() => setShowRepairHome(true)}
-                title="Today on the bench" aria-label="Repairs today"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Flame className="w-4 h-4" /> Today
-              </button>
-              <button onClick={() => setShowRepairs(true)}
-                title="Repair Job Intake" aria-label="Repair job intake"
-                className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
-                <Wrench className="w-4 h-4" /> Repairs{repairStatus ? ` • ${repairStatus}` : ''}
-              </button>
-              </>
-            )}
-          </div>
-          </div>
-        ) : null}
+                );
+              case 'orders':
+                if (dept.key === 'Tailoring') {
+                  return (
+                    <button key={tool} onClick={() => setShowTailoringOrders(true)}
+                      title="Manage Tailor Orders" aria-label="Manage tailor orders"
+                      className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-amber-400/40 bg-amber-950/30 text-amber-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                      <Scissors className="w-4 h-4" /> Tailoring
+                    </button>
+                  );
+                }
+                return (
+                  <span key={tool} className="contents">
+                    <button onClick={() => setShowPrintHome(true)}
+                      title="Today in printing" aria-label="Printing today"
+                      className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                      <Flame className="w-4 h-4" /> Today
+                    </button>
+                    <button onClick={() => setShowDesignOrders(true)}
+                      title="Manage Design & Print Orders" aria-label="Manage design and print orders"
+                      className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-cyan-400/40 bg-cyan-950/30 text-cyan-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                      <Palette className="w-4 h-4" /> Design
+                    </button>
+                  </span>
+                );
+              default:
+                return null;
+            }
+          };
+          return (
+            <div className="space-y-1.5" aria-label={`${dept.title} tools`}>
+              {showTray && (
+                <button onClick={() => setShowProduction(true)}
+                  title="Yesterday's tray — make less today"
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-950/30 border border-cyan-800/40 text-cyan-200 active:scale-[0.99] transition-all cursor-pointer touch-target text-left">
+                  <Sunrise className="w-4 h-4 shrink-0" />
+                  <span className="text-[11px] font-black uppercase tracking-wider truncate">
+                    Tray: {trayStatus.map(r => `${r.productName} ${r.leftover}`).join(' • ')} — make less
+                  </span>
+                </button>
+              )}
+              {(visible.length > 0 || showBookingTools || showRepairTools) && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" aria-label="Trade tools">
+                  {visible.map(tool => <span key={tool} className="contents">{renderTool(tool)}</span>)}
+                  {showBookingTools && (
+                    <>
+                      <button onClick={() => setShowBookingHome(true)}
+                        title="Today's chairs" aria-label="Bookings today"
+                        className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                        <Flame className="w-4 h-4" /> Today
+                      </button>
+                      <button onClick={() => setShowBookings(true)}
+                        title="Appointment Book" aria-label="Appointment book"
+                        className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-emerald-400/40 bg-emerald-950/30 text-emerald-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                        <CalendarCheck className="w-4 h-4" /> Bookings{todayBookingCount > 0 ? ` • ${todayBookingCount} today` : ''}
+                      </button>
+                    </>
+                  )}
+                  {showRepairTools && (
+                    <>
+                      <button onClick={() => setShowRepairHome(true)}
+                        title="Today on the bench" aria-label="Repairs today"
+                        className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-gold-brand/60 bg-gold-brand text-black active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                        <Flame className="w-4 h-4" /> Today
+                      </button>
+                      <button onClick={() => setShowRepairs(true)}
+                        title="Repair Job Intake" aria-label="Repair job intake"
+                        className="h-10 shrink-0 flex items-center gap-1.5 px-3 rounded-xl border border-orange-400/40 bg-orange-950/30 text-orange-300 active:scale-95 transition-all cursor-pointer touch-target text-[11px] font-black uppercase tracking-wider whitespace-nowrap">
+                        <Wrench className="w-4 h-4" /> Repairs{repairStatus ? ` • ${repairStatus}` : ''}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Eatery home: the restaurant TODAY view (area operating surface) */}
         {showEateryHome && !showProduction && (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') ? (
@@ -2293,24 +2289,63 @@ export default function Sales({
         /* Products */
         <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
           <section className="space-y-2">
+            {(() => {
+              const dept = getDepartment(selectedCategory);
+              if (dept.kind !== 'sell' || selectedCategory === 'All') return null;
+              return (
+                <DepartmentToday
+                  config={dept}
+                  stats={shelfStats(selectedCategory, products, salesHistory, formatCurrency)}
+                />
+              );
+            })()}
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
               {selectedCategory === 'All' ? 'All Products' : selectedCategory}
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {filteredProducts.slice(0, visibleCount).map(product => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  cart={cart}
-                  formatCurrency={formatCurrency}
-                  onAddToCart={handleAddToCart}
-                  onOutOfStock={handleOutOfStock}
-                  onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
-                  pinned={pinnedIds.includes(product.id)}
-                  onTogglePin={!simple && featsOn('fastSellers') ? togglePin : undefined}
-                  simple={simple}
-                />
-              ))}
+              {(() => {
+                const groups = selectedCategory === 'Drinks'
+                  ? (() => {
+                      const { fresh, depot } = partitionDrinks(filteredProducts);
+                      return [
+                        { key: 'fresh', title: 'Fresh juice — made today', sub: 'From this morning’s batch', kitchen: true, items: fresh },
+                        { key: 'depot', title: 'Depot sodas', sub: 'Buy-resell stock', kitchen: false, items: depot },
+                      ];
+                    })()
+                  : [{ key: 'all', title: '', sub: '', kitchen: false, items: filteredProducts }];
+                return groups.map(group => (
+                  <div key={group.key} className="contents">
+                    {selectedCategory === 'Drinks' && group.items.length > 0 && (
+                      <div className="col-span-full flex items-center justify-between gap-2 pt-1">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-black text-white uppercase tracking-wider truncate">{group.title}</p>
+                          <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">{group.sub}</p>
+                        </div>
+                        {group.kitchen && onAddProduction && (
+                          <button onClick={() => setShowProduction(true)}
+                            className="shrink-0 h-9 px-3 rounded-lg border border-amber-400/40 bg-amber-950/30 text-amber-300 text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all cursor-pointer">
+                            Make
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {group.items.slice(0, visibleCount).map(product => (
+                      <ProductCard
+                        key={product.id}
+                        product={product}
+                        cart={cart}
+                        formatCurrency={formatCurrency}
+                        onAddToCart={handleAddToCart}
+                        onOutOfStock={handleOutOfStock}
+                        onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
+                        pinned={pinnedIds.includes(product.id)}
+                        onTogglePin={!simple && featsOn('fastSellers') ? togglePin : undefined}
+                        simple={simple}
+                      />
+                    ))}
+                  </div>
+                ));
+              })()}
               {filteredProducts.length === 0 && (
                 <div className="col-span-full py-16 text-center boss-card rounded-xl px-4">
                   <Tag className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
@@ -2323,44 +2358,56 @@ export default function Sales({
                   )                   : (
                     // Empty states that teach (#4): one action button, not just
                     // "no data". In demo mode the catalog is never empty.
-                    // Area-aware: a tailor needs orders, an eatery needs a
-                    // batch — never a stock form for a non-stock trade.
+                    // The empty shelf offers what this trade actually needs —
+                    // a batch, an order, a job, or stock — never a dead end.
                     <div className="mt-2 space-y-2">
-                      {(selectedCategory === 'Eatery' || selectedCategory === 'Drinks') && onAddProduction ? (
-                        <>
-                          <p className="text-xs text-zinc-500 font-bold uppercase">No food yet today — log what the kitchen made</p>
-                          <button onClick={() => setShowProduction(true)}
-                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                            Log morning production
-                          </button>
-                        </>
-                      ) : selectedCategory === 'Tailoring' ? (
-                        <>
-                          <p className="text-xs text-zinc-500 font-bold uppercase">Tailors don't stock shelves — take an order</p>
-                          <button onClick={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
-                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                            + New order
-                          </button>
-                        </>
-                      ) : selectedCategory === 'Graphics' ? (
-                        <>
-                          <p className="text-xs text-zinc-500 font-bold uppercase">No products needed — take a job</p>
-                          <button onClick={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
-                            className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                            + New job
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                      <p className="text-xs text-zinc-500 font-bold uppercase">Add products in Stock to start selling</p>
-                      {onGoToStock && (
-                        <button onClick={onGoToStock}
-                          className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
-                          + Add your first product
-                        </button>
-                      )}
-                        </>
-                      )}
+                      {(() => {
+                        const emptyAction = getDepartment(selectedCategory).emptyAction;
+                        if (emptyAction === 'production' && onAddProduction) {
+                          return (
+                            <>
+                              <p className="text-xs text-zinc-500 font-bold uppercase">No food yet today — log what the kitchen made</p>
+                              <button onClick={() => setShowProduction(true)}
+                                className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                                Log morning production
+                              </button>
+                            </>
+                          );
+                        }
+                        if (emptyAction === 'tailoring-order') {
+                          return (
+                            <>
+                              <p className="text-xs text-zinc-500 font-bold uppercase">Tailors don't stock shelves — take an order</p>
+                              <button onClick={() => { setShowTailorHome(false); setTailorStartNew(true); setShowTailoringOrders(true); }}
+                                className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                                + New order
+                              </button>
+                            </>
+                          );
+                        }
+                        if (emptyAction === 'design-order') {
+                          return (
+                            <>
+                              <p className="text-xs text-zinc-500 font-bold uppercase">No products needed — take a job</p>
+                              <button onClick={() => { setShowPrintHome(false); setDesignStartNew(true); setShowDesignOrders(true); }}
+                                className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                                + New job
+                              </button>
+                            </>
+                          );
+                        }
+                        return (
+                          <>
+                            <p className="text-xs text-zinc-500 font-bold uppercase">Add products in Stock to start selling</p>
+                            {onGoToStock && (
+                              <button onClick={onGoToStock}
+                                className="h-11 px-5 bg-gold-brand text-black font-black uppercase tracking-wider rounded-xl text-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer">
+                                + Add your first product
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
