@@ -563,7 +563,9 @@ export interface StoreSettings {
   commissionPct?: number; // seller commission % of own sales, shown in Reports ranking
   dailyGoalRevenue?: number; // revenue target for the goal bar (0/empty = count goal only)
   receiptFooter?: string; // slogan/returns line printed under every receipt
+  receiptLogoUrl?: string; // shop logo printed on receipts (/uploads/... or https://)
   ownerPhone?: string; // WhatsApp number for the daily close summary
+  communityGroupUrl?: string; // shop WhatsApp group invite link customers join from
   ownerName?: string; // display name for the person who owns the business
   // Closing cadence: how long before closeTime the till starts reminding the
   // cashier, and how loudly. Owners set the pace for their own business.

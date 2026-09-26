@@ -603,6 +603,9 @@ export default function Sales({
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
   const [lastSaleItems, setLastSaleItems] = useState<SaleItem[] | null>(null);
   const [reprintSale, setReprintSale] = useState<Sale | null>(null);
+  // Fresh receipts (a sale just completed) close by themselves after 3s so
+  // the next customer never waits on an extra tap. Manual reprints stay open.
+  const [receiptFresh, setReceiptFresh] = useState(false);
 
   useEffect(() => {
     try {
@@ -1290,6 +1293,7 @@ export default function Sales({
      setCheckoutState(saveStatus);
     const savedSale = saveResult?.sale || newSale;
     setShowConfirmSale(false);
+    setReceiptFresh(true);
     setReprintSale(savedSale);
     playChargeFeedback();
     triggerToast(saveStatus === 'queued' ? `${orderNumber} queued — it will sync when online${changeMsg}` : `${orderNumber} saved!${changeMsg}`, 'success');
@@ -1399,6 +1403,7 @@ export default function Sales({
     setPendingRecovery(null);
     setStreetCount(c => c + 1);
     setStreetTotal(t => t + product.price);
+    setReceiptFresh(true);
     setReprintSale(saveResult?.sale || newSale);
     playChargeFeedback();
     triggerToast(`${product.name} ${saveResult?.status === 'queued' ? 'queued' : 'sold'} • ${formatCurrency(product.price)}`, 'success');
@@ -1750,19 +1755,20 @@ export default function Sales({
       
       {/* LEFT COLUMN */}
       <div className="lg:col-span-8 flex flex-col h-full min-h-0 lg:overflow-hidden space-y-3">
-          <div className="flex flex-nowrap gap-1.5 items-center">
-            <div className="relative flex-1 min-w-0">
+          <div className="flex flex-wrap gap-1.5 items-center">
+            <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-0">
             <input
               ref={searchRef}
               type="text"
               placeholder={t(lang, 'searchItems')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-               className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-11 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
+               className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand h-12 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
               id="search-inventory-input"
             />
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
           </div>
+          <div className="flex gap-1.5 items-center shrink-0">
           {/* Seller lives in the top bar now — no duplicate chip here. */}
           {/* Compact icon toolbar: Custom + Quick + Scan stay visible (daily
               drivers), everything else hides under ⋯ so the catalog keeps
@@ -1814,7 +1820,7 @@ export default function Sales({
                     </button>
                   )}
                   {cart.length === 0 && salesHistory.length > 0 && (
-                    <button onClick={() => { setShowMoreActions(false); setReprintSale(salesHistory[0]); }}
+                    <button onClick={() => { setShowMoreActions(false); setReceiptFresh(false); setReprintSale(salesHistory[0]); }}
                       className="w-full h-11 px-3 rounded-xl text-xs font-black uppercase tracking-wider text-zinc-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer">
                       <Printer className="w-4 h-4 text-zinc-400" /> Reprint receipt
                     </button>
@@ -1850,6 +1856,7 @@ export default function Sales({
                 </div>
               </>
             )}
+          </div>
           </div>
         </div>
 
@@ -1936,13 +1943,14 @@ export default function Sales({
             so they no longer spend vertical screen on every sell). */}
         {reprintSale && (
           <div ref={receiptRef} role="dialog" aria-modal="true" aria-label="Receipt" tabIndex={-1}>
-            <ReceiptModal
-              sale={reprintSale}
-              settings={settings || {} as StoreSettings}
-              formatCurrency={formatCurrency}
-              onClose={() => setReprintSale(null)}
-              triggerToast={triggerToast}
-            />
+          <ReceiptModal
+            sale={reprintSale}
+            settings={settings || {} as StoreSettings}
+            formatCurrency={formatCurrency}
+            onClose={() => { setReprintSale(null); setReceiptFresh(false); }}
+            triggerToast={triggerToast}
+            autoCloseMs={receiptFresh ? 3000 : undefined}
+          />
           </div>
         )}
 
@@ -2815,6 +2823,7 @@ export default function Sales({
             formatCurrency={formatCurrency}
             triggerToast={triggerToast}
             onClose={() => setShowCustomers(false)}
+            groupInviteUrl={settings?.communityGroupUrl || ''}
           />
         </div>
       )}

@@ -346,3 +346,84 @@ test('no screen speaks the old money language anymore', () => {
     assert.doesNotMatch(source, /FLAG for review/);
   }
 });
+
+test('a close that missed its summary retries it on the next visit', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  assert.match(register, /summaryRetried/);
+  assert.match(register, /if \(!dayClosedAt \|\| summarySentId\) return;/);
+  assert.match(register, /revisiting a closed day with no filed summary retries/);
+});
+
+test('sales get their own ledger first, with time and area filters', () => {
+  const ledger = read('src/components/SalesLedger.tsx');
+  assert.match(ledger, /Today/);
+  assert.match(ledger, /Yesterday/);
+  assert.match(ledger, /This week/);
+  assert.match(ledger, /This month/);
+  assert.match(ledger, /Business area/);
+  assert.match(ledger, /Biggest/);
+  assert.match(ledger, /Waiting for your approval/);
+  assert.match(ledger, /Ask to fix/);
+  assert.match(ledger, /My requests/);
+  const analytics = read('src/components/Analytics.tsx');
+  assert.match(analytics, /<SalesLedger/);
+  assert.match(analytics, />Sales</);
+});
+
+test('a cashier can ask, only a manager can apply', () => {
+  const ledger = read('src/components/SalesLedger.tsx');
+  assert.match(ledger, /Nothing changes until a manager approves it/);
+  assert.match(ledger, /saleChangeApi\.create\(/);
+  assert.match(ledger, /saleChangeApi\.approve\(/);
+  assert.match(ledger, /saleChangeApi\.reject\(/);
+  assert.match(ledger, /Say why — the manager needs a reason/);
+  const api = read('src/api.ts');
+  assert.match(api, /saleChangeApi = \{/);
+  assert.match(api, /\/api\/sale-change-requests/);
+});
+
+test('the Reports tab is now the Sales tab', () => {
+  const app = read('src/App.tsx');
+  assert.match(app, /t\(settings\.language, 'salesTab'\)/);
+  assert.match(app, /id="analytics-nav-btn"/);
+  const i18n = read('src/utils/i18n.ts');
+  assert.match(i18n, /salesTab: 'Sales'/);
+});
+
+test('fresh receipts close by themselves; reprints stay open', () => {
+  const modal = read('src/components/ReceiptModal.tsx');
+  const sales = read('src/components/Sales.tsx');
+  assert.match(modal, /autoCloseMs\?: number/);
+  assert.match(modal, /Closes on its own — touch to keep it open/);
+  assert.match(sales, /receiptFresh/);
+  assert.match(sales, /autoCloseMs=\{receiptFresh \? 3000 : undefined\}/);
+});
+
+test('receipts keep their design as pixels, with the shop logo', () => {
+  const modal = read('src/components/ReceiptModal.tsx');
+  const app = read('src/App.tsx');
+  assert.match(modal, /renderReceiptPng/);
+  assert.match(modal, /receiptLogoUrl/);
+  assert.match(modal, /PNG/);
+  assert.match(app, /receiptLogoUrl/);
+  assert.match(app, /Add receipt logo/);
+  const api = read('api/index.js');
+  assert.match(api, /'receiptLogoUrl', 'communityGroupUrl',/);
+});
+
+test('the sell search owns its own full line on small phones', () => {
+  const sales = read('src/components/Sales.tsx');
+  assert.match(sales, /relative w-full sm:w-auto sm:flex-1 sm:min-w-0/);
+  assert.doesNotMatch(sales, /flex-nowrap gap-1\.5 items-center/);
+});
+
+test('regulars can be invited to the shoppers group; numbers copy out for broadcast', () => {
+  const customers = read('src/components/Customers.tsx');
+  const app = read('src/App.tsx');
+  assert.match(customers, /groupInviteUrl\?: string/);
+  assert.match(customers, /Invite .* to the shoppers' group/);
+  assert.match(customers, /Copy numbers/);
+  assert.match(read('src/components/Sales.tsx'), /groupInviteUrl=\{settings\?\.communityGroupUrl/);
+  assert.match(app, /communityGroupUrl/);
+  assert.match(app, /Customer community/);
+});

@@ -22,6 +22,7 @@ import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { isLiveSale } from '../utils/saleStatus';
 import { LABELS, MoneyHero } from './Design';
+import SalesLedger from './SalesLedger';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -57,6 +58,9 @@ interface AnalyticsProps {
   onReturnItems?: (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => void;
   onVoidSale?: (saleId: string) => void;
   settings: StoreSettings;
+  isManager?: boolean;
+  staffName?: string;
+  onSalesChanged?: () => void;
 }
 
 export default function Analytics({
@@ -89,7 +93,9 @@ export default function Analytics({
   onRefundSale,
   onReturnItems,
   onVoidSale,
-  settings
+  settings,
+  isManager = false,
+  onSalesChanged,
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
   const [chartMetric, setChartMetric] = useState<'revenue' | 'profit'>('revenue');
@@ -577,10 +583,10 @@ const colorsMap: { [key: string]: string } = {
       <section className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 sm:gap-4">
         <div className="min-w-0">
           <h2 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight font-display truncate">
-            {showSuppliers ? 'Suppliers' : 'Reports'}
+            {showSuppliers ? 'Suppliers' : 'Sales'}
           </h2>
           <p className="text-sm text-zinc-400 mt-1 font-bold tracking-wider">
-            {showSuppliers ? 'Manage your suppliers' : 'Sales, profit & expenses'}
+            {showSuppliers ? 'Manage your suppliers' : 'What sold, profit & expenses'}
           </p>
           {!showSuppliers && (
             <p className="text-[9px] text-zinc-600 font-mono mt-0.5">
@@ -619,10 +625,22 @@ const colorsMap: { [key: string]: string } = {
           )}
           <button onClick={() => setShowSuppliers(!showSuppliers)}
             className="px-4 min-h-[44px] inline-flex items-center justify-center bg-zinc-900 border border-zinc-800 hover:border-gold-brand text-gold-brand rounded-xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer">
-            {showSuppliers ? '← Back to Reports' : 'View Suppliers →'}
+            {showSuppliers ? '← Back to Sales' : 'View Suppliers →'}
           </button>
         </div>
       </section>
+
+      {!showSuppliers && (
+        <SalesLedger
+          sales={sales}
+          products={products}
+          categories={settings.categories ?? []}
+          formatCurrency={formatCurrency}
+          triggerToast={triggerToast}
+          isManager={isManager}
+          onChanged={() => onSalesChanged?.()}
+        />
+      )}
 
       {showSuppliers ? (
         <section className="space-y-4">

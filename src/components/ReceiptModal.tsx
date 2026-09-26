@@ -1,9 +1,11 @@
-import { X, Printer, Share2, Copy, Check, Bluetooth } from 'lucide-react';
-import { useState } from 'react';
+import { X, Printer, Share2, Copy, Check, Bluetooth, Image as ImageIcon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import type { Sale, StoreSettings } from '../types';
 import { unitLabel } from '../utils/units';
 import { paymentLabel } from '../utils/serviceSale';
 import { printViaBluetooth } from '../utils/bluetoothPrint';
+import { renderReceiptPng } from '../utils/receiptImage';
+import { downloadBlob } from '../utils/download';
 import { efrisApi } from '../api';
 
 interface ReceiptModalProps {
@@ -13,6 +15,10 @@ interface ReceiptModalProps {
   onClose: () => void;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onFiscalUpdate?: (sale: Sale) => void;
+  // Fresh receipts (just completed a sale) close by themselves so the next
+  // customer never waits on an extra tap. Any touch or keypress means the
+  // cashier is using it, and cancels the timer. Reprints pass nothing.
+  autoCloseMs?: number;
 }
 
 function escapeHtml(s: string): string {
@@ -39,8 +45,21 @@ function printViaPopup(html: string): boolean {
   }
 }
 
-export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast, onFiscalUpdate }: ReceiptModalProps) {
+export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast, onFiscalUpdate, autoCloseMs }: ReceiptModalProps) {
   const [copied, setCopied] = useState(false);
+  const [renderingPng, setRenderingPng] = useState(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const interacted = useRef(false);
+  const cancelAutoClose = () => { interacted.current = true; };
+  useEffect(() => {
+    if (!autoCloseMs || autoCloseMs <= 0) return;
+    interacted.current = false;
+    const timer = window.setTimeout(() => {
+      if (!interacted.current) onCloseRef.current();
+    }, autoCloseMs);
+    return () => window.clearTimeout(timer);
+  }, [sale.id, autoCloseMs]);
   const [fiscal, setFiscal] = useState({
     status: sale.efrisStatus || 'none',
     fdn: sale.efrisFdn || '',
@@ -91,6 +110,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
       ? `<div class="divider"></div><div class="center"><div style="font-weight:bold">URA E-FISCAL RECEIPT</div><div class="muted">FDN: ${escapeHtml(fiscal.fdn)}</div>${fiscal.invoiceNo ? `<div class="muted">INV: ${escapeHtml(fiscal.invoiceNo)}</div>` : ''}${fiscal.verify ? `<div class="muted">VERIFY: ${escapeHtml(fiscal.verify)}</div>` : ''}</div>`
       : '';
 
+  const logoUrl = (settings.receiptLogoUrl || '').trim();
   const html = `<!doctype html>
 <html>
 <head>
@@ -100,9 +120,10 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
 <style>
   * { box-sizing: border-box; }
   body { font-family: 'Courier New', monospace; color: #111; margin: 0; padding: 24px; width: 80mm; }
-  @media print { body { padding: 0; width: 80mm; } }
+  @media print { body { padding: 0; width: 80mm; } @page { size: 80mm auto; margin: 0; } }
   .center { text-align: center; }
-  h1 { font-size: 16px; margin: 0 0 2px; text-transform: uppercase; letter-spacing: 1px; }
+  h1 { font-size: 17px; margin: 0 0 2px; text-transform: uppercase; letter-spacing: 1px; }
+  .logo { max-width: 190px; max-height: 90px; margin-bottom: 4px; }
   .muted { color: #555; font-size: 11px; }
   .divider { border-top: 1px dashed #888; margin: 8px 0; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -113,6 +134,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
 </head>
 <body>
   <div class="center">
+    ${logoUrl ? `<img class="logo" src="${escapeHtml(logoUrl)}" />` : ''}
     <h1>${escapeHtml(settings.shopName || 'My Shop')}</h1>
     <div class="muted">Uganda • POS</div>
     <div class="muted">${escapeHtml(sale.orderNumber)}</div>
@@ -202,11 +224,49 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     }
   };
 
+  // Designed receipt as a PNG: layout, logo and totals baked into pixels, so
+  // what the customer keeps can't be edited afterwards. Shares straight to
+  // WhatsApp/gallery where supported, otherwise saves to the phone.
+  const handlePng = async () => {
+    setRenderingPng(true);
+    try {
+      const blob = await renderReceiptPng(sale, settings, formatCurrency);
+      const filename = `receipt-${sale.orderNumber.replace(/[^A-Za-z0-9]+/g, '-').slice(0, 40) || sale.id}.png`;
+      const nav = navigator as Navigator & {
+        canShare?: (data: { files?: File[] }) => boolean;
+        share?: (data: { files: File[]; title?: string }) => Promise<void>;
+      };
+      const file = new File([blob], filename, { type: 'image/png' });
+      if (nav.canShare?.({ files: [file] })) {
+        try {
+          await nav.share({ files: [file], title: `Receipt ${sale.orderNumber}` });
+          triggerToast('Receipt image shared', 'success');
+          return;
+        } catch { /* share sheet dismissed — fall through to download */ }
+      }
+      if (downloadBlob(blob, filename)) triggerToast('Receipt image saved', 'success');
+      else triggerToast('Could not save the image on this device', 'error');
+    } catch {
+      triggerToast('Could not make the receipt image on this device', 'error');
+    } finally {
+      setRenderingPng(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[110] flex items-center justify-center p-4">
-      <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] flex flex-col">
+      <div
+        className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] flex flex-col"
+        onPointerDown={cancelAutoClose}
+        onKeyDown={cancelAutoClose}
+      >
         <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
-          <h3 className="text-sm font-black text-white uppercase tracking-wider font-display">Receipt</h3>
+          <div>
+            <h3 className="text-sm font-black text-white uppercase tracking-wider font-display">Receipt</h3>
+            {autoCloseMs ? (
+              <p role="status" className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">Closes on its own — touch to keep it open</p>
+            ) : null}
+          </div>
           <button onClick={onClose} className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer">
             <X className="w-5 h-5" />
           </button>
@@ -214,6 +274,10 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
 
         <div className="bg-white text-black font-mono rounded-xl p-4 overflow-y-auto flex-1 min-h-[120px]">
           <div className="text-center">
+            {logoUrl ? (
+              <img src={logoUrl} alt="" className="inline-block max-h-16 max-w-[190px] object-contain mb-1"
+                onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+            ) : null}
             <h1 className="text-sm font-black uppercase tracking-wider">{settings.shopName || 'My Shop'}</h1>
             <p className="text-[10px] text-zinc-600">Uganda • POS</p>
             <p className="text-[10px] text-zinc-600">{sale.orderNumber}</p>
@@ -277,14 +341,14 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           <p className="mt-2 text-[10px] text-rose-400 font-bold">Fiscal filing failed: {fiscal.error.slice(0, 120)}</p>
         )}
 
-        <div className="grid grid-cols-4 gap-2 mt-4">
-          <button onClick={handlePrint}
+        <div className="grid grid-cols-3 gap-2 mt-4">
+          <button onClick={handlePrint} title="Print, or save as PDF from the print dialog"
             className="h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
             <Printer className="w-3.5 h-3.5" /> Print
           </button>
-          <button onClick={handleBluetooth}
-            className="h-11 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
-            <Bluetooth className="w-3.5 h-3.5" /> BT
+          <button onClick={handlePng} disabled={renderingPng} title="Save or share the receipt as a designed image"
+            className="h-11 bg-violet-700 hover:bg-violet-600 disabled:opacity-60 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
+            <ImageIcon className="w-3.5 h-3.5" /> {renderingPng ? '…' : 'PNG'}
           </button>
           <button onClick={handleWhatsApp}
             className="h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
@@ -293,6 +357,10 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
           <button onClick={handleCopy}
             className="h-11 bg-zinc-800 hover:bg-zinc-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}
+          </button>
+          <button onClick={handleBluetooth}
+            className="h-11 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest rounded-xl transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer">
+            <Bluetooth className="w-3.5 h-3.5" /> BT
           </button>
         </div>
       </div>

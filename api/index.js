@@ -7,7 +7,7 @@ import { creditLimitDecision, normalizeCreditKey, summarizeCreditBalances } from
 import { normalizeReportRange } from './reportRange.js';
 import { TILL_ROLE, managerAllowed, MANAGER_REQUIRED_CODE } from './authz.js';
 import { aggregateSaleLines, saleTotals, validatePayment, validateProductIdentity, discountRequiresManager, actorContext, structuredMetadata, buildAgingReport, normalizeBarcode, normalizeImei, roundMoney } from './businessRules.js';
-import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, validateProductionPlan, planLineCost, parseProductRecipe, quantity, businessDate } from './operationsRules.js';
+import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, validateProductionPlan, validateSaleChangeRequest, planLineCost, parseProductRecipe, quantity, businessDate } from './operationsRules.js';
 import { calculateCloseTotals, normalizeExpenseCategories, categoryRenameViolation, normalizePaymentMethod, validateSettlementTransition, validateExpenseTransition, validateReference, scopeValues } from './operationsBusiness.js';
 import { PURCHASE_ORDER_STATUSES, RECEIVABLE_STATUSES, roundQuantity, expiryDateValue, normalizeOrderNumber, purchaseOrderTotals, receiptPlan, receiptSummary } from './procurementRules.js';
 
@@ -526,6 +526,19 @@ async function initDB() {
     metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
   )`;
   try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_events_idempotency ON sale_events(idempotency_key) WHERE idempotency_key IS NOT NULL`; } catch {}
+  // Cashier-spotted mistakes wait here for a manager verdict instead of being
+  // edited in place. One pending request per sale; approval applies the change.
+  await sql`CREATE TABLE IF NOT EXISTS sale_change_requests (
+    id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, kind TEXT NOT NULL,
+    payload TEXT DEFAULT '{}', reason TEXT DEFAULT '',
+    requested_by TEXT, requested_by_name TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending', decided_by TEXT, decided_by_name TEXT DEFAULT '',
+    decided_at TEXT, decision_note TEXT DEFAULT '', branch TEXT DEFAULT '',
+    client_write_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`;
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_change_requests_cwid ON sale_change_requests(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_sale_change_requests_status ON sale_change_requests(status, created_at DESC)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_sale_change_requests_sale ON sale_change_requests(sale_id)`; } catch {}
   try { await sql`CREATE INDEX IF NOT EXISTS idx_sale_events_sale ON sale_events(sale_id, created_at DESC)`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS purchase_orders (
     id TEXT PRIMARY KEY, order_number TEXT NOT NULL UNIQUE, supplier_id TEXT NOT NULL, supplier_name TEXT DEFAULT '',
@@ -2218,6 +2231,179 @@ app.get('/api/sale-events', requireManager, asHandler(async (req, res) => {
   const saleId = String(req.query.saleId || '');
   const rows = saleId ? await sql`SELECT * FROM sale_events WHERE sale_id=${saleId} ORDER BY created_at DESC` : await sql`SELECT * FROM sale_events ORDER BY created_at DESC LIMIT 200`;
   res.json(rows.map(mapSaleEvent));
+}));
+
+function mapSaleChangeRequest(r) {
+  return {
+    id: r.id, saleId: r.sale_id, kind: r.kind, payload: parseJson(r.payload, {}),
+    reason: r.reason || '', requestedBy: r.requested_by || undefined,
+    requestedByName: r.requested_by_name || '', status: r.status || 'pending',
+    decidedBy: r.decided_by || undefined, decidedByName: r.decided_by_name || '',
+    decidedAt: r.decided_at || undefined, decisionNote: r.decision_note || '',
+    branch: r.branch || '', createdAt: r.created_at,
+  };
+}
+
+// POST /api/sale-change-requests — any signed-in seller can flag a till
+// mistake. One pending request per sale; anything more is queue spam.
+app.post('/api/sale-change-requests', asHandler(async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const saleRows = await sql`SELECT * FROM sales WHERE id=${String(body.saleId || '')}`;
+  const sale = saleRows[0] ? mapSale(saleRows[0]) : null;
+  const validated = validateSaleChangeRequest(body, sale);
+  if (validated.error) {
+    const status = validated.code === 'SALE_NOT_FOUND' ? 404 : validated.code === 'SALE_CLOSED' ? 409 : 400;
+    return res.status(status).json({ error: validated.error, code: validated.code });
+  }
+  const actor = await requestActor(req);
+  const clientWriteId = validated.idempotencyKey;
+  if (clientWriteId) {
+    const existing = await sql`SELECT * FROM sale_change_requests WHERE client_write_id=${clientWriteId}`;
+    if (existing.length) return res.json({ ...mapSaleChangeRequest(existing[0]), duplicate: true });
+  }
+  const pending = await sql`SELECT * FROM sale_change_requests WHERE sale_id=${sale.id} AND status='pending' LIMIT 1`;
+  if (pending.length) return res.json({ ...mapSaleChangeRequest(pending[0]), duplicate: true });
+  const id = String(body.id || `scr-${randomUUID()}`).slice(0, 160);
+  const at = new Date().toISOString();
+  const inserted = await sql`INSERT INTO sale_change_requests (id,sale_id,kind,payload,reason,requested_by,requested_by_name,status,branch,client_write_id,created_at,updated_at)
+    VALUES (${id},${sale.id},${validated.kind},${JSON.stringify(validated.kind === 'edit' ? { lines: validated.lines } : {})},${validated.reason},${actor.id},${actor.name},'pending',${text(sale.branch, 80)},${clientWriteId},${at},${at})
+    ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING RETURNING *`;
+  if (!inserted.length) {
+    const existing = clientWriteId ? await sql`SELECT * FROM sale_change_requests WHERE client_write_id=${clientWriteId}` : [];
+    if (existing.length) return res.json({ ...mapSaleChangeRequest(existing[0]), duplicate: true });
+    return res.status(409).json({ error: 'Change request was not saved', code: 'REQUEST_NOT_SAVED' });
+  }
+  await audit('sale_change.requested', `${validated.kind} ${sale.orderNumber || sale.id}: ${validated.reason}`, actor, {
+    requestId: id, saleId: sale.id, kind: validated.kind,
+  }, req.id);
+  res.json(mapSaleChangeRequest(inserted[0]));
+}));
+
+// GET /api/sale-change-requests — managers see the whole queue (pending
+// first); everyone else sees only the requests they filed themselves.
+app.get('/api/sale-change-requests', asHandler(async (req, res) => {
+  const actor = await requestActor(req);
+  const manager = await requestIsManager(req);
+  let rows;
+  if (manager) {
+    rows = await sql`SELECT * FROM sale_change_requests ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END, created_at DESC LIMIT 100`;
+  } else if (actor.id) {
+    rows = await sql`SELECT * FROM sale_change_requests WHERE requested_by=${actor.id} ORDER BY created_at DESC LIMIT 100`;
+  } else {
+    rows = [];
+  }
+  const out = [];
+  for (const r of rows) {
+    const saleRows = await sql`SELECT * FROM sales WHERE id=${r.sale_id} LIMIT 1`;
+    out.push({ ...mapSaleChangeRequest(r), sale: saleRows[0] ? mapSale(saleRows[0]) : null });
+  }
+  res.json(out);
+}));
+
+// POST /api/sale-change-requests/:id/approve — manager only. Voids reuse the
+// audited void path; edits recompute lines, totals and stock deltas.
+app.post('/api/sale-change-requests/:id/approve', requireManager, asHandler(async (req, res) => {
+  const actor = await requestActor(req);
+  const rows = await sql`SELECT * FROM sale_change_requests WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Change request not found', code: 'REQUEST_NOT_FOUND' });
+  const request = rows[0];
+  const decide = async (status, note) => {
+    const at = new Date().toISOString();
+    const updated = await sql`UPDATE sale_change_requests SET status=${status}, decided_by=${actor.id}, decided_by_name=${actor.name}, decided_at=${at}, decision_note=${text(note, 500)}, updated_at=${at} WHERE id=${request.id} RETURNING *`;
+    return updated[0] || request;
+  };
+  if (request.status !== 'pending') {
+    const saleRows = await sql`SELECT * FROM sales WHERE id=${request.sale_id} LIMIT 1`;
+    return res.json({ duplicate: true, request: mapSaleChangeRequest(request), sale: saleRows[0] ? mapSale(saleRows[0]) : null });
+  }
+  const saleRows = await sql`SELECT * FROM sales WHERE id=${request.sale_id}`;
+  if (!saleRows.length) {
+    const decided = await decide('rejected', 'Sale no longer exists');
+    return res.status(404).json({ error: 'Sale not found', code: 'SALE_NOT_FOUND', request: mapSaleChangeRequest(decided) });
+  }
+  const sale = saleRows[0];
+  if (sale.refunded || sale.voided) {
+    const decided = await decide('rejected', 'Sale was already refunded or deleted');
+    return res.status(409).json({ error: 'That sale is already refunded or deleted', code: 'SALE_CLOSED', request: mapSaleChangeRequest(decided) });
+  }
+  const at = new Date().toISOString();
+  if (request.kind === 'void') {
+    await decide('approved', String(req.body?.note || '') || request.reason);
+    req.params.id = request.sale_id;
+    if (!req.body || typeof req.body !== 'object') req.body = {};
+    req.body.reason = req.body.reason || request.reason;
+    req.body.clientWriteId = `scr-${request.id}:void`;
+    return applySaleEvent(req, res, 'void');
+  }
+  // Edit: rebuild the lines from the approved quantities, reprice, move
+  // stock by the delta, and record everything as an auditable event.
+  const payload = parseJson(request.payload, {});
+  const oldItems = parseJson(sale.items, []);
+  const wanted = new Map((payload.lines || []).map((l) => [`${l.productId}::${l.variantId || ''}`, Number(l.qty) || 0]));
+  const newItems = [];
+  for (const item of oldItems) {
+    const key = `${item.productId}::${item.variantId || ''}`;
+    if (!wanted.has(key)) continue;
+    const qty = wanted.get(key);
+    if (!(qty > 0)) continue;
+    const gross = roundMoney(qty * Number(item.unitPrice));
+    const disc = Math.min(Number(item.lineDiscount) || 0, gross);
+    newItems.push({ ...item, qty, lineDiscount: disc, lineTotal: roundMoney(gross - disc) });
+  }
+  if (!newItems.length) return res.status(400).json({ error: 'An edit must keep at least one item', code: 'INVALID_LINES' });
+  const subtotal = roundMoney(newItems.reduce((sum, i) => sum + i.lineTotal, 0));
+  const discount = Math.min(Number(sale.discount) || 0, subtotal);
+  const total = roundMoney(subtotal - discount);
+  if (total <= 0) return res.status(400).json({ error: 'Edited total must be positive', code: 'INVALID_TOTAL' });
+  const deltaByProduct = new Map();
+  for (const item of oldItems) deltaByProduct.set(item.productId, (deltaByProduct.get(item.productId) || 0) + (Number(item.qty) || 0));
+  for (const item of newItems) deltaByProduct.set(item.productId, (deltaByProduct.get(item.productId) || 0) - (Number(item.qty) || 0));
+  const involvedIds = [...deltaByProduct.keys()];
+  const stockRows = involvedIds.length
+    ? await sql.query(`SELECT id, name, stockqty, isservice FROM products WHERE id IN (${involvedIds.map((_, i) => `$${i + 1}`).join(',')})`, involvedIds)
+    : [];
+  const stockMap = new Map(stockRows.map((r) => [r.id, r]));
+  const shortages = [];
+  for (const [productId, d] of deltaByProduct) {
+    if (d >= 0) continue;
+    const row = stockMap.get(productId);
+    if (row?.isservice) continue;
+    const available = Number(row?.stockqty) || 0;
+    if (!row || available < -d) {
+      shortages.push({ productId, name: row?.name || '', requestedQty: -d, availableQty: available, shortfall: Math.max(0, -d - available), reason: !row ? 'UNKNOWN_PRODUCT' : 'INSUFFICIENT_STOCK' });
+    }
+  }
+  if (shortages.length) return res.status(409).json({ error: 'Not enough stock for the edited quantities', code: 'INSUFFICIENT_STOCK', shortages });
+  for (const [productId, d] of deltaByProduct) {
+    if (d === 0 || stockMap.get(productId)?.isservice) continue;
+    const after = await sql`UPDATE products SET stockqty = stockqty + ${d}, updated_at=${at} WHERE id=${productId} RETURNING stockqty`;
+    await logStockMovement(sql, { productId, productName: stockMap.get(productId)?.name || productId, delta: d, type: 'sale_edit', qtyAfter: after[0] ? Number(after[0].stockqty) : 0, saleId: sale.id, note: `Approved edit of ${sale.ordernumber}` });
+  }
+  const eventId = `se-${randomUUID()}`;
+  const before = { subtotal: Number(sale.subtotal) || 0, total: Number(sale.total) || 0, discount: Number(sale.discount) || 0 };
+  await sql`UPDATE sales SET items=${JSON.stringify(newItems)}, subtotal=${subtotal}, total=${total}, discount=${discount || null} WHERE id=${sale.id}`;
+  await sql`INSERT INTO sale_events (id,sale_id,event_type,idempotency_key,actor_id,actor_name,actor_role,reason,stock_response,metadata,created_at)
+    VALUES (${eventId},${sale.id},'edit',${`scr-${request.id}:edit`},${actor.id},${actor.name},${actor.role},${request.reason},${JSON.stringify([...deltaByProduct.entries()].map(([productId, d]) => ({ productId, delta: d })))},${structuredMetadata({ requestId: req.id, actor, changeRequestId: request.id, before, after: { subtotal, total, discount } })},${at})
+    ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`;
+  const decided = await decide('approved', String(req.body?.note || ''));
+  const updatedSale = await sql`SELECT * FROM sales WHERE id=${sale.id}`;
+  await audit('sale_change.approved', `edit ${sale.ordernumber}: ${before.total} → ${total}`, actor, {
+    requestId: request.id, saleId: sale.id, before, after: { subtotal, total, discount },
+  }, req.id);
+  res.json({ request: mapSaleChangeRequest(decided), sale: updatedSale[0] ? mapSale(updatedSale[0]) : null });
+}));
+
+// POST /api/sale-change-requests/:id/reject — manager only.
+app.post('/api/sale-change-requests/:id/reject', requireManager, asHandler(async (req, res) => {
+  const actor = await requestActor(req);
+  const rows = await sql`SELECT * FROM sale_change_requests WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Change request not found', code: 'REQUEST_NOT_FOUND' });
+  if (rows[0].status !== 'pending') return res.json({ duplicate: true, request: mapSaleChangeRequest(rows[0]) });
+  const at = new Date().toISOString();
+  const note = text(req.body?.note, 500);
+  const updated = await sql`UPDATE sale_change_requests SET status='rejected', decided_by=${actor.id}, decided_by_name=${actor.name}, decided_at=${at}, decision_note=${note}, updated_at=${at} WHERE id=${rows[0].id} RETURNING *`;
+  await audit('sale_change.rejected', `${rows[0].kind} ${rows[0].sale_id}: ${note || 'no reason given'}`, actor, { requestId: rows[0].id, saleId: rows[0].sale_id }, req.id);
+  res.json(mapSaleChangeRequest(updated[0]));
 }));
 
 // === RECONCILE API — checks for sales/sync discrepancies ===
@@ -6668,6 +6854,7 @@ const ADMIN_EDITABLE_SETTINGS = new Set([
   'momoFeePct', 'ownerPhone', 'sheetsUrl', 'branches', 'eodCapital',
   'openTime', 'closeTime', 'closedDays', 'blindClose', 'closeNotifyOwner', 'cashierTabs',
   'ownerName', 'closeReminderLeadMin', 'closeReminderSound', 'closeSummaryAuto',
+  'receiptLogoUrl', 'communityGroupUrl',
   'largeText', 'features', 'showTailoring', 'showDesign', 'showBookings',
   'showRepairs', 'efris',
 ]);

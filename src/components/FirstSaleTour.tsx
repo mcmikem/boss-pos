@@ -297,15 +297,15 @@ export default function FirstSaleTour({ onDone, onNavigate, signals }: TourProps
       ],
     },
     {
-      id: 'reports', title: 'Reports',
+      id: 'reports', title: 'Sales',
       steps: [
         {
-          id: 'r-open', tab: 'analytics' as TourTab, tabLabel: 'Reports',
+          id: 'r-open', tab: 'analytics' as TourTab, tabLabel: 'Sales',
           target: () => null,
           title: 'Did we make money?',
-          body: 'Reports answers that plus who owes you. Open it.',
-          voice: 'Reports answers: did we make money? Open it.',
-          primaryLabel: 'Open Reports',
+          body: 'Sales shows what sold first, then profit plus who owes you. Open it.',
+          voice: 'Sales answers: did we make money? Open it.',
+          primaryLabel: 'Open Sales',
           primaryRun: 'navigate' as const,
           advance: 'tab' as const,
         },

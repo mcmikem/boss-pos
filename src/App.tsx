@@ -7,7 +7,7 @@ import {
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig, SaleSaveResult } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, closeSummaryApi, productionPlanApi, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, closeSummaryApi, productionPlanApi, uploadImage, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { checkoutDraftScopeKey, readCheckoutDraftSync, loadActiveCheckoutDraft, saveActiveCheckoutDraft, clearActiveCheckoutDraft, type CheckoutDraftScope } from './utils/checkoutDraft';
@@ -157,7 +157,7 @@ function removeDeletedExpense(id: string): void {
 // Settings keys that sync to the server. Serialized for the dirty-check that
 // stops background boot-pulls from overwriting unsaved local taps.
 const SETTINGS_SYNC_KEYS = new Set([
-  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone',
+  'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone','communityGroupUrl',
   'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features','ownerName','closeReminderLeadMin','closeReminderSound','closeSummaryAuto',
   'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs',
 ]);
@@ -1490,6 +1490,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const handleRevokeAll = async () => {
     if (!(await confirmDialog({ title: 'Log out everywhere', message: 'Log out on ALL devices (including this one)? You will need the PIN to log back in.', confirmLabel: 'Log out', danger: true }))) return;
@@ -1867,9 +1869,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       const it = sale.items.find(i => i.productId === p.id);
       return it && !p.isService ? { ...p, stockQty: p.stockQty + it.qty } : p;
     }));
-    try { await saleApi.remove(saleId); } catch {
-      // Offline-queued deletes return optimistic success (no throw), so this
-      // path is a REAL server rejection — restore + lift the tombstone.
+    try { await saleApi.remove(saleId); } catch (err) {
+      const code = (err as { code?: string })?.code;
+      const status = (err as { status?: number })?.status;
+      if (status === 404 || code === 'SALE_NOT_FOUND') {
+        // The server never saw this sale (it never synced). There is nothing
+        // to delete there — the local removal already stands, tombstone kept.
+        triggerToast(`${sale.orderNumber} deleted on this till — it was never on the server`, 'info');
+        return;
+      }
+      // Offline-queued deletes return optimistic success (no throw), so any
+      // other throw is a REAL server rejection — restore + lift the tombstone.
       try {
         const s = readDeletedSales();
         s.delete(saleId);
@@ -1880,7 +1890,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         const it = sale.items.find(i => i.productId === p.id);
         return it && !p.isService ? { ...p, stockQty: Math.max(0, p.stockQty - it.qty) } : p;
       }));
-      triggerToast('Failed to delete sale — order restored', 'error');
+      const reason = code === 'SESSION_CLOSED'
+        ? 'that day’s books are closed — reopen the day first'
+        : code === 'MANAGER_REQUIRED'
+          ? 'only a signed-in manager can delete — enter the manager staff PIN again'
+          : (err instanceof Error ? err.message.slice(0, 90) : 'not saved');
+      triggerToast(`Failed to delete sale — order restored (${reason})`, 'error');
       return;
     }
     triggerToast(`${sale.orderNumber} deleted`, 'info');
@@ -1904,7 +1919,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         return prod;
       });
     });
-    try { await saleApi.refund(saleId); } catch {
+    try { await saleApi.refund(saleId); } catch (err) {
+      const code = (err as { code?: string })?.code;
+      const status = (err as { status?: number })?.status;
+      if (status === 404 || code === 'SALE_NOT_FOUND') {
+        // Never reached the server, so there is nothing to refund there.
+        // Drop it locally (tombstoned) instead of keeping a phantom row.
+        addDeletedSale(saleId);
+        setSales(prev => prev.filter(s => s.id !== saleId));
+        triggerToast(`${saleToRefund.orderNumber} removed on this till — it was never on the server`, 'info');
+        return true;
+      }
       setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: false, refundedAt: undefined } : s));
       setProducts(prevProducts => {
         return prevProducts.map(prod => {
@@ -1915,7 +1940,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           return prod;
         });
       });
-      triggerToast('Failed to refund sale — stock unchanged', 'error');
+      const reason = code === 'SESSION_CLOSED'
+        ? 'that day’s books are closed — reopen the day first'
+        : code === 'MANAGER_REQUIRED'
+          ? 'only a signed-in manager can refund — enter the manager staff PIN again'
+          : (err instanceof Error ? err.message.slice(0, 90) : 'not saved');
+      triggerToast(`Failed to refund sale — stock unchanged (${reason})`, 'error');
       return false;
     }
     triggerToast(`${saleToRefund.orderNumber} refunded. Stock restored.`, 'info');
@@ -2879,6 +2909,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onReturnItems={handleReturnItems}
             onVoidSale={handleVoidSale}
             settings={settings}
+            isManager={isManager}
+            staffName={activeStaff?.name || staffName}
+            onSalesChanged={() => { fetchAllData().catch(() => {}); }}
           />
           </Suspense>
           </ErrorBoundary>
@@ -3132,7 +3165,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           form footer can ever hide behind it. Page content has no z-index,
           so the nav still floats above scrolling content.
           Simple mode (#25): beginners get Sell / Money / More. Stock,
-          Spending, Reports and Close day live under Money/More until the
+          Spending, Sales and Close day live under Money/More until the
           20-sale graduation prompt. */}
       {isSimpleNav ? (
       <nav id="bottom-nav" aria-label="Simple menu" className="fixed bottom-0 inset-x-0 w-full z-40 flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] bg-[#141414] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
@@ -3183,9 +3216,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'spend')}</span>
         </button>
         {tabOpen('analytics') && (
-        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'reports')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "analytics" ? "page" : undefined} id="analytics-nav-btn">
-          <TrendingUp className="w-5 h-5 mb-1" />
-          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'reports')}</span>
+        <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); }} aria-label={t(settings.language, 'salesTab')} className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full py-1 select-none transition-all active:scale-95 ${activeTab === 'analytics' ? 'text-gold-brand font-black' : 'text-zinc-500 hover:text-zinc-300'}`} aria-current={activeTab === "analytics" ? "page" : undefined} id="analytics-nav-btn">
+          <ReceiptText className="w-5 h-5 mb-1" />
+          <span className="text-xs font-bold uppercase tracking-wider">{t(settings.language, 'salesTab')}</span>
         </button>
         )}
         {/* Close day follows the manager's cashier doors — blind hides totals. */}
@@ -3204,7 +3237,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <div className="flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-xs font-black text-white uppercase tracking-widest">You've made 20 sales — ready for the full menu?</p>
-              <p className="text-[11px] text-zinc-400 font-bold mt-0.5 leading-snug">Stock, Spending, Reports and Close day get their own tabs.</p>
+              <p className="text-[11px] text-zinc-400 font-bold mt-0.5 leading-snug">Stock, Spending, Sales and Close day get their own tabs.</p>
               <div className="flex gap-2 mt-2.5">
                 <button onClick={() => setNav('full')}
                   className="h-10 px-5 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer">
@@ -3258,7 +3291,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               <button onClick={() => { setActiveTab('analytics'); setShowSuppliers(false); setShowMore(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-2xl border border-white/5 bg-[#0A0A0A] hover:border-gold-brand/40 text-left active:scale-[0.98] transition-all cursor-pointer min-h-[60px]">
                 <TrendingUp className="w-5 h-5 text-gold-brand shrink-0" />
-                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'reports')}</span>
+                <span><span className="block text-sm font-bold text-white">{t(settings.language, 'salesTab')}</span>
                 <span className="block text-[11px] text-zinc-500 font-bold">Today's summary and past sales</span></span>
               </button>
               )}
@@ -3410,6 +3443,40 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <input type="text" value={settings.receiptFooter || ''} onChange={(e) => setSettings(prev => ({ ...prev, receiptFooter: e.target.value.slice(0, 120) || undefined }))}
                   title="Printed under every receipt (slogan, returns policy)"
                   className="mt-2 w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none" placeholder="Receipt footer, e.g. No returns after 3 days" />
+                <div className="mt-2 flex items-center gap-2">
+                  {settings.receiptLogoUrl ? (
+                    <img src={settings.receiptLogoUrl} alt="Shop logo"
+                      className="h-12 w-12 rounded-xl object-contain bg-white border border-white/10 shrink-0"
+                      onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }} />
+                  ) : null}
+                  <button onClick={() => logoInputRef.current?.click()} disabled={uploadingLogo}
+                    className="flex-1 h-12 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-300 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50">
+                    {uploadingLogo ? 'Uploading…' : settings.receiptLogoUrl ? 'Change logo' : 'Add receipt logo'}
+                  </button>
+                  {settings.receiptLogoUrl ? (
+                    <button onClick={() => setSettings(prev => ({ ...prev, receiptLogoUrl: undefined }))}
+                      className="h-12 px-4 bg-[#0A0A0A] border border-white/5 hover:border-rose-600/50 text-zinc-400 hover:text-rose-300 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer">
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+                <input ref={logoInputRef} type="file" accept="image/*" className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    setUploadingLogo(true);
+                    try {
+                      const url = await uploadImage(file);
+                      setSettings(prev => ({ ...prev, receiptLogoUrl: url }));
+                      triggerToast('Logo added — it prints on every receipt', 'success');
+                    } catch {
+                      triggerToast('Could not upload the logo — try a smaller photo', 'error');
+                    } finally {
+                      setUploadingLogo(false);
+                    }
+                  }} />
+                <p className="text-[10px] text-zinc-600">Logo prints on receipts and the PNG share. Square photos work best.</p>
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop Type <SettingHelp label="Shop Type" text="Tells the till what you sell. Eatery unlocks recipes and morning production; tailoring, design, bookings and repairs add their order screens." /></label>
@@ -3442,13 +3509,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 )}
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Till language <SettingHelp label="Till language" text="Switches Sell, Expenses, Money, Reports and Close day between English and Luganda. Settings always stay in English." /></label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Till language <SettingHelp label="Till language" text="Switches Sell, Expenses, Money, Sales and Close day between English and Luganda. Settings always stay in English." /></label>
                 <select value={settings.language || 'english'} onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value as StoreSettings['language'] }))}
                   className="w-full h-12 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none">
                   <option value="english">English</option>
                   <option value="luganda">Luganda (sell screen)</option>
                 </select>
-                <p className="text-[10px] text-zinc-600">Luganda covers Sell, Expenses, Money, Reports and Close day. Settings stay in English.</p>
+                <p className="text-[10px] text-zinc-600">Luganda covers Sell, Expenses, Money, Sales and Close day. Settings stay in English.</p>
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop hours <SettingHelp label="Shop hours" text="Opening and closing times plus days off. End-of-day money nudges wait until after close — no more mid-day alarms for money that simply hasn't been assigned yet. Blank = nudge anytime (old behaviour)." /></label>
@@ -3923,13 +3990,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </button>
                   <p className="text-[10px] text-zinc-600">Totals, cash vs MoMo, expenses, what is left — one message, no account needed.</p>
                 </div>
+                <div className="border border-white/5 rounded-xl p-3 space-y-2 bg-[#0A0A0A]">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Customer community</label>
+                  <input type="url" inputMode="url" value={settings.communityGroupUrl || ''} placeholder="Shop WhatsApp group invite link"
+                    onChange={(e) => setSettings(prev => ({ ...prev, communityGroupUrl: e.target.value.trim().slice(0, 300) || undefined }))}
+                    className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+                  <p className="text-[10px] text-zinc-600">Paste the group's invite link once — regulars get a one-tap join message in their own chat.</p>
+                </div>
               </div>
               </SettingsSection>
               <SettingsSection id="set-staff-doors" icon={LayoutGrid} title="Cashier doors" hint="What cashiers may open — Sell and Spend always on"
                 open={settingsSection === 'staff-doors'} onToggle={() => toggleSettingsSection('staff-doors')}>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier can open <SettingHelp label="Cashier doors" text="Sell and Spend are always on. Tick what else cashiers may open: Close day for the evening close-out (blind mode hides every total), Stock and Reports only if you trust them with it." /></label>
-                {([['registers', 'Close day'], ['inventory', 'Stock'], ['analytics', 'Reports']] as const).map(([tab, label]) => {
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier can open <SettingHelp label="Cashier doors" text="Sell and Spend are always on. Tick what else cashiers may open: Close day for the evening close-out (blind mode hides every total), Stock and Sales only if you trust them with it. Cashiers need the Sales door to spot mistakes and ask for fixes." /></label>
+                {([['registers', 'Close day'], ['inventory', 'Stock'], ['analytics', 'Sales']] as const).map(([tab, label]) => {
                   const doors = settings.cashierTabs ?? ['registers'];
                   const on = doors.includes(tab);
                   return (

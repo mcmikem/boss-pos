@@ -1479,6 +1479,38 @@ export const momoTransferApi = {
   remove: (id: string) => api<{ success: boolean }>(`/api/momo-transfers/${id}`, { method: 'DELETE' }),
 };
 
+export interface SaleChangeRequest {
+  id: string;
+  saleId: string;
+  kind: 'void' | 'edit';
+  payload: { lines?: Array<{ productId: string; variantId?: string | null; qty: number }> };
+  reason: string;
+  requestedBy?: string;
+  requestedByName: string;
+  status: 'pending' | 'approved' | 'rejected';
+  decidedBy?: string;
+  decidedByName: string;
+  decidedAt?: string;
+  decisionNote: string;
+  branch: string;
+  createdAt: string;
+  sale?: Sale | null;
+  duplicate?: boolean;
+}
+
+export const saleChangeApi = {
+  list: () => api<SaleChangeRequest[]>('/api/sale-change-requests', { fresh: true, silentManager: true }),
+  create: (body: {
+    saleId: string;
+    kind: 'void' | 'edit';
+    reason: string;
+    lines?: Array<{ productId: string; variantId?: string | null; qty: number }>;
+    clientWriteId?: string;
+  }) => api<SaleChangeRequest & { duplicate?: boolean }>('/api/sale-change-requests', { method: 'POST', body: JSON.stringify(withWriteId(body)) }),
+  approve: (id: string, note?: string) => api<{ request: SaleChangeRequest; sale: Sale | null; duplicate?: boolean }>(`/api/sale-change-requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ note: note || '' }) }),
+  reject: (id: string, note?: string) => api<SaleChangeRequest>(`/api/sale-change-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note: note || '' }) }),
+};
+
 export const closeSessionApi = {
   current: () => api<{ id: string; businessDate: string; status: string } | null>('/api/close-sessions/current', { fresh: true }),
   reopen: (id: string, reason: string) => api<unknown>(`/api/close-sessions/${id}/reopen`, { method: 'POST', body: JSON.stringify({ reason }) }),

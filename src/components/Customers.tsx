@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Users, Plus, X, Star, Bell, BellOff, MessageCircle, Trash2, Check } from 'lucide-react';
+import { Users, Plus, X, Star, Bell, BellOff, MessageCircle, Trash2, Check, UserPlus, Copy } from 'lucide-react';
 import type { Sale, Product } from '../types';
 import { statsFor, customerWhatsAppUrl, type CustomerProfile } from '../utils/customers';
 
@@ -12,12 +12,15 @@ interface CustomersProps {
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onClose: () => void;
+  // Shop WhatsApp group invite link (Settings). With it, each regular gets a
+  // one-tap join message in their own chat — the seed of the community.
+  groupInviteUrl?: string;
 }
 
 // Regulars directory: frequent buyers with contact, standing (VIP/wholesale),
 // a standing till discount, and a new-arrival subscription. Stats (visits,
 // spent) always come live from sales — the profile stores the rest.
-export default function Customers({ sales, products, customers, onSaveCustomer, onDeleteCustomer, formatCurrency, triggerToast, onClose }: CustomersProps) {
+export default function Customers({ sales, products, customers, onSaveCustomer, onDeleteCustomer, formatCurrency, triggerToast, onClose, groupInviteUrl = '' }: CustomersProps) {
   const list = customers;
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<CustomerProfile | null>(null);
@@ -55,6 +58,33 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
     else triggerToast('Could not open WhatsApp', 'error');
   };
 
+  // One tap sends the regular the shop's group invite inside their own chat.
+  // Joining stays their choice — the till never adds anyone anywhere itself.
+  const inviteToGroup = (c: CustomerProfile) => {
+    if (!groupInviteUrl) { triggerToast('Set the group link in Settings first', 'error'); return; }
+    if (!c.phone) { triggerToast('Add a phone number first', 'error'); return; }
+    const url = customerWhatsAppUrl(c.phone,
+      `Hello ${c.name}! Join our shoppers' group for discounts and new stock: ${groupInviteUrl}`);
+    if (!url) { triggerToast('Phone number looks wrong — check it', 'error'); return; }
+    const w = window.open(url, '_blank', 'noopener');
+    if (w) triggerToast(`Group invite sent to ${c.name} — they tap join themselves`, 'success');
+    else triggerToast('Could not open WhatsApp', 'error');
+  };
+
+  // Broadcast lists live outside WhatsApp (it has no bulk-send): copy every
+  // subscribed number in one tap for the shop's broadcast list.
+  const copySubscribedNumbers = async () => {
+    if (subscribed.length === 0) { triggerToast('No subscribed numbers yet', 'info'); return; }
+    const text = subscribed.map(c => `${c.name}: ${c.phone}`).join('\n');
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else throw new Error('no clipboard');
+      triggerToast(`${subscribed.length} numbers copied for broadcast`, 'success');
+    } catch {
+      triggerToast('Copy not available on this device', 'error');
+    }
+  };
+
   const removeProfile = (id: string) => {
     onDeleteCustomer(id);
     setEditing(null);
@@ -68,6 +98,12 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-black text-white uppercase tracking-wider truncate">Regulars ({list.length})</h3>
           <p className="text-[10px] text-zinc-500 font-bold uppercase">{subscribed.length} subscribed to new-stock alerts</p>
+          {subscribed.length > 0 && (
+            <button onClick={copySubscribedNumbers} title="Copy all subscribed numbers for a broadcast list"
+              className="mt-1 flex items-center gap-1 text-[10px] text-cyan-400 font-black uppercase tracking-wider cursor-pointer">
+              <Copy className="w-3 h-3" /> Copy numbers
+            </button>
+          )}
         </div>
         <button onClick={() => { setEditing({ id: `c-${Date.now()}`, name: '', createdAt: new Date().toISOString() }); setIsNew(true); }}
           className="h-10 px-4 bg-gold-brand text-black font-black text-xs rounded-xl uppercase tracking-wider cursor-pointer shrink-0 flex items-center gap-1">
@@ -108,6 +144,12 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
                 {(c.discountPct || 0) > 0 && (
                   <span className="text-[10px] font-black text-purple-300 bg-purple-950/40 border border-purple-800/40 rounded-lg px-2 py-1">−{c.discountPct}%</span>
                 )}
+                {groupInviteUrl && c.phone ? (
+                  <button onClick={() => inviteToGroup(c)} title={`Invite ${c.name} to the shoppers' group`}
+                    className="w-9 h-9 rounded-xl bg-cyan-950/40 border border-cyan-800/40 text-cyan-300 flex items-center justify-center cursor-pointer" aria-label={`Invite ${c.name} to the shoppers' group`}>
+                    <UserPlus className="w-4 h-4" />
+                  </button>
+                ) : null}
                 {c.subscribed ? (
                   <button onClick={() => announce(c)} title={`Tell ${c.name} about new stock`}
                     className="w-9 h-9 rounded-xl bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 flex items-center justify-center cursor-pointer" aria-label={`Tell ${c.name} about new stock`}>

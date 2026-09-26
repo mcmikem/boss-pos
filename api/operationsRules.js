@@ -225,6 +225,46 @@ export function validateProductionPlan(input = {}, productRows = []) {
   };
 }
 
+export function validateSaleChangeRequest(input = {}, sale = null) {
+  const kind = String(input.kind || '').toLowerCase();
+  if (kind !== 'void' && kind !== 'edit') return { error: 'Change kind must be void or edit', code: 'INVALID_KIND' };
+  const reason = requiredText(input.reason, 'reason', 500);
+  if (reason.error) return { error: 'Say why — the manager needs a reason', code: 'REASON_REQUIRED' };
+  if (!sale) return { error: 'Sale not found', code: 'SALE_NOT_FOUND' };
+  if (sale.refunded || sale.voided) return { error: 'That sale is already refunded or deleted', code: 'SALE_CLOSED' };
+  let lines = null;
+  if (kind === 'edit') {
+    const rawLines = Array.isArray(input.lines) ? input.lines : [];
+    if (rawLines.length < 1 || rawLines.length > 500) return { error: 'An edit needs 1 to 500 lines', code: 'INVALID_LINES' };
+    const original = new Map();
+    for (const item of sale.items || []) {
+      const key = `${item.productId || ''}::${item.variantId || ''}`;
+      original.set(key, item);
+    }
+    lines = [];
+    const seen = new Set();
+    for (const raw of rawLines) {
+      const key = `${String(raw?.productId || '').trim()}::${String(raw?.variantId || '').trim()}`;
+      if (!original.has(key) || seen.has(key)) return { error: 'Edits can only change quantities on existing lines', code: 'INVALID_LINES' };
+      const qty = quantity(raw?.qty, { allowZero: true });
+      if (qty.error) return { ...qty, productId: String(raw?.productId || '') };
+      seen.add(key);
+      lines.push({ productId: String(raw?.productId || '').trim(), variantId: String(raw?.variantId || '').trim() || null, qty: qty.value });
+    }
+    // Untouched original lines keep their quantities.
+    for (const [key, item] of original) {
+      if (!seen.has(key)) lines.push({ productId: String(item.productId || ''), variantId: item.variantId || null, qty: Number(item.qty) || 0 });
+    }
+    if (!lines.some((l) => l.qty > 0)) return { error: 'An edit must keep at least one item', code: 'INVALID_LINES' };
+  }
+  return {
+    kind,
+    reason: reason.value,
+    lines,
+    idempotencyKey: String(input.clientWriteId || input.idempotencyKey || '').trim().slice(0, 200) || null,
+  };
+}
+
 export function validateExpense(input = {}, allowedCategories = []) {
   const description = requiredText(input.description, 'description', 300);
   if (description.error) return description;

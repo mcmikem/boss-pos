@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Users, PackageX, Plus, Trash2, X,
   Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText, ChevronDown, ChefHat
@@ -634,6 +634,32 @@ export default function CategoryRegister({
     countedCash: countedSelected,
   }), [selected, todayKey, eodCapital, capForSelected, collectedToday, drawerExpensesToday, floatOutToday, cashOutToday, ownerOutToday, bankOutToday, tenderToday, countedSelected]);
 
+  // A close that filed locally while offline leaves no server summary. The
+  // card below promises "will send on the next sync" — this effect is what
+  // makes that true: revisiting a closed day with no filed summary retries
+  // the send once per visit. Server idempotency keeps it to one record.
+  const summaryRetried = useRef('');
+  useEffect(() => {
+    if (!dayClosedAt || summarySentId) return;
+    if (!onCloseDayFinished || closeSummaryAuto === false || blind) return;
+    if (summaryRetried.current === summarySentKey) return;
+    summaryRetried.current = summarySentKey;
+    void onCloseDayFinished({
+      businessDate: todayStr(),
+      branch: selected,
+      cash: smartCash,
+      closedByName: staffName || '',
+    }).then(sent => {
+      if (!sent) return;
+      try {
+        localStorage.setItem(summarySentKey, sent.id);
+        localStorage.setItem(`${summarySentKey}:body`, sent.body);
+      } catch {}
+      setSummarySentId(sent.id);
+      setSentSummaryBody(sent.body);
+      triggerToast('Close summary sent to the owner', 'success');
+    }).catch(() => {});
+  }, [dayClosedAt, summarySentId, summarySentKey, onCloseDayFinished, closeSummaryAuto, blind, selected, smartCash, staffName]);
   // Shop-wide reconciliation on ONE basis, so the headline figures add up:
   // expectedInDrawer = assigned + unassigned, always.
   const shopCash = useMemo(() => {

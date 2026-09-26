@@ -8,7 +8,7 @@
 export type SellLang = 'english' | 'luganda' | 'swahili';
 
 export type SellKey =
-  | 'sell' | 'stock' | 'spend' | 'reports' | 'closeDay'
+  | 'sell' | 'stock' | 'spend' | 'reports' | 'salesTab' | 'closeDay'
   | 'searchItems' | 'searchAll' | 'all'
   | 'payment' | 'cash' | 'credit' | 'customerName' | 'customerNameEx'
   | 'discount' | 'roundTo100' | 'clear'
@@ -33,6 +33,7 @@ const EN: Record<SellKey, string> = {
   stock: 'Stock',
   spend: 'Spend',
   reports: 'Reports',
+  salesTab: 'Sales',
   closeDay: 'Close',
   searchItems: 'Search items...',
   searchAll: 'Search products by name, category, or barcode...',
@@ -129,6 +130,7 @@ const LU: Record<SellKey, string> = {
   stock: 'Sitoko',
   spend: 'Saasaanya',
   reports: 'Lipooti',
+  salesTab: 'Sales',
   closeDay: 'Ggalawo',
   searchItems: 'Noonya ebintu...',
   searchAll: 'Noonya amannya, ekika, oba baakoodi...',
