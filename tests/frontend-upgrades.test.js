@@ -186,14 +186,18 @@ test('cash money-out never demands a mobile-money reference', () => {
 
 test('there is no phone-only PIN pretending to be a manager', () => {
   const app = read('src/App.tsx');
+  const gate = read('src/components/PinGate.tsx');
   // Manager authority is the signed-in staff account, checked by the server.
   // A local 4-digit PIN cannot authorise anything, so it is never collected.
   const requirePin = app.match(/const requirePin = [\s\S]*?\n  \};/)[0];
   assert.equal(/boss_pos_manager_pin/.test(requirePin), false);
   assert.equal(/promptDialog\(\{ title: 'Manager PIN'/.test(app), false);
   assert.match(requirePin, /Only a manager can do this — sign in with a manager staff PIN/);
-  // The one place the old key is still mentioned can only remove it.
-  assert.match(app, /Remove old phone-only PIN/);
+  // The old key is no longer offered anywhere; boot drops the leftover value so
+  // a dead secret does not sit on a device looking like it still grants rights.
+  assert.equal(/localStorage\.setItem\('boss_pos_manager_pin'/.test(app), false);
+  assert.match(app, /localStorage\.removeItem\('boss_pos_manager_pin'\)/);
+  assert.equal(/boss_pos_manager_pin/.test(gate), false);
   // The top bar says who this phone is signed in as, on phones too.
   assert.match(app, /\{isManager \? 'MGR' : activeStaff \? 'CSH' : 'TILL'\}/);
   assert.match(app, /canManageMoneyOut=\{isManager\}/);
@@ -247,4 +251,40 @@ test('one PIN per person: the lock screen asks whose PIN it is', () => {
   // Both doors share one sign-in, so a handover behaves the same either way.
   assert.match(app, /const signInAsSeller = /);
   assert.match(app, /const handleVerifyStaff = [\s\S]{0,400}signInAsSeller\(/);
+});
+
+test('the rescue PIN never leaves a manager credential behind', () => {
+  const app = read('src/App.tsx');
+  // A till unlocked with the shop PIN says TILL on the chip, so the wire must
+  // not keep carrying the previous seller's manager token.
+  const tillOnly = app.match(/const unlockAsTillOnly = \(\)[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(tillOnly, /setStaffToken\(null\)/);
+  assert.match(tillOnly, /setActiveStaffId\(null\)/);
+  assert.match(tillOnly, /localStorage\.removeItem\('boss_pos_staff_id'\)/);
+  // Both rescue paths (offline fast path and server check) go through it.
+  const unlock = app.match(/const handleUnlock = async \(pin: string\)[\s\S]*?\n  \};/)?.[0] || '';
+  assert.equal((unlock.match(/unlockAsTillOnly\(\)/g) || []).length, 2);
+});
+
+test('no screen promises a PIN that cannot approve anything', () => {
+  const app = read('src/App.tsx');
+  const sales = read('src/components/Sales.tsx');
+  const landing = read('landing/index.html');
+  const terms = read('landing/terms.html');
+  // The device-only manager PIN is gone, so no screen may still ask for one.
+  assert.equal(/title: 'Manager PIN'/.test(app), false);
+  assert.doesNotMatch(sales, /big ones ask manager PIN/);
+  assert.doesNotMatch(landing, /Manager PIN for refunds/);
+  assert.doesNotMatch(terms, /your manager PIN can refund/);
+  // And the PIN model is described the same way everywhere: one per person.
+  assert.match(landing, /One PIN per person/);
+  assert.match(app, /their own staff PIN/);
+  assert.match(app, /Rescue PIN \(backup door\)/);
+});
+
+test('support details carry the lock history QA promises', () => {
+  const app = read('src/App.tsx');
+  const summary = app.match(/const summary = supportSummary\(\{[\s\S]*?\}\);/)?.[0] || '';
+  assert.match(summary, /lockHistory: lockLog/);
+  assert.match(summary, /signedInAs: activeStaff/);
 });

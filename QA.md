@@ -47,6 +47,9 @@ Yawe's). A pass means the exact expected result below, not "looks fine".
 - [ ] Turn down → cashier sees Turned down; sale untouched.
 
 ## Lock & roles
+- [ ] Seller's own staff PIN unlocks the till AND signs them in (one PIN, no second prompt)
+- [ ] Rescue (shop) PIN unlocks the device but shows TILL — no manager rights, no leftover manager token
+- [ ] A PIN shared by two people asks "Who is this?" and issues no token until answered
 - [ ] Wrong PIN 5× → 30s lockout, then works again.
 - [ ] Idle past the lock delay → PIN screen, no data lost, queued work syncs after unlock.
 - [ ] Manager-only action as cashier → clear "sign in as manager" prompt.
@@ -57,6 +60,7 @@ Yawe's). A pass means the exact expected result below, not "looks fine".
 - [ ] Reconnect → "Back online — N sales sent", sale lands in Sales + money.
 
 ## Failure to report back
-Exact toast text + which phone + build number + what you tapped. The lock
-screen shows the last lock cause; Settings → Support → Copy support details
-attaches it to the report.
+Exact toast text + which phone + build number + what you tapped. Settings →
+Support → Copy support details attaches the server build, the last five lock
+causes and who is signed in, so paste that with the report. The lock screen
+itself shows only the most recent cause.

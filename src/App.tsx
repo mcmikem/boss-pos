@@ -729,6 +729,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       let serverHasPin: boolean | null = null;
       let shopName = '';
 
+      // The phone-only "manager PIN" is gone from the code: it could never
+      // authorise anything, because the server authorises on the signed-in
+      // staff account. Drop the leftover value on sight rather than leaving a
+      // secret on someone's device that they still think grants rights.
+      try { localStorage.removeItem('boss_pos_manager_pin'); } catch {}
+
       const cachedSettings = readCached<StoreSettings>('/api/settings');
       if (cachedSettings?.shopName) setSettings(prev => ({ ...prev, shopName: cachedSettings.shopName }));
 
@@ -1439,6 +1445,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // says who is selling, so nobody types two PINs in a shift. The shop's
   // till PIN stays as the rescue door (new phone, staff sign-in broken, or a
   // shop with no staff accounts) — it opens the device but grants nothing.
+  // The rescue PIN opens the device but says nothing about WHO opened it. The
+  // staff CREDENTIAL goes too, not just the name: the wire must not keep
+  // carrying a manager token while the chip says TILL. The till token minted by
+  // the rescue unlock is what remains, and the app then asks who is selling.
+  const unlockAsTillOnly = () => {
+    setActiveStaffId(null);
+    setStaffToken(null);
+    try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
+    setStaffName('');
+  };
+
   // The one place a person becomes signed in: their PIN opened the device, it
   // says who they are, and the drawer is counted if the shift changed hands.
   // Both the lock screen and the seller switcher come through here, so a
@@ -1504,6 +1521,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (local && !local.startsWith('fb_')) {
       try {
         if (await verifyPinAgainstHash(pin, local)) {
+          unlockAsTillOnly();
           markUnlocked();
           setAuthState('ready');
           fetchAllData().catch(() => {});
@@ -1521,6 +1539,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try {
       const data = await authVerify(pin, 8000);
       localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+      unlockAsTillOnly();
       markUnlocked();
       setAuthState('ready');
       fetchAllData().catch(() => {});
@@ -4211,14 +4230,6 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   <p className="text-[10px] text-zinc-500 leading-snug">
                     Everyone signs in with <span className="text-white font-bold">their own staff PIN</span> &mdash; it opens the till and signs them in together. The rescue PIN above is the backup for a new phone or a broken sign-in: it opens the device but cannot move money or change prices.
                   </p>
-                  {localStorage.getItem('boss_pos_manager_pin') && (
-                    <button onClick={() => {
-                      try { localStorage.removeItem('boss_pos_manager_pin'); } catch {}
-                      triggerToast('Old phone-only PIN removed — use a manager staff PIN', 'info');
-                    }} className="h-9 px-3 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-zinc-700 cursor-pointer">
-                      Remove old phone-only PIN
-                    </button>
-                  )}
                 </div>
                 <button onClick={handleRevokeAll}
                   className="w-full h-10 bg-rose-950/20 border border-rose-800/30 text-rose-400 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-rose-950/40 transition-all cursor-pointer">
@@ -4574,6 +4585,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     serverBuild: supportReport?.build,
                     serverStatus: supportReport?.status,
                     traceId: supportReport?.traceId || clientErrors.find(r => r.traceId)?.traceId,
+                    // The lock history is the first thing anyone diagnosing a
+                    // "it keeps asking for my PIN" report needs, and QA.md
+                    // promised it was attached. Now it is.
+                    lockHistory: lockLog.slice(0, 5).map(l => l.reason).join(' | ') || 'none',
+                    signedInAs: activeStaff ? `${activeStaff.name} (${isManager ? 'manager' : 'cashier'})` : 'till only',
                   });
                   try {
                     if (!navigator.clipboard?.writeText) throw new Error('no clipboard');

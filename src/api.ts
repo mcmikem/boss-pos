@@ -52,12 +52,13 @@ const BASE = '';
 const CACHE_PREFIX = 'boss_api_cache_';
 const CACHE_INDEX_KEY = 'boss_api_cache_keys';
 const TOKEN_KEY = 'boss_pos_token';
-// Staff identity (name + ROLE) lives in its own slot. The till PIN and the
-// staff PIN are different credentials unlocking different things: the till
-// PIN opens the device, the staff PIN says WHO is selling and grants a role.
-// Sharing one slot meant the till unlock silently downgraded a logged-in
-// manager to a plain till token, so every manager check started failing on a
-// device that was obviously signed in as the manager.
+// Staff identity (name + ROLE) lives in its own slot. Normally there is ONE PIN
+// per person: their staff PIN opens the device and says who they are in the
+// same breath. The shop's rescue PIN is the exception — it opens the device
+// with a till token and clears this slot, because a till that says "TILL" must
+// not keep a manager credential on the wire. Sharing one slot meant a till
+// unlock silently downgraded a logged-in manager to a plain till token, so
+// every manager check started failing on a device signed in as the manager.
 const STAFF_TOKEN_KEY = 'boss_pos_staff_token';
 const OUTBOX_KEY = 'boss_pos_outbox';
 

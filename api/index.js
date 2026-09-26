@@ -6606,7 +6606,7 @@ function mapStaff(r) {
 
 // === STAFF (per-person logins with roles) ===
 // Optional layer: with zero staff rows the till behaves exactly as before
-// (single till PIN + manager PIN). Once staff exist, destructive actions and
+// (one shop PIN, and the till is the owner). Once staff exist, destructive actions and
 // tabs are gated by the active seller's role (enforced client-side; the PIN
 // check itself is server-side with the same hashing + lockout as the till PIN).
 app.get('/api/staff', asHandler(async (req, res) => {
