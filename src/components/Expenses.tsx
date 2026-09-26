@@ -6,6 +6,7 @@ import QuickExpenseModal from './QuickExpenseModal';
 import ExpenseDetailModal from './ExpenseDetailModal';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
 import { pushNotice } from '../utils/notifications';
+import { MoneyHero, MoneyStat } from './Design';
 
 interface ExpensesProps {
   expenses: Expense[];
@@ -188,22 +189,26 @@ export default function Expenses({
       </div>
 
       {/* Summary */}
-      <section className="grid grid-cols-2 gap-3">
+      <section className="grid grid-cols-2 gap-3" aria-label="Spending at a glance">
         <div className="boss-card p-4 border-l-4 border-l-rose-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'totalSpent')}</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-rose-400 font-display">{formatCurrency(totalSpent)}</span>
-          </div>
+          <MoneyHero
+            label={t(lang, 'totalSpent')}
+            value={formatCurrency(totalSpent)}
+            sub={`${filteredExpenses.length} ${filteredExpenses.length === 1 ? 'entry' : 'entries'}`}
+            tone="rose"
+            title={formatCurrency(totalSpent)}
+          />
         </div>
         <div className="boss-card p-4 border-l-4 border-l-amber-500 flex flex-col justify-between">
-          <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t(lang, 'topExpense')}</p>
           {topCategory ? (
-            <>
-              <p className="text-sm font-black text-white font-display truncate mt-2">{topCategory.category}</p>
-              <p className="text-[10px] text-zinc-500 font-bold uppercase">{formatCurrency(topCategory.total)} • {topCategory.count}×</p>
-            </>
+            <MoneyStat
+              label={t(lang, 'topExpense')}
+              value={topCategory.category}
+              sub={`${formatCurrency(topCategory.total)} • ${topCategory.count}×`}
+              tone="white"
+            />
           ) : (
-            <p className="text-xs text-zinc-500 font-bold uppercase mt-2">—</p>
+            <MoneyStat label={t(lang, 'topExpense')} value="—" />
           )}
         </div>
       </section>

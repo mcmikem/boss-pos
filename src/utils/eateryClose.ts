@@ -1,6 +1,7 @@
 import type { Expense, Product, Sale } from '../types';
 import { localDayKey } from './dates';
 import { effectiveCost } from './recipe';
+import { isLiveSale } from './saleStatus';
 
 export interface EateryDishLine {
   productId: string;
@@ -51,7 +52,7 @@ export function eateryDayClose(
   expenses: Expense[],
 ): EateryDayClose {
   const byId = new Map(products.map(p => [p.id, p]));
-  const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === day);
+  const daySales = sales.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === day);
 
   let revenue = 0;
   let foodCost = 0;

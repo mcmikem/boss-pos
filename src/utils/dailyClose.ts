@@ -1,5 +1,6 @@
 import { Sale, Expense, Product, CreditPayment } from '../types';
 import { localDayKey, todayLocalKey } from './dates';
+import { isLiveSale } from './saleStatus';
 
 export interface CloseTotals {
   day: string;
@@ -11,6 +12,7 @@ export interface CloseTotals {
   airtel: number;
   credit: number;
   refunds: number;
+  voids: number;
   expenses: number;
   net: number;
   // Debt collected in cash today is not revenue (it was counted at sale) but
@@ -30,8 +32,9 @@ export function closeTotals(
   creditEats: { total: number; paidAmount: number; paid: boolean }[] = [],
 ): CloseTotals {
   const day = dateStr || todayLocalKey();
-  const daySales = sales.filter(s => localDayKey(s.timestamp) === day && !s.refunded);
+  const daySales = sales.filter(s => localDayKey(s.timestamp) === day && isLiveSale(s));
   const refunded = sales.filter(s => localDayKey(s.timestamp) === day && s.refunded).length;
+  const voided = sales.filter(s => localDayKey(s.timestamp) === day && s.voided).length;
   const dayExpenses = expenses.filter(e => localDayKey(e.timestamp) === day);
   const dayCollections = creditPayments.filter(p => localDayKey(p.createdAt) === day);
   const revenue = daySales.reduce((a, s) => a + s.total, 0);
@@ -48,12 +51,12 @@ export function closeTotals(
   const paidBySale: Record<string, number> = {};
   for (const p of creditPayments) paidBySale[p.saleId] = (paidBySale[p.saleId] || 0) + (p.amount || 0);
   const saleDebt = sales
-    .filter(s => !s.refunded && s.paymentMethod === 'Credit / Book' && s.customerName)
+    .filter(s => isLiveSale(s) && s.paymentMethod === 'Credit / Book' && s.customerName)
     .reduce((a, s) => a + Math.max(0, s.total - (paidBySale[s.id] || 0)), 0);
   const bookDebt = creditEats
     .filter(e => !e.paid)
     .reduce((a, e) => a + Math.max(0, e.total - (e.paidAmount || 0)), 0);
-  return { day, saleCount: daySales.length, revenue, cash, momo, mtn, airtel, credit, refunds: refunded, expenses: expTotal, net: revenue - cogs - expTotal, collectedCash, debtOutstanding: Math.round((saleDebt + bookDebt) * 100) / 100 };
+  return { day, saleCount: daySales.length, revenue, cash, momo, mtn, airtel, credit, refunds: refunded, voids: voided, expenses: expTotal, net: revenue - cogs - expTotal, collectedCash, debtOutstanding: Math.round((saleDebt + bookDebt) * 100) / 100 };
 }
 
 // One-message close-out for the owner on WhatsApp: what came in, in what
@@ -62,7 +65,7 @@ export function buildCloseSummary(shopName: string, t: CloseTotals, sellerName?:
   const n = (v: number) => Math.round(v).toLocaleString();
   const lines = [
     `Daily close — ${shopName} (${t.day})`,
-    `Sales: ${t.saleCount} · ${n(t.revenue)} UGX${t.refunds > 0 ? ` (${t.refunds} refunded)` : ''}`,
+    `Sales: ${t.saleCount} · ${n(t.revenue)} UGX${t.refunds > 0 ? ` (${t.refunds} refunded)` : ''}${t.voids > 0 ? ` (${t.voids} voided)` : ''}`,
     `Cash: ${n(t.cash)} · MTN: ${n(t.mtn)} · Airtel: ${n(t.airtel)}`,
     ...(t.credit > 0 ? [`Still on credit: ${n(t.credit)}`] : []),
     ...(t.collectedCash > 0 ? [`Debts collected: ${n(t.collectedCash)}`] : []),
@@ -76,7 +79,7 @@ export function buildCloseSummary(shopName: string, t: CloseTotals, sellerName?:
 
 export function printDailyClose(dateStr: string, sales: Sale[], expenses: Expense[], products: Product[]) {
   const day = dateStr || todayLocalKey();
-  const daySales = sales.filter(s => localDayKey(s.timestamp) === day && !s.refunded);
+  const daySales = sales.filter(s => localDayKey(s.timestamp) === day && isLiveSale(s));
   const dayExpenses = expenses.filter(e => localDayKey(e.timestamp) === day);
   const revenue = daySales.reduce((a,s)=>a+s.total,0);
   const vat = daySales.reduce((a,s)=>a+(s.tax||0),0);

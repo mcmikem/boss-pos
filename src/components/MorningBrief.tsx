@@ -9,6 +9,7 @@ import type { Sale, CreditEat, Product, Expense, MomoTransfer } from '../types';
 import { getOpeningCapital, drawerExpensesByCategory, moneyOutByCategory, tenderByCategory, momoExpensesByCategory, openingPhoneFor, prevDayKey } from '../utils/cashflow';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { revenueOnDay, outstandingCredit, lowStockCount, dayDelta, expiringCount } from '../utils/brief';
+import { isLiveSale } from '../utils/saleStatus';
 import { stockoutLosses } from '../utils/stockout';
 
 interface MorningBriefProps {
@@ -47,7 +48,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     const today = todayLocalKey();
     const name = (sellerName || '').trim();
     const mine = name
-      ? sales.filter(s => !s.refunded && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === name)
+      ? sales.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === today && (s.staffName || '').trim() === name)
       : [];
     let handover: { at: string; from: string; to: string; amount: number } | null = null;
     try {
@@ -94,7 +95,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     // Seller of the day: top revenue among named sellers today.
     const bySeller = new Map<string, { name: string; total: number; count: number }>();
     for (const s of sales) {
-      if (s.refunded || localDayKey(s.timestamp) !== today) continue;
+      if (!isLiveSale(s) || localDayKey(s.timestamp) !== today) continue;
       const name = (s.staffName || '').trim();
       if (!name) continue;
       const cur = bySeller.get(name) || { name, total: 0, count: 0 };
@@ -130,7 +131,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
     // Rush hour: busiest sales hour today (5am–11pm sane range for display).
     const hourly = new Array<number>(24).fill(0);
     for (const s of sales) {
-      if (s.refunded || localDayKey(s.timestamp) !== today) continue;
+      if (!isLiveSale(s) || localDayKey(s.timestamp) !== today) continue;
       const h = new Date(s.timestamp).getHours();
       if (Number.isFinite(h)) hourly[h] += 1;
     }

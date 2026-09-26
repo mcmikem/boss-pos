@@ -1,22 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, PackageX, Plus, Trash2, X,
-  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText, ChevronDown
+  Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText, ChevronDown, ChefHat
 } from 'lucide-react';
 import StatementModal from './StatementModal';
 import BeginnerTip from './BeginnerTip';
 import { t } from '../utils/i18n';
-import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale, Expense, StaffMember } from '../types';
-import { localDayKey, localMonthKey, todayLocalKey, middayStamp } from '../utils/dates';
+import type { CreditEat, ProductionRegister, WastageLog, Product, MomoTransfer, Sale, Expense, StaffMember, ProductionPlanRecord } from '../types';
+import { localDayKey, localMonthKey, todayLocalKey, middayStamp, shiftDayKey } from '../utils/dates';
 import { daysOverdue, ageingBucket } from '../utils/creditAge';
 import { isDailyMakeCategory, CATEGORY_WORKFLOW_HINT } from '../utils/dailyMake';
 import {
   computeDayCash, getOpeningCapital, getClosingCapital, setClosingCapital,
   moneyOutByCategory, drawerExpensesByCategory, buildTheftFlags, voidsOnDay,
   prevDayKey, openingForDay, tenderByCategory, momoExpensesByCategory, openingPhoneFor,
-  type TheftFlag,
+  type TheftFlag, type DayCashResult,
 } from '../utils/cashflow';
 import { pushNotice } from '../utils/notifications';
+import { isLiveSale } from '../utils/saleStatus';
+import { supplierWhatsAppUrl } from '../utils/suppliers';
+import { buildProductionPlan, plannableProducts } from '../utils/productionPlan';
+import { productionPlanApi } from '../api';
 import { confirmDialog, promptDialog } from './Dialog';
 
 interface CategoryRegisterProps {
@@ -46,6 +50,30 @@ interface CategoryRegisterProps {
   lang?: unknown;
   onPrintClose?: () => void;
   onReopenDay?: () => void | Promise<void>;
+  // Fired after the local close record lands. Resolves with the filed
+  // summary (same text the owner sees in-app), or null when it could not
+  // be filed.
+  onCloseDayFinished?: (close: {
+    businessDate: string;
+    branch: string;
+    cash: DayCashResult;
+    closedByName: string;
+  }) => Promise<{ id: string; body: string } | null>;
+  // Commit tomorrow's production plan. Resolves with the saved server record
+  // (priced from live recipes); the App turns its total into the ingredient
+  // money so the kitchen never works from a stale typed guess.
+  onCommitProductionPlan?: (plan: {
+    businessDate: string;
+    category: string;
+    lines: Array<{ productId: string; batchQty: number }>;
+    overrideTotal?: number | null;
+    note?: string;
+  }) => Promise<ProductionPlanRecord>;
+  // Records that the cashier tapped "Send on WhatsApp" for a sent summary.
+  onShareCloseSummary?: (id: string) => void | Promise<void>;
+  ownerPhone?: string;
+  closeSummaryAuto?: boolean;
+  branch?: string;
   onSendClose?: () => void;
   features?: Record<string, boolean>;
   // Close-time gating: unaccounted/momo flags wait for the shop's close.
@@ -137,8 +165,9 @@ export default function CategoryRegister({
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
-  onPrintClose, onSendClose, onReopenDay, pastClose = true, blind = false, notifyOwner = true,
-  staff = [], ownerName = '',
+  onPrintClose, onSendClose, onReopenDay, onCloseDayFinished, onShareCloseSummary, onCommitProductionPlan,
+  ownerPhone = '', branch = '', pastClose = true, blind = false, notifyOwner = true,
+  staff = [], ownerName = '', closeSummaryAuto = true,
 }: CategoryRegisterProps) {
   // Whoever owns this shop, named by the owner in Settings. Never hardcoded —
   // every other business on this software must see their own name here.
@@ -198,11 +227,11 @@ export default function CategoryRegister({
   const secStoreKey = `boss_pos_closesec_${todayStr()}::${selected}`;
   // money: true — recording where the money went is the main job of this page,
   // not a footnote hidden behind a collapsed card.
-  const [secOpen, setSecOpen] = useState<Record<string, boolean>>({ glance: false, balance: true, credit: false, losses: true, money: true });
+  const [secOpen, setSecOpen] = useState<Record<string, boolean>>({ glance: false, balance: true, credit: false, losses: true, money: true, plan: false });
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(secStoreKey) || '{}');
-      setSecOpen({ glance: false, balance: true, credit: false, losses: true, money: true, ...(saved && typeof saved === 'object' ? saved : {}) });
+      setSecOpen({ glance: false, balance: true, credit: false, losses: true, money: true, plan: false, ...(saved && typeof saved === 'object' ? saved : {}) });
     } catch {}
   }, [secStoreKey]);
   const toggleSec = (k: string) => setSecOpen(prev => {
@@ -278,7 +307,7 @@ export default function CategoryRegister({
     const map: { [key: string]: number } = {};
     const today = todayLocalKey();
     sales.forEach(s => {
-      if (s.refunded) return;
+      if (!isLiveSale(s)) return;
       if (s.paymentMethod === 'Credit / Book') return;
       if (localDayKey(s.timestamp) !== today) return;
       s.items.forEach(item => {
@@ -300,7 +329,7 @@ export default function CategoryRegister({
   // 'remaining' log below is just a tray-count audit (expected vs counted).
   // Negative means sales ate into earlier stock (covered from the tray).
   const balanceRows = useMemo(() => {
-    const daySales = sales.filter(s => !s.refunded && localDayKey(s.timestamp) === balanceDate);
+    const daySales = sales.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === balanceDate);
     let openingMap: Map<string, number>;
     try {
       openingMap = openingForDay(products, productionRegisters, sales, wastageLogs, balanceDate);
@@ -402,11 +431,64 @@ export default function CategoryRegister({
       setDayClosedAt(raw?.at || null);
     } catch { setDayClosedAt(null); }
   }, [closedStoreKey]);
-  const finishCloseDay = () => {
+  const summarySentKey = `boss_pos_close_summary_${todayStr()}::${selected}`;
+  const [summarySentId, setSummarySentId] = useState<string | null>(() => {
+    try { return localStorage.getItem(summarySentKey); } catch { return null; }
+  });
+  const [sentSummaryBody, setSentSummaryBody] = useState<string>(() => {
+    try { return localStorage.getItem(`${summarySentKey}:body`) || ''; } catch { return ''; }
+  });
+  useEffect(() => {
+    try {
+      setSummarySentId(localStorage.getItem(summarySentKey));
+      setSentSummaryBody(localStorage.getItem(`${summarySentKey}:body`) || '');
+    } catch {
+      setSummarySentId(null);
+      setSentSummaryBody('');
+    }
+  }, [summarySentKey]);
+  const finishCloseDay = async () => {
     const rec = { at: new Date().toISOString(), by: staffName || '', collected: collectedToday, moved: sentToday };
     try { localStorage.setItem(closedStoreKey, JSON.stringify(rec)); } catch {}
     setDayClosedAt(rec.at);
     triggerToast(`Day closed — ${selected} finished`, 'success');
+    // The owner summary goes out automatically unless the owner turned it
+    // off. It is idempotent per day + department, so a double-tap or a
+    // retry can never file it twice.
+    if (onCloseDayFinished && closeSummaryAuto !== false && !blind) {
+      try {
+        const sent = await onCloseDayFinished({
+          businessDate: todayStr(),
+          branch: selected,
+          cash: smartCash,
+          closedByName: staffName || '',
+        });
+        if (sent) {
+          try {
+            localStorage.setItem(summarySentKey, sent.id);
+            localStorage.setItem(`${summarySentKey}:body`, sent.body);
+          } catch {}
+          setSummarySentId(sent.id);
+          setSentSummaryBody(sent.body);
+          triggerToast('Close summary sent to the owner', 'success');
+        }
+      } catch {
+        triggerToast('Day is closed — the owner summary will send on the next sync', 'info');
+      }
+    }
+  };
+  const shareSentSummary = async () => {
+    if (!summarySentId) return;
+    const url = ownerPhone && sentSummaryBody
+      ? supplierWhatsAppUrl(ownerPhone, sentSummaryBody)
+      : null;
+    if (!url) {
+      triggerToast('Add the owner number in Settings first', 'error');
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
+    try { await onShareCloseSummary?.(summarySentId); } catch {}
+    triggerToast('Opening WhatsApp with the close summary', 'success');
   };
   const reopenDay = async () => {
     try { localStorage.removeItem(closedStoreKey); } catch {}
@@ -491,6 +573,8 @@ export default function CategoryRegister({
     .filter(t => localDayKey(t.createdAt) !== todayStr())
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
     .slice(0, 50);
+
+
 
   // Daily capital kept for this department; profit to send = collected − capital.
   const todayKey = todayLocalKey();
@@ -587,6 +671,77 @@ export default function CategoryRegister({
       variance: allCounted ? counted - expected : null,
     };
   }, [segments, momoTransfers, todayKey, eodCapital, todayCollectedByCategory, tenderToday, drawerExpensesToday, countedByCat]);
+  // ---- Plan tomorrow: what the kitchen will make, priced from the recipes.
+  // The derived total becomes tomorrow's ingredient money on commit — the
+  // number is worked out, not typed. Only the kitchen departments plan.
+  const planKitchen = selected === 'Eatery' || selected === 'Drinks';
+  const tomorrowKey = shiftDayKey(todayStrKey, 1);
+  const plannable = planKitchen ? plannableProducts(products, selected) : [];
+  const [planQty, setPlanQty] = useState<Record<string, number>>({});
+  const [planTouched, setPlanTouched] = useState(false);
+  const [planOverride, setPlanOverride] = useState('');
+  const [planNote, setPlanNote] = useState('');
+  const [tomorrowPlan, setTomorrowPlan] = useState<ProductionPlanRecord | null>(null);
+  const [planSaving, setPlanSaving] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setTomorrowPlan(null);
+    setPlanQty({});
+    setPlanTouched(false);
+    setPlanOverride('');
+    setPlanNote('');
+    if (!planKitchen) return;
+    productionPlanApi.get(tomorrowKey, selected, branch)
+      .then(rows => { if (live) setTomorrowPlan(rows[0] || null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [selected, todayStrKey, tomorrowKey, planKitchen, branch]);
+  const planSoldToday = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of balanceRows) map[r.product.id] = r.sold;
+    return map;
+  }, [balanceRows]);
+  const copyTodaySalesToPlan = () => {
+    const next: Record<string, number> = {};
+    for (const prod of plannable) {
+      const sold = Math.max(0, Math.round(planSoldToday[prod.id] || 0));
+      if (sold > 0) next[prod.id] = sold;
+    }
+    setPlanQty(next);
+    setPlanTouched(true);
+  };
+  const planOverrideValue = planOverride.trim() === '' ? null : Math.max(0, Math.round(parseFloat(planOverride) || 0));
+  const planPreview = useMemo(() => buildProductionPlan(
+    products,
+    plannable.map(prod => ({ productId: prod.id, batchQty: planQty[prod.id] || 0 })).filter(e => e.batchQty > 0),
+    { businessDate: tomorrowKey, category: selected, override: planOverrideValue },
+  ), [products, plannable, planQty, tomorrowKey, selected, planOverrideValue]);
+  const planShortfall = Math.max(0, Math.round(planPreview.totalCost - smartCash.expectedInDrawer));
+  const commitPlan = async () => {
+    if (!onCommitProductionPlan) return;
+    if (planPreview.lines.length === 0 && planOverrideValue == null) {
+      triggerToast('Add at least one batch — or type an override amount', 'error');
+      return;
+    }
+    setPlanSaving(true);
+    try {
+      const saved = await onCommitProductionPlan({
+        businessDate: tomorrowKey,
+        category: selected,
+        lines: planPreview.lines.map(l => ({ productId: l.productId, batchQty: l.batchQty })),
+        overrideTotal: planOverrideValue,
+        note: planNote.trim(),
+      });
+      setTomorrowPlan(saved);
+      setPlanTouched(false);
+      triggerToast(`Tomorrow's ingredient money: ${formatCurrency(saved.total)}`, 'success');
+    } catch {
+      triggerToast('Could not save the plan — try again', 'error');
+    } finally {
+      setPlanSaving(false);
+    }
+  };
+
   // Theft flags for ALL departments (once per day → bell, not spam).
   const theftFlags = useMemo(() => buildTheftFlags({
     dayKey: todayKey,
@@ -1034,6 +1189,21 @@ export default function CategoryRegister({
                   <p className="text-xs font-black text-emerald-300 uppercase tracking-wider">
                     Day closed ✓ {new Date(dayClosedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — tonight's records are locked as the closing record.
                   </p>
+                  {summarySentId ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <p className="text-[10px] font-black text-emerald-300 uppercase tracking-wider flex-1">
+                        ✓ Owner summary sent
+                      </p>
+                      <button onClick={shareSentSummary}
+                        className="h-9 px-3 bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-emerald-600/30 active:scale-95 transition-all cursor-pointer">
+                        WhatsApp it
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mt-1.5 text-[10px] font-bold text-zinc-500 uppercase">
+                      Owner summary not sent yet — it goes out on the next sync.
+                    </p>
+                  )}
                   <button onClick={reopenDay}
                     className="mt-1.5 text-[10px] font-black text-zinc-500 uppercase tracking-wider hover:text-zinc-300 cursor-pointer">
                     Reopen day
@@ -1375,7 +1545,7 @@ export default function CategoryRegister({
         {showMomoForm && (
           <div className="bg-zinc-950/60 border border-cyan-600/20 rounded-xl p-4 space-y-3 mb-4">
             <p className="text-[11px] font-bold text-zinc-400 uppercase">
-              Record money from <span className="text-cyan-400">{selected}</span>; it leaves the drawer and goes somewhere — track it so all money is accounted for.
+              Record money from <span className="text-cyan-400">{selected}</span>; it leaves the drawer and goes somewhere — every shilling gets a home.
             </p>
             <div>
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Where did it go?</label>
@@ -1430,7 +1600,7 @@ export default function CategoryRegister({
               {collectedToday > 0 && (
                 <button onClick={() => setMomoAmount(String(collectedToday))}
                   className="mt-1 text-[10px] text-cyan-400 font-bold uppercase tracking-wider cursor-pointer">
-                  Use collected total {fmt(collectedToday)}
+                  Use today's takings {fmt(collectedToday)}
                 </button>
               )}
             </div>
@@ -1530,6 +1700,98 @@ export default function CategoryRegister({
           </>
         )}
       </CloseSection>
+
+      {planKitchen && (
+      <CloseSection id="close-plan" icon={ChefHat} title="Plan tomorrow"
+        hint={tomorrowPlan ? `Committed: ${fmt(tomorrowPlan.total)} for ${tomorrowKey}` : `Work out ${tomorrowKey} from the recipes`}
+        open={secOpen.plan} onToggle={() => toggleSec('plan')}
+        action={
+          <button onClick={copyTodaySalesToPlan}
+            className="flex items-center gap-1 text-[10px] bg-amber-600/20 text-amber-300 border border-amber-600/40 rounded-lg px-2.5 py-1.5 font-black uppercase tracking-wider cursor-pointer touch-target">
+            Same as today
+          </button>
+        }>
+        <p className="text-[11px] text-zinc-400 font-bold uppercase mb-3">
+          What will the kitchen make {tomorrowKey}? The ingredients price themselves — type a count per dish.
+        </p>
+        {tomorrowPlan && !planTouched && (
+          <div className="mb-3 bg-emerald-950/25 border border-emerald-600/30 rounded-xl px-3 py-2.5">
+            <p className="text-[11px] font-black text-emerald-300 uppercase">
+              Committed: {fmt(tomorrowPlan.total)} · {tomorrowPlan.itemCount} items
+              {tomorrowPlan.overrideTotal != null ? ' · you typed over the recipe figure' : ''}
+            </p>
+            <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
+              {tomorrowPlan.lines.slice(0, 4).map(l => `${l.batchQty}× ${l.productName}`).join(' · ')}
+              {tomorrowPlan.lines.length > 4 ? ` +${tomorrowPlan.lines.length - 4} more` : ''}
+            </p>
+            <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1">Adjust below and recommit to replace it.</p>
+          </div>
+        )}
+        <div className="space-y-2 mb-3">
+          {plannable.map(prod => {
+            const qty = planQty[prod.id] || 0;
+            const sold = planSoldToday[prod.id] || 0;
+            return (
+              <div key={prod.id} className="flex items-center gap-2 bg-zinc-950/60 border border-white/5 rounded-xl px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-white truncate">{prod.name}</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                    sold {sold} today
+                  </p>
+                </div>
+                <input type="number" min="0" inputMode="numeric" value={qty === 0 ? '' : String(qty)}
+                  aria-label={`${prod.name} batches for tomorrow`}
+                  placeholder="0"
+                  onChange={e => {
+                    const v = Math.max(0, Math.round(parseFloat(e.target.value) || 0));
+                    setPlanQty(prev => ({ ...prev, [prod.id]: v }));
+                    setPlanTouched(true);
+                  }}
+                  className="w-20 h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-sm font-black tabular-nums focus:border-amber-500 outline-none" />
+              </div>
+            );
+          })}
+          {plannable.length === 0 && (
+            <p className="text-[11px] text-zinc-500 font-bold uppercase bg-black/20 rounded-xl px-3 py-3">
+              No plannable dishes here — add recipes to {selected} products in Stock first.
+            </p>
+          )}
+        </div>
+        <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3 mb-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-[11px] font-black text-zinc-400 uppercase tracking-wider">Ingredient money needed</p>
+            <p className="text-xl font-black text-amber-300 font-display tabular-nums">{fmt(planPreview.totalCost)}</p>
+          </div>
+          <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
+            {planPreview.itemCount} items · worked out from today's recipe prices
+          </p>
+          {planShortfall > 0.5 && (
+            <p className="text-[11px] font-black text-amber-300 uppercase mt-2">
+              {fmt(planShortfall)} more than the {fmt(smartCash.expectedInDrawer)} in the drawer — say below where it comes from.
+            </p>
+          )}
+          <div className="mt-2.5 space-y-2">
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Use a different amount (optional override)</label>
+              <input type="number" min="0" inputMode="numeric" value={planOverride}
+                placeholder={String(Math.round(planPreview.totalCost))}
+                onChange={e => { setPlanOverride(e.target.value); setPlanTouched(true); }}
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-10 px-3 text-sm outline-none focus:border-amber-500 font-bold tabular-nums" />
+            </div>
+            <div>
+              <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Note (optional — e.g. where extra money comes from)</label>
+              <input type="text" value={planNote} onChange={e => setPlanNote(e.target.value)}
+                placeholder="e.g. extra 6,000 topped up from owner float"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-10 px-3 text-sm outline-none focus:border-amber-500" />
+            </div>
+          </div>
+        </div>
+        <button onClick={commitPlan} disabled={planSaving || (!planTouched && !!tomorrowPlan)}
+          className="w-full h-12 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-[0.99] cursor-pointer">
+          {planSaving ? 'Saving…' : `Use ${fmt(planOverrideValue ?? planPreview.totalCost)} as tomorrow's ingredient money`}
+        </button>
+      </CloseSection>
+      )}
 
       {/* ============ 1. ABABANJIBWA SENTE ============ */}
       <CloseSection icon={Users} title="Ababanjibwa Sente"

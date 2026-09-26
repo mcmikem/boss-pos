@@ -1,4 +1,5 @@
 import type { Sale, Product } from '../types';
+import { isLiveSale } from './saleStatus';
 
 // Stock-out autopsy: what is it costing to be out of stock? For every
 // stocked-out product, average daily units over the trailing window times
@@ -18,7 +19,7 @@ export function stockoutLosses(
   const cutoffMs = Date.parse(`${todayKey}T00:00:00Z`) - days * 86400000;
   const units: Record<string, number> = {};
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     const at = Date.parse(s.timestamp);
     if (!Number.isFinite(at) || at < cutoffMs) continue;
     for (const i of s.items) units[i.productId] = (units[i.productId] || 0) + (i.qty || 0);

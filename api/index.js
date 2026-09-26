@@ -7,7 +7,7 @@ import { creditLimitDecision, normalizeCreditKey, summarizeCreditBalances } from
 import { normalizeReportRange } from './reportRange.js';
 import { TILL_ROLE, managerAllowed, MANAGER_REQUIRED_CODE } from './authz.js';
 import { aggregateSaleLines, saleTotals, validatePayment, validateProductIdentity, discountRequiresManager, actorContext, structuredMetadata, buildAgingReport, normalizeBarcode, normalizeImei, roundMoney } from './businessRules.js';
-import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, quantity, businessDate } from './operationsRules.js';
+import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateCloseSession, validateHandover, validateExpense, validateCreditCollection, validateProductionPlan, planLineCost, parseProductRecipe, quantity, businessDate } from './operationsRules.js';
 import { calculateCloseTotals, normalizeExpenseCategories, categoryRenameViolation, normalizePaymentMethod, validateSettlementTransition, validateExpenseTransition, validateReference, scopeValues } from './operationsBusiness.js';
 import { PURCHASE_ORDER_STATUSES, RECEIVABLE_STATUSES, roundQuantity, expiryDateValue, normalizeOrderNumber, purchaseOrderTotals, receiptPlan, receiptSummary } from './procurementRules.js';
 
@@ -358,6 +358,20 @@ async function initDB() {
     lossamount DOUBLE PRECISION DEFAULT 0, reason TEXT DEFAULT 'remaining',
     createdat TEXT NOT NULL
   )`;
+  // Tomorrow's ingredient commitment, filed at close. One plan per day +
+  // department + branch: recommitting replaces the numbers, never stacks them.
+  // Plans never touch close_sessions, so they can neither restate a closed day
+  // nor be restated by one — the past stays exactly as reported.
+  await sql`CREATE TABLE IF NOT EXISTS production_plans (
+    id TEXT PRIMARY KEY, business_date TEXT NOT NULL, branch TEXT DEFAULT '',
+    category TEXT DEFAULT 'Eatery', lines TEXT DEFAULT '[]',
+    derived_total DOUBLE PRECISION DEFAULT 0, override_total DOUBLE PRECISION,
+    total DOUBLE PRECISION NOT NULL DEFAULT 0, item_count INTEGER DEFAULT 0,
+    note TEXT DEFAULT '', created_by TEXT, created_by_name TEXT DEFAULT '',
+    client_write_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`;
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_plans_day ON production_plans(business_date, category, branch)`; } catch {}
+  try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_plans_cwid ON production_plans(client_write_id) WHERE client_write_id IS NOT NULL`; } catch {}
   await sql`CREATE TABLE IF NOT EXISTS momo_transfers (
     id TEXT PRIMARY KEY, category TEXT NOT NULL,
     amount DOUBLE PRECISION NOT NULL, comment TEXT DEFAULT '',
@@ -4196,6 +4210,104 @@ app.post('/api/credit-eats/:id/pay', asHandler(handleCreditEatPayment));
 app.post('/api/credit-collections/book/:id', asHandler(handleCreditEatPayment));
 
 // === PRODUCTION REGISTER API (daily snack production) ===
+// GET /api/production-plans?date=YYYY-MM-DD[&category=] — what the kitchen
+// committed to make. The morning screen reads today's plan; the close screen
+// reads tomorrow's. Plain auth: the kitchen must see it to cook from it.
+app.get('/api/production-plans', asHandler(async (req, res) => {
+  const date = String(req.query.date || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must use YYYY-MM-DD', code: 'INVALID_DATE' });
+  const category = String(req.query.category || '').trim();
+  const branch = String(req.query.branch || '').trim().slice(0, 80);
+  const where = ['1=1'];
+  const params = [];
+  if (date) { params.push(date); where.push(`business_date = $${params.length}`); }
+  if (category) { params.push(category); where.push(`category = $${params.length}`); }
+  if (req.query.branch !== undefined) { params.push(branch); where.push(`branch = $${params.length}`); }
+  const rows = await sql.query(`SELECT * FROM production_plans WHERE ${where.join(' AND ')} ORDER BY business_date DESC, category ASC LIMIT 200`, params);
+  res.json(rows.map(mapProductionPlan));
+}));
+
+// POST /api/production-plans — commit tomorrow's batches at close. The server
+// prices every line from the live product recipes, so the derived total is a
+// fact, not a claim. Committing also sets that department's ingredient money
+// (eodCapital) in one audited step — the closer never types the number, and a
+// cashier doing the close is not blocked by the manager-only settings gate.
+app.post('/api/production-plans', asHandler(async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const productRows = await sql`SELECT id, name, category, deleted, isservice, recipe FROM products`;
+  const validated = validateProductionPlan(body, productRows.map((r) => ({
+    id: r.id, name: r.name, category: r.category,
+    deleted: !!r.deleted, isService: !!r.isservice, recipe: r.recipe,
+  })));
+  if (validated.error) return res.status(400).json({ error: validated.error, code: validated.code });
+  const actor = await requestActor(req);
+  const byId = new Map(productRows.map((r) => [String(r.id), r]));
+  const lines = [];
+  for (const line of validated.lines) {
+    const product = byId.get(line.productId);
+    const costs = planLineCost(product, line.batchQty);
+    lines.push({
+      productId: line.productId,
+      productName: product?.name || line.productId,
+      category: product?.category || validated.category,
+      batchQty: line.batchQty,
+      recipeYield: Math.max(1, Number(parseProductRecipe(product)?.yield) || 1),
+      batches: costs.batches,
+      ingredientCost: costs.ingredientCost,
+      overhead: costs.overhead,
+      totalCost: costs.totalCost,
+      hasRecipe: costs.hasRecipe,
+    });
+  }
+  const derivedTotal = roundMoney(lines.reduce((sum, l) => sum + l.totalCost, 0));
+  const total = validated.overrideTotal == null ? derivedTotal : validated.overrideTotal;
+  const itemCount = lines.reduce((sum, l) => sum + l.batchQty, 0);
+  const id = String(body.id || `pp-${randomUUID()}`).slice(0, 160);
+  const clientWriteId = validated.idempotencyKey;
+  const at = new Date().toISOString();
+  if (clientWriteId) {
+    const existing = await sql`SELECT * FROM production_plans WHERE client_write_id=${clientWriteId}`;
+    if (existing.length) return res.json({ ...mapProductionPlan(existing[0]), duplicate: true });
+  }
+  const inserted = await sql`INSERT INTO production_plans (id,business_date,branch,category,lines,derived_total,override_total,total,item_count,note,created_by,created_by_name,client_write_id,created_at,updated_at)
+    VALUES (${id},${validated.businessDate},${validated.branch},${validated.category},${JSON.stringify(lines)},${derivedTotal},${validated.overrideTotal},${total},${itemCount},${validated.note},${actor.id},${actor.name},${clientWriteId},${at},${at})
+    ON CONFLICT (business_date, category, branch) DO UPDATE SET
+      lines=EXCLUDED.lines, derived_total=EXCLUDED.derived_total, override_total=EXCLUDED.override_total,
+      total=EXCLUDED.total, item_count=EXCLUDED.item_count, note=EXCLUDED.note,
+      created_by=EXCLUDED.created_by, created_by_name=EXCLUDED.created_by_name,
+      client_write_id=COALESCE(EXCLUDED.client_write_id, production_plans.client_write_id),
+      updated_at=EXCLUDED.updated_at
+    RETURNING *`;
+  if (!inserted.length) return res.status(409).json({ error: 'Production plan was not saved', code: 'PLAN_NOT_SAVED' });
+  // The commitment becomes tomorrow's ingredient money in the same step, so
+  // the number the kitchen works against is never a stale typed guess.
+  try {
+    const settingRows = await sql`SELECT value FROM settings WHERE key='eodCapital'`;
+    let capital = {};
+    try { capital = settingRows.length ? JSON.parse(settingRows[0].value) : {}; } catch { capital = {}; }
+    if (!capital || typeof capital !== 'object' || Array.isArray(capital)) capital = {};
+    capital[validated.category] = total;
+    await sql`INSERT INTO settings (key, value) VALUES ('eodCapital', ${JSON.stringify(capital)}) ON CONFLICT (key) DO UPDATE SET value=${JSON.stringify(capital)}`;
+  } catch {}
+  await audit('production_plan.commit', `${validated.businessDate} ${validated.category} ${total}`, actor, {
+    productionPlanId: id, businessDate: validated.businessDate, category: validated.category,
+    branch: validated.branch, derivedTotal, overrideTotal: validated.overrideTotal, total,
+    itemCount, note: validated.note,
+  }, req.id);
+  res.json(mapProductionPlan(inserted[0]));
+}));
+
+// DELETE /api/production-plans/:id — uncommit a plan (manager only). Removing
+// the plan does not touch eodCapital or any closed day: the past is immutable.
+app.delete('/api/production-plans/:id', requireManager, asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM production_plans WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Production plan not found', code: 'PLAN_NOT_FOUND' });
+  await sql`DELETE FROM production_plans WHERE id=${req.params.id}`;
+  const actor = await requestActor(req);
+  await audit('production_plan.delete', `${rows[0].business_date} ${rows[0].category}`, actor, { productionPlanId: req.params.id }, req.id);
+  res.json({ success: true });
+}));
+
 app.get('/api/production-register', asHandler(async (req, res) => {
   const rows = await sql`SELECT * FROM production_register ORDER BY date DESC, createdat DESC`;
   res.json(rows.map(mapProductionRegister));
@@ -6308,6 +6420,17 @@ function mapProductionRegister(r) {
     category: r.category || 'Eatery', productId: r.product_id || null,
     qty: Number(r.qty || 0), costEach: Number(r.costeach || 0), total: Number(r.total || 0),
     staffId: r.staff_id || undefined, staffName: r.actor_name || '', actorId: r.actor_id || undefined, actorName: r.actor_name || '', actorRole: r.actor_role || '', branch: r.branch || '',
+  };
+}
+
+function mapProductionPlan(r) {
+  return {
+    id: r.id, businessDate: r.business_date, branch: r.branch || '', category: r.category || 'Eatery',
+    lines: parseJson(r.lines, []), derivedTotal: Number(r.derived_total || 0),
+    overrideTotal: r.override_total == null ? null : Number(r.override_total),
+    total: Number(r.total || 0), itemCount: Number(r.item_count || 0), note: r.note || '',
+    createdBy: r.created_by || undefined, createdByName: r.created_by_name || '',
+    createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 

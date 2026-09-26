@@ -156,6 +156,14 @@ export interface Sale {
   branch?: string;
   refunded?: boolean;
   refundedAt?: string;
+  // A voided (deleted) sale stays in the database as an audit trail, exactly
+  // like a refund. Every money/report computation must treat voided rows as
+  // dead — see isLiveSale in utils/saleStatus.ts.
+  voided?: boolean;
+  voidedAt?: string;
+  voidReason?: string;
+  voidedBy?: string;
+  voidedByName?: string;
   // EFRIS fiscalisation (server-filled; see api/efris.js)
   efrisStatus?: 'none' | 'pending' | 'issued' | 'failed';
   efrisInvoiceNo?: string;
@@ -598,6 +606,39 @@ export interface CloseSummary {
   readAt?: string;
   sharedVia: string;
   createdAt: string;
+}
+
+export interface PlannedProductionLine {
+  productId: string;
+  productName: string;
+  category: string;
+  batchQty: number;
+  recipeYield: number;
+  batches: number;
+  ingredientCost: number;
+  overhead: number;
+  totalCost: number;
+  hasRecipe: boolean;
+}
+
+// Tomorrow's ingredient commitment, filed at close and priced by the server
+// from the live product recipes. `total` is what the kitchen works against;
+// `overrideTotal` is set only when the owner typed over the derived figure.
+export interface ProductionPlanRecord {
+  id: string;
+  businessDate: string;
+  category: string;
+  branch: string;
+  lines: PlannedProductionLine[];
+  derivedTotal: number;
+  overrideTotal: number | null;
+  total: number;
+  itemCount: number;
+  note: string;
+  createdBy?: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type ExpenseApprovalStatus = 'submitted' | 'approved' | 'rejected';

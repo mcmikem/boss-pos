@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp, isPastClose, isShopDayOff, minutesUntilClose, closeReminderState, formatMinutesLeft } from './dates';
+import { localDayKey, localMonthKey, daysUntilExpiry, expiryStatus, middayStamp, isPastClose, isShopDayOff, minutesUntilClose, closeReminderState, formatMinutesLeft, shiftDayKey } from './dates';
 
 describe('localDayKey', () => {
   it('returns a zero-padded YYYY-MM-DD', () => {
@@ -151,5 +151,14 @@ describe('closing reminder', () => {
     expect(formatMinutesLeft(45)).toBe('45 min');
     expect(formatMinutesLeft(60)).toBe('1 hr');
     expect(formatMinutesLeft(95)).toBe('1 hr 35 min');
+  });
+});
+
+describe('shiftDayKey', () => {
+  it('moves calendar days without UTC drift', () => {
+    expect(shiftDayKey('2026-09-26', 1)).toBe('2026-09-27');
+    expect(shiftDayKey('2026-09-26', -1)).toBe('2026-09-25');
+    expect(shiftDayKey('2026-01-31', 1)).toBe('2026-02-01');
+    expect(shiftDayKey('2026-12-31', 1)).toBe('2027-01-01');
   });
 });

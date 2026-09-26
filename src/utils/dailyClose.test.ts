@@ -55,6 +55,19 @@ describe('closeTotals', () => {
     expect(t.revenue).toBe(0);
   });
 
+  it('ignores voided (deleted) sales exactly like refunds, and counts them', () => {
+    const t = closeTotals('2026-09-07', [
+      sale({ id: 's-1', total: 2000, paymentMethod: 'Cash' }),
+      sale({ id: 's-2', total: 9999, paymentMethod: 'Cash', voided: true }),
+    ], []);
+    expect(t.saleCount).toBe(1);
+    expect(t.revenue).toBe(2000);
+    expect(t.cash).toBe(2000);
+    expect(t.voids).toBe(1);
+    expect(t.refunds).toBe(0);
+    expect(buildCloseSummary('Shop', t)).toContain('1 voided');
+  });
+
   it('counts a just-after-midnight sale on the local business day, not UTC', () => {
     // 00:30 wall-clock time, no timezone suffix = parsed as local time.
     const t = closeTotals('2026-09-07', [sale({ id: 's-1', timestamp: '2026-09-07T00:30:00' })], []);

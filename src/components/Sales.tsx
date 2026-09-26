@@ -7,8 +7,9 @@ import {
   CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, TailoringOrder, DesignOrder, Booking, RepairJob, SaleSaveResult } from '../types';
-import { nextOrderNumber, quoteApi, tailoringOrderApi, designOrderApi, bookingApi, repairJobApi } from '../api';
+import { nextOrderNumber, quoteApi, tailoringOrderApi, designOrderApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
+import { isLiveSale } from '../utils/saleStatus';
 import ProductCard from './ProductCard';
 import KeyboardShortcuts from './KeyboardShortcuts';
 import { useDialogFocus } from './Sheet';
@@ -311,6 +312,7 @@ export default function Sales({
   const [showRepairs, setShowRepairs] = useState<boolean>(false);
   const [showEateryPricing, setShowEateryPricing] = useState<boolean>(false);
   const [showProduction, setShowProduction] = useState<boolean>(false);
+  const [plannedToday, setPlannedToday] = useState<Array<{ productId: string; productName: string; batchQty: number; totalCost: number }>>([]);
   const [showEateryHome, setShowEateryHome] = useState<boolean>(false);
   const [showTailorHome, setShowTailorHome] = useState<boolean>(false);
   const [tailorStartNew, setTailorStartNew] = useState<boolean>(false);
@@ -344,6 +346,23 @@ export default function Sales({
     if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
       setShowProduction(true);
       setShowEateryHome(true);
+    }
+    // What last evening's close committed the kitchen to make. The morning
+    // screen shows it as "planned" so the batch starts from the plan.
+    if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
+      productionPlanApi.get(todayLocalKey()).then(rows => {
+        const lines = rows
+          .filter(r => r.category === 'Eatery' || r.category === 'Drinks')
+          .flatMap(r => r.lines || []);
+        setPlannedToday(lines.map(l => ({
+          productId: String(l.productId || ''),
+          productName: String(l.productName || ''),
+          batchQty: Number(l.batchQty) || 0,
+          totalCost: Number(l.totalCost) || 0,
+        })).filter(l => l.productId && l.batchQty > 0));
+      }).catch(() => {});
+    } else {
+      setPlannedToday([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory]);
@@ -646,7 +665,7 @@ export default function Sales({
     const catOf = new Map<string, string>();
     for (const p of products) catOf.set(p.id, p.category);
     for (const s of salesHistory) {
-      if (s.refunded) continue;
+      if (!isLiveSale(s)) continue;
       const t = Date.parse(s.timestamp);
       if (!Number.isFinite(t) || t < cutoff) continue;
       for (const i of s.items) {
@@ -2215,7 +2234,8 @@ export default function Sales({
                 onAddProduction={onAddProduction} onDeleteProduction={onDeleteProduction}
                 formatCurrency={formatCurrency} triggerToast={triggerToast}
                 availableBudget={ingredientBudgetToday}
-                onRequestTopUp={requestIngredientTopUp} />
+                onRequestTopUp={requestIngredientTopUp}
+                plannedLines={plannedToday} />
             </Suspense>
           </div>
         ) : showBookings ? (
@@ -2276,6 +2296,7 @@ export default function Sales({
                   cart={cart}
                   formatCurrency={formatCurrency}
                   onAddToCart={handleAddToCart}
+                  onOutOfStock={handleOutOfStock}
                   onAdjustQty={(productId, delta) => handleAdjustQty(productId, undefined, delta)}
                   pinned={pinnedIds.includes(product.id)}
                   onTogglePin={!simple && featsOn('fastSellers') ? togglePin : undefined}
@@ -2827,7 +2848,10 @@ export default function Sales({
 
       {/* Variant picker */}
       {variantProduct && variantProduct.variants && (
-        <div className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center" onMouseDown={() => setVariantProduct(null)} aria-hidden="true">
+        <div
+          className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-end justify-center"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setVariantProduct(null); }}
+        >
           <div
             ref={variantRef}
             role="dialog"

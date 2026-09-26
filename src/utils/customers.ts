@@ -1,4 +1,5 @@
 import type { Sale } from '../types';
+import { isLiveSale } from './saleStatus';
 
 // Regulars directory (per device): who the frequent buyers are, how to reach
 // them, what standing they have. Spend/visit stats are always computed live
@@ -54,7 +55,7 @@ export function statsFor(name: string, sales: Sale[]): CustomerStats {
   let lastVisit: string | null = null;
   for (const s of sales) {
     if ((s.customerName || '').trim().toLowerCase() !== n) continue;
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     visits += 1;
     totalSpent += s.total || 0;
     if (!lastVisit || s.timestamp > lastVisit) lastVisit = s.timestamp;

@@ -1,4 +1,5 @@
 import type { Product, Sale } from '../types';
+import { isLiveSale } from './saleStatus';
 
 export const STALE_DAYS = 30;
 
@@ -6,7 +7,7 @@ export const STALE_DAYS = 30;
 export function lastSoldAt(productId: string, sales: Sale[]): string | null {
   let latest: string | null = null;
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (!s.items || !s.items.some(i => i.productId === productId)) continue;
     if (!latest || (s.timestamp || '') > latest) latest = s.timestamp || null;
   }

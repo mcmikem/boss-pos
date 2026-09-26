@@ -20,6 +20,8 @@ import { serviceCategoryOf } from '../utils/serviceCategories';
 import { splitLegs } from '../utils/serviceSale';
 import { downloadBlob } from '../utils/download';
 import { localDayKey, localMonthKey, todayLocalKey } from '../utils/dates';
+import { isLiveSale } from '../utils/saleStatus';
+import { LABELS, MoneyHero } from './Design';
 
 interface AnalyticsProps {
   sales: Sale[];
@@ -102,7 +104,7 @@ export default function Analytics({
   const designLinkedIds = useMemo(() => {
     const set = new Set<string>();
     for (const s of sales) {
-      if (s.refunded) continue;
+      if (!isLiveSale(s)) continue;
       const m = /Design order (\S+)/.exec(s.notes || '');
       if (m) set.add(m[1]);
     }
@@ -175,7 +177,7 @@ export default function Analytics({
 
   const filteredSales = useMemo(() => {
     return sales.filter(s =>
-      !s.refunded && timeRange.filter(s.timestamp) &&
+      isLiveSale(s) && timeRange.filter(s.timestamp) &&
       (branchFilter === 'All' || (s.branch || '') === branchFilter));
   }, [sales, timeRange, branchFilter]);
 
@@ -212,12 +214,12 @@ export default function Analytics({
     const inBranch = (s: { branch?: string }) => branchFilter === 'All' || (s.branch || '') === branchFilter;
     if (timeFilter === 'Daily') {
       const y = localDayKey(new Date(Date.now() - 86400000).toISOString());
-      return sales.filter(s => !s.refunded && localDayKey(s.timestamp) === y && inBranch(s)).reduce((a, s) => a + s.total, 0);
+      return sales.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === y && inBranch(s)).reduce((a, s) => a + s.total, 0);
     }
     if (timeFilter === 'Weekly') {
       const now = Date.now();
       return sales.filter(s => {
-        if (s.refunded || !inBranch(s)) return false;
+        if (!isLiveSale(s) || !inBranch(s)) return false;
         const ms = Date.parse(s.timestamp);
         return ms >= now - 14 * 86400000 && ms < now - 7 * 86400000;
       }).reduce((a, s) => a + s.total, 0);
@@ -226,7 +228,7 @@ export default function Analytics({
     d.setDate(1);
     d.setMonth(d.getMonth() - 1);
     const prevMonth = localMonthKey(d.toISOString());
-    return sales.filter(s => !s.refunded && localMonthKey(s.timestamp) === prevMonth && inBranch(s)).reduce((a, s) => a + s.total, 0);
+    return sales.filter(s => isLiveSale(s) && localMonthKey(s.timestamp) === prevMonth && inBranch(s)).reduce((a, s) => a + s.total, 0);
   }, [sales, timeFilter, branchFilter]);
   const revenueDeltaPct = prevRevenue > 0 ? Math.round(((revenue - prevRevenue) / prevRevenue) * 100) : null;
 
@@ -555,8 +557,8 @@ const colorsMap: { [key: string]: string } = {
       if (!key) continue;
       const cur = map.get(key) || { name: key, count: 0, total: 0, refunds: 0, discount: 0 };
       cur.count += 1;
-      if (s.refunded) cur.refunds += 1;
-      else cur.total += s.total;
+      if (isLiveSale(s)) cur.total += s.total;
+      else cur.refunds += 1;
       cur.discount += s.discount || 0;
       map.set(key, cur);
     }
@@ -835,11 +837,13 @@ const colorsMap: { [key: string]: string } = {
               <p className="text-xs text-zinc-400 font-bold uppercase truncate tabular-nums">Sales: {formatCurrency(topCategory.amount)}</p>
             </div>
             <div className="boss-card p-5 flex flex-col justify-between min-h-32 min-w-0" title="All money from sales in this period (before costs). Swipe Daily/Weekly/Monthly to change period.">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Money In <Info className="w-3 h-3 text-zinc-600" /></span>
-              <h3 className="text-2xl font-black text-white font-display mt-1 truncate tabular-nums" title={formatCurrency(displayIncome)}>{formatCurrency(displayIncome)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase truncate">
-                Total sales{displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''} • Tap Daily/Weekly/Monthly above
-              </p>
+              <MoneyHero
+                label={LABELS.moneyIn}
+                value={formatCurrency(displayIncome)}
+                sub={`Total sales${displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''}`}
+                tone="white"
+                title={formatCurrency(displayIncome)}
+              />
               {revenueDeltaPct !== null && (
                 <p className={`text-xs font-black uppercase mt-1 truncate tabular-nums ${revenueDeltaPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {revenueDeltaPct >= 0 ? '▲' : '▼'} {Math.abs(revenueDeltaPct)}% vs previous {timeFilter === 'Daily' ? 'day' : timeFilter === 'Weekly' ? 'week' : 'month'}
@@ -850,9 +854,13 @@ const colorsMap: { [key: string]: string } = {
               )}
             </div>
             <div className="boss-card p-5 flex flex-col justify-between min-h-32 min-w-0" title="What's left after stock costs, expenses and design costs. Green = profit, red = loss.">
-              <span className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">Profit Left <Info className="w-3 h-3 text-zinc-600" /></span>
-              <h3 className={`text-2xl font-black font-display mt-1 truncate tabular-nums ${displayNetProfit >= 0 ? 'text-gold-brand' : 'text-rose-400'}`} title={formatCurrency(displayNetProfit)}>{formatCurrency(displayNetProfit)}</h3>
-              <p className="text-xs text-zinc-500 font-bold uppercase truncate">{displayNetProfit >= 0 ? t(settings.language, 'youKept') : t(settings.language, 'youLost')} • after all costs</p>
+              <MoneyHero
+                label="Profit Left"
+                value={formatCurrency(displayNetProfit)}
+                sub={`${displayNetProfit >= 0 ? t(settings.language, 'youKept') : t(settings.language, 'youLost')} • after all costs`}
+                tone={displayNetProfit >= 0 ? 'gold' : 'rose'}
+                title={formatCurrency(displayNetProfit)}
+              />
               {timeFilter === 'Daily' && (
                 <details className="mt-2">
                   <summary className="text-[10px] font-black text-gold-brand/80 uppercase tracking-wider cursor-pointer hover:text-gold-brand">How?</summary>
@@ -889,10 +897,11 @@ const colorsMap: { [key: string]: string } = {
           </div>
 
           {(() => {
-            // Refunds are excluded from every total above — surface them so a
-            // refund spree can't hide inside a good-looking revenue number.
+            // Refunds and voids are excluded from every total above — surface
+            // them so a refund/void spree can't hide inside a good-looking
+            // revenue number.
             const refunded = sales.filter(s =>
-              s.refunded && timeRange.filter(s.timestamp) &&
+              (s.refunded || s.voided) && timeRange.filter(s.timestamp) &&
               (branchFilter === 'All' || (s.branch || '') === branchFilter));
             if (refunded.length === 0) return null;
             const refundTotal = refunded.reduce((a, s) => a + s.total, 0);
@@ -900,7 +909,7 @@ const colorsMap: { [key: string]: string } = {
               <section className="boss-card p-4 border border-rose-900/30 bg-rose-950/10">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-black text-rose-300 uppercase tracking-widest">
-                    Refunded ({refunded.length})
+                    Refunded / voided ({refunded.length})
                   </p>
                   <p className="text-sm font-black text-rose-400 tabular-nums">−{formatCurrency(refundTotal)}</p>
                 </div>

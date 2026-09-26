@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateExpense, validateCreditCollection, validateCloseSession, validateHandover } from '../api/operationsRules.js';
+import { validatePurchaseOrder, validateGoodsReceipt, validateSettlement, validateExpense, validateCreditCollection, validateCloseSession, validateHandover, validateProductionPlan, planLineCost, recipeBatchCost } from '../api/operationsRules.js';
 
 const products = [{ id: 'p1', name: 'Tea', isService: false, deleted: false }];
 
@@ -32,4 +32,29 @@ test('validates credit collection and durable close inputs', () => {
   assert.equal(validateCreditCollection({ amount: 9 }, { total: 10, paymentMethod: 'Credit / Book' }, 2).code, 'OVERPAYMENT');
   assert.equal(validateCloseSession({ businessDate: '2026-02-30' }).code, 'INVALID_DATE');
   assert.equal(validateHandover({ toStaffId: 's2', openingCash: 10, closingCash: 0 }).toStaffId, 's2');
+});
+
+test('prices a production line from the live recipe, never a typed guess', () => {
+  const recipe = { ingredients: [{ qty: 2, unitCost: 3000, wastePct: 0 }, { qty: 0.5, unitCost: 8000, wastePct: 10 }], yield: 10, overhead: 2000 };
+  assert.equal(recipeBatchCost(recipe), 10400);
+  const line = planLineCost({ recipe }, 30);
+  assert.equal(line.batches, 3);
+  assert.equal(line.ingredientCost, 31200);
+  assert.equal(line.totalCost, 37200);
+  assert.equal(planLineCost({}, 10).totalCost, 0);
+});
+
+test('validates production plans and keeps the override honest', () => {
+  const rows = [{ id: 'p1', name: 'Chapati', deleted: false, isService: false }];
+  const good = validateProductionPlan({ businessDate: '2026-09-27', category: 'Eatery', lines: [{ productId: 'p1', batchQty: 10 }] }, rows);
+  assert.equal(good.businessDate, '2026-09-27');
+  assert.equal(good.lines[0].batchQty, 10);
+  assert.equal(good.overrideTotal, null);
+  const over = validateProductionPlan({ businessDate: '2026-09-27', lines: [{ productId: 'p1', batchQty: 10 }], overrideTotal: 15000 }, rows);
+  assert.equal(over.overrideTotal, 15000);
+  assert.equal(validateProductionPlan({ businessDate: '2026-02-30', lines: [{ productId: 'p1', batchQty: 1 }] }, rows).code, 'INVALID_DATE');
+  assert.equal(validateProductionPlan({ businessDate: '2026-09-27', lines: [] }, rows).code, 'INVALID_LINES');
+  assert.equal(validateProductionPlan({ businessDate: '2026-09-27', lines: [{ productId: 'ghost', batchQty: 1 }] }, rows).code, 'UNKNOWN_PRODUCT');
+  assert.equal(validateProductionPlan({ businessDate: '2026-09-27', category: 'Tailoring', lines: [{ productId: 'p1', batchQty: 1 }] }, rows).code, 'INVALID_CATEGORY');
+  assert.equal(validateProductionPlan({ businessDate: '2026-09-27', lines: [{ productId: 'p1', batchQty: 0 }] }, rows).code, 'INVALID_QUANTITY');
 });

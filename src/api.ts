@@ -1,4 +1,24 @@
-import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote, CloseSummary } from './types';
+import { Product, Supplier, SupplierPrice, StaffMember, Sale, Expense, ExpenseItem, StoreSettings, CreditPayment, TailoringOrder, DesignOrder, Booking, RepairJob, CashTransfer, CreditEat, ProductionRegister, WastageLog, MomoTransfer, Quote, type CloseSummary, type ProductionPlanRecord } from './types';
+export type { CloseSummary, ProductionPlanRecord };
+
+export const productionPlanApi = {
+  get: (date: string, category?: string, branch?: string) => {
+    const q = new URLSearchParams({ date });
+    if (category) q.set('category', category);
+    if (branch !== undefined) q.set('branch', branch);
+    return api<ProductionPlanRecord[]>(`/api/production-plans?${q.toString()}`, { fresh: true });
+  },
+  save: (body: {
+    businessDate: string;
+    category: string;
+    branch?: string;
+    lines: Array<{ productId: string; batchQty: number }>;
+    overrideTotal?: number | null;
+    note?: string;
+    clientWriteId?: string;
+  }) => api<ProductionPlanRecord & { duplicate?: boolean }>('/api/production-plans', { method: 'POST', body: JSON.stringify(withWriteId(body)) }),
+  remove: (id: string) => api<{ success: boolean }>(`/api/production-plans/${id}`, { method: 'DELETE' }),
+};
 import type { CustomerProfile } from './utils/customers';
 import { stashSyncReview } from './utils/syncReview';
 
@@ -1008,9 +1028,10 @@ async function waitForTokenMint(): Promise<void> {
   }
 }
 
-async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number }, writeMeta?: WriteMeta): Promise<T> {
+async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; store?: boolean | number; silentManager?: boolean }, writeMeta?: WriteMeta): Promise<T> {
   const isRead = !options || !options.method || options.method === 'GET';
   const isControl = isControlPath(path);
+  const silentManager = Boolean((options as { silentManager?: boolean } | undefined)?.silentManager);
 
   if (isRead && !isControl) {
     const hit = getCacheMeta<T>(path);
@@ -1112,8 +1133,8 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
             revokeRetried = false;
           }
         }
-        if (res.status === 403 && code === 'MANAGER_REQUIRED') {
-          try { window.dispatchEvent(new CustomEvent('boss-pos-manager-required', { detail: { path } })); } catch {}
+        if (res.status === 403 && code === 'MANAGER_REQUIRED' && !silentManager) {
+          try { window.dispatchEvent(new CustomEvent('boss-pos-manager-required', { detail: { path, usedStaffToken: Boolean(getStaffToken()) } })); } catch {}
         }
         const transientStatus =
           res.status === 502 || res.status === 503 || res.status === 504 ||
@@ -1503,7 +1524,7 @@ export interface HandoverSummary {
 }
 
 export const handoverApi = {
-  pending: () => api<{ actor: { id: string | null; name: string; role: string }; count: number; rows: MomoTransfer[] }>('/api/money-handover/pending', { fresh: true }),
+  pending: () => api<{ actor: { id: string | null; name: string; role: string }; count: number; rows: MomoTransfer[] }>('/api/money-handover/pending', { fresh: true, silentManager: true }),
   confirm: (id: string, note?: string) => api<MomoTransfer & { duplicate?: boolean }>(`/api/money-handover/${id}/confirm`, { method: 'POST', body: JSON.stringify({ note: note || '' }) }),
   summary: (params?: { from?: string; to?: string; branch?: string }) => {
     const q = new URLSearchParams();
@@ -1511,7 +1532,7 @@ export const handoverApi = {
     if (params?.to) q.set('to', params.to);
     if (params?.branch) q.set('branch', params.branch);
     const qs = q.toString();
-    return api<HandoverSummary>(`/api/money-handover/summary${qs ? `?${qs}` : ''}`, { fresh: true });
+    return api<HandoverSummary>(`/api/money-handover/summary${qs ? `?${qs}` : ''}`, { fresh: true, silentManager: true });
   },
 };
 

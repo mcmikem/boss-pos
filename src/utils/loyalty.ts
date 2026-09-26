@@ -1,4 +1,5 @@
 import type { Sale } from '../types';
+import { isLiveSale } from './saleStatus';
 
 // Regulars reward: every Nth visit earns a one-tap percent discount.
 // Identity is just the sale's customerName — good enough for a shop where
@@ -18,7 +19,7 @@ export function pastVisits(sales: Sale[], name: string): number {
   if (!want) return 0;
   let n = 0;
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (normalizeCustomer(s.customerName) === want) n++;
   }
   return n;

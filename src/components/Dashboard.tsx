@@ -17,6 +17,7 @@ import type { Sale, Expense, Product, StoreSettings, MomoTransfer } from '../typ
 import { t } from '../utils/i18n';
 import { localDayKey, todayLocalKey } from '../utils/dates';
 import { eateryDayClose } from '../utils/eateryClose';
+import { isLiveSale } from '../utils/saleStatus';
 import ReceiptModal from './ReceiptModal';
 import { confirmDialog, promptDialog } from './Dialog';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
@@ -67,7 +68,7 @@ export default function Dashboard({
   const todayStr = todayLocalKey();
 
   const todayAllSales = sales.filter(s => localDayKey(s.timestamp) === todayStr);
-  const todaySales = todayAllSales.filter(s => !s.refunded);
+  const todaySales = todayAllSales.filter(isLiveSale);
   const todaySalesSum = todaySales.reduce((acc, s) => acc + s.total, 0);
 
   // Split legs attribute to their own tiles so Cash Box + Sente z'Esimu
@@ -588,6 +589,7 @@ export default function Dashboard({
                       <p className="text-xs font-bold text-white uppercase tracking-wider group-hover:text-gold-light transition-colors">{sale.orderNumber}</p>
                       {paymentBadge}
                       {sale.refunded && <span className="text-[10px] font-bold bg-rose-950/40 text-rose-400 px-2 py-0.5 border border-rose-800/30 rounded uppercase tracking-wider">Refunded</span>}
+                      {sale.voided && <span className="text-[10px] font-bold bg-zinc-800 text-zinc-400 px-2 py-0.5 border border-zinc-700 rounded uppercase tracking-wider">Voided</span>}
                     </div>
                     <p className="text-xs text-zinc-500 font-bold mt-0.5">
                       {new Date(sale.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {sale.items.length} items{sale.customerName ? ` • ${sale.customerName}` : ''} • {sale.staffName ? sale.staffName : 'unattributed'}
@@ -640,7 +642,7 @@ export default function Dashboard({
                       </span>
                       <span className="text-zinc-500 shrink-0">x{item.qty}</span>
                       <span className="text-gold-light shrink-0">{formatCurrency(item.lineTotal)}</span>
-                      {!selectedSaleForModal.refunded && onReturnItems && (
+                      {!selectedSaleForModal.refunded && !selectedSaleForModal.voided && onReturnItems && (
                         <button onClick={async () => {
                             const raw = item.qty > 1
                               ? await promptDialog({ title: 'Return items', message: `Return how many of ${item.productName}? (max ${item.qty})`, defaultValue: String(item.qty), inputMode: 'numeric', placeholder: String(item.qty), validate: value => { const n = Math.round(parseFloat(value) || 0); return n >= 1 && n <= item.qty ? null : `Enter 1 – ${item.qty}.`; }, confirmLabel: 'Return' })
@@ -681,6 +683,11 @@ export default function Dashboard({
                 Refunded {selectedSaleForModal.refundedAt ? `• ${new Date(selectedSaleForModal.refundedAt).toLocaleDateString()}` : ''}
               </div>
             )}
+            {selectedSaleForModal.voided && (
+              <div className="mt-3 bg-zinc-900 border border-zinc-700 rounded-xl py-2 text-center text-xs font-black text-zinc-400 uppercase tracking-widest">
+                Deleted (voided){selectedSaleForModal.voidedAt ? ` • ${new Date(selectedSaleForModal.voidedAt).toLocaleDateString()}` : ''} — not counted anywhere
+              </div>
+            )}
 
             <div className="flex gap-2 mt-4">
               <button onClick={() => setShowReceiptModal(true)}
@@ -689,7 +696,7 @@ export default function Dashboard({
               </button>
             </div>
             <div className="flex gap-2 mt-2">
-              {!selectedSaleForModal.refunded && (
+              {!selectedSaleForModal.refunded && !selectedSaleForModal.voided && (
                 <button onClick={async () => {
                   if (await confirmDialog({ title: 'Refund sale', message: 'Refund this sale? Stock will be restored.', confirmLabel: 'Refund', danger: true })) {
                     onRefundSale(selectedSaleForModal.id);

@@ -2,12 +2,12 @@ import { useState, useEffect, Suspense, useRef, useMemo, useCallback } from 'rea
 import { lazyRetry } from './utils/lazyRetry';
 import FirstSaleTour, { isTourDone } from './components/FirstSaleTour';
 import { 
-  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight
+  ShoppingCart, Package, TrendingUp, Settings, X, Palette, Wallet, Download, Scissors, RefreshCw, LayoutGrid, ReceiptText, Moon, Sun, User, CalendarCheck, Wrench, Ellipsis, ChevronRight, Mail
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig, SaleSaveResult } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, closeSummaryApi, productionPlanApi, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { checkoutDraftScopeKey, readCheckoutDraftSync, loadActiveCheckoutDraft, saveActiveCheckoutDraft, clearActiveCheckoutDraft, type CheckoutDraftScope } from './utils/checkoutDraft';
@@ -27,6 +27,7 @@ import { readSyncReview, clearSyncReview, buildReconnectReport, type SyncReviewI
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
+import { buildCloseSummaryPayload, closeSummaryClientWriteId } from './utils/closeSummary';
 import { readClientErrorLog, supportSummary, type ClientErrorRecord } from './utils/sentry';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
@@ -48,6 +49,7 @@ const Analytics = lazyRetry(() => import('./components/Analytics'));
 const Expenses = lazyRetry(() => import('./components/Expenses'));
 const CategoryRegister = lazyRetry(() => import('./components/CategoryRegister'));
 const HandoverPrompt = lazyRetry(() => import('./components/HandoverPrompt'));
+const CloseSummaryInbox = lazyRetry(() => import('./components/CloseSummaryInbox'));
 const CloseReminderBar = lazyRetry(() => import('./components/CloseReminderBar'));
 const Sales = lazyRetry(() => import('./components/Sales'));
 
@@ -457,9 +459,29 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // confirm. Drives the full-screen "did you receive this?" prompt.
   const [pendingHandoffs, setPendingHandoffs] = useState<MomoTransfer[]>([]);
   const [handoffSummary, setHandoffSummary] = useState<HandoverSummary | null>(null);
+  // Owner/manager evening briefings filed at close. Unread ones pop up once;
+  // the inbox stays one tap away in the header for managers.
+  const [closeSummaries, setCloseSummaries] = useState<CloseSummary[]>([]);
+  const [showSummaryInbox, setShowSummaryInbox] = useState(false);
+  const summaryAutoOpened = useRef(false);
+  const [seenSummaryIds, setSeenSummaryIds] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('boss_pos_seen_summaries') || '[]');
+      return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
+    } catch { return []; }
+  });
+  const markSummariesSeen = useCallback((ids: string[]) => {
+    setSeenSummaryIds(prev => {
+      const next = [...prev];
+      for (const id of ids) if (!next.includes(id)) next.push(id);
+      try { localStorage.setItem('boss_pos_seen_summaries', JSON.stringify(next.slice(-200))); } catch {}
+      return next.slice(-200);
+    });
+  }, []);
   const activeStaff = activeStaffOf(staffList, activeStaffId);
   const activeRole = activeStaff?.role || null;
-  const isManager = isManagerRole(activeRole, staffConfigured);
+  const [staffLoaded, setStaffLoaded] = useState(false);
+  const isManager = staffLoaded ? isManagerRole(activeRole, staffConfigured) : activeRole === 'manager';
   // Manager-chosen cashier doors (Settings → Staff). Sell + Spend always on.
   const cashierDoors = useMemo<TillTab[]>(() => settings.cashierTabs ?? ['registers'], [settings.cashierTabs]);
   const tabOpen = (tab: 'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'): boolean =>
@@ -579,6 +601,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setSuppliers(d.suppliers);
     setSupplierPrices(d.supplierPrices || []);
     setStaffList(d.staff || []);
+    setStaffLoaded(true);
     try {
       const tomb = readDeletedSales();
       setSales((d.sales || []).filter(s => !tomb.has(s.id)));
@@ -658,8 +681,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       }).catch(fail('products')),
       supplierApi.list().then(setSuppliers).catch(fail('suppliers')),
       supplierPriceApi.list().then(setSupplierPrices).catch(fail('supplier prices')),
-      staffApi.list().then(setStaffList).catch(fail('staff')),
-      saleApi.list().then(setSales).catch(fail('sales')),
+      staffApi.list().then(list => { setStaffList(list); setStaffLoaded(true); }).catch(() => { setStaffLoaded(true); fail('staff')(); }),
+      saleApi.list().then(list => {
+        try {
+          const tomb = readDeletedSales();
+          setSales(list.filter(s => !tomb.has(s.id)));
+        } catch { setSales(list); }
+      }).catch(fail('sales')),
       expenseApi.list().then(list => {
         try {
           const tomb = readDeletedExpenses();
@@ -871,12 +899,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // boots or the SSE stream reports activity, so a handover raised on another
   // phone surfaces here within seconds.
   const refreshPendingHandoffs = useCallback(async () => {
-    if (authState !== 'ready' || !activeStaff) return;
+    if (authState !== 'ready' || !isManager) return;
+    if (staffConfigured && !activeStaff) return;
     try {
       const res = await handoverApi.pending();
       setPendingHandoffs(res.rows || []);
     } catch {}
-  }, [authState, activeStaff]);
+  }, [authState, isManager, staffConfigured, activeStaff]);
 
   useEffect(() => {
     refreshPendingHandoffs();
@@ -904,6 +933,47 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       triggerToast(err instanceof Error ? err.message.slice(0, 110) : 'Could not confirm', 'error');
     }
   }, [refreshPendingHandoffs, refreshHandoverSummary, triggerToast]);
+
+  const refreshCloseSummaries = useCallback(async () => {
+    if (authState !== 'ready' || !isManager) return;
+    try {
+      const res = await closeSummaryApi.inbox();
+      setCloseSummaries(res.rows || []);
+    } catch {}
+  }, [authState, isManager]);
+
+  useEffect(() => {
+    refreshCloseSummaries();
+  }, [refreshCloseSummaries]);
+
+  const unreadSummaries = closeSummaries.filter(s => !seenSummaryIds.includes(s.id));
+  useEffect(() => {
+    if (summaryAutoOpened.current) return;
+    if (authState !== 'ready' || !isManager || unreadSummaries.length === 0) return;
+    summaryAutoOpened.current = true;
+    setShowSummaryInbox(true);
+  }, [authState, isManager, unreadSummaries.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleReadCloseSummary = useCallback(async (id: string) => {
+    markSummariesSeen([id]);
+    try {
+      const updated = await closeSummaryApi.markRead(id);
+      setCloseSummaries(prev => prev.map(s => (s.id === id ? updated : s)));
+    } catch {}
+  }, [markSummariesSeen]);
+
+  const handleShareCloseSummary = useCallback(async (id: string) => {
+    const row = closeSummaries.find(s => s.id === id);
+    if (!row) return;
+    const url = supplierWhatsAppUrl(settings.ownerPhone, row.body);
+    if (!url) {
+      triggerToast('Add the owner number in Settings first', 'error');
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
+    try { await closeSummaryApi.markShared(id); } catch {}
+    refreshCloseSummaries();
+  }, [closeSummaries, refreshCloseSummaries, triggerToast, settings.ownerPhone]);
 
   // PWA install prompt capture (preventDefault keeps it for our own button).
   useEffect(() => {
@@ -1072,15 +1142,23 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, []);
 
   useEffect(() => {
-    const onManagerRequired = () => {
-      triggerToast('Manager approval required — switch to a manager account.', 'error', {
-        label: 'Switch seller',
-        onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
-      });
+    const onManagerRequired = (event: Event) => {
+      const usedStaffToken = (event as CustomEvent<{ usedStaffToken?: boolean }>)?.detail?.usedStaffToken;
+      const managerProfile = activeStaff?.role === 'manager';
+      triggerToast(
+        managerProfile && !usedStaffToken
+          ? 'Manager profile, manager credential missing — enter the manager staff PIN again.'
+          : 'Manager approval required — switch to a manager account.',
+        'error',
+        {
+          label: managerProfile && !usedStaffToken ? 'Sign in' : 'Switch seller',
+          onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+        }
+      );
     };
     window.addEventListener('boss-pos-manager-required', onManagerRequired);
     return () => window.removeEventListener('boss-pos-manager-required', onManagerRequired);
-  }, []);
+  }, [activeStaff?.role]);
 
   useEffect(() => {
     if (products.length > 0) saveProducts(products);
@@ -1774,7 +1852,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Permanently delete a wrong order: manager PIN + confirm, stock goes back in.
   const handleVoidSale = async (saleId: string) => {
     const sale = sales.find(s => s.id === saleId);
-    if (!sale || sale.refunded) return;
+    if (!sale) return;
+    if (sale.refunded || sale.voided) {
+      triggerToast(`Already ${sale.voided ? 'deleted' : 'refunded'} — nothing left to delete`, 'info');
+      return;
+    }
     if (!(await requirePin(`Enter MANAGER PIN to delete ${sale.orderNumber}:`, true))) return;
     if (!(await confirmDialog({ title: 'Delete sale', message: `Delete ${sale.orderNumber} (${formatCurrency(sale.total)}) for good? The items go back into stock and it disappears from reports.`, confirmLabel: 'Delete', danger: true }))) return;
     // Tombstone FIRST so a stale boot cache can never resurrect it.
@@ -1806,7 +1888,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const handleRefundSale = async (saleId: string, skipPin = false): Promise<boolean> => {
     const saleToRefund = sales.find(s => s.id === saleId);
-    if (!saleToRefund || saleToRefund.refunded) return false;
+    if (!saleToRefund) return false;
+    if (saleToRefund.refunded || saleToRefund.voided) {
+      triggerToast(`Already ${saleToRefund.voided ? 'deleted' : 'refunded'} — nothing left to refund`, 'info');
+      return false;
+    }
     if (!skipPin && !(await requirePin(`Enter MANAGER PIN to refund ${saleToRefund.orderNumber}:`, true))) return false;
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, refunded: true, refundedAt: new Date().toISOString() } : s));
     setProducts(prevProducts => {
@@ -1842,7 +1928,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Scale discounts + split legs by the kept ratio so the math still ties.
   const handleReturnItems = async (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => {
     const sale = sales.find(s => s.id === saleId);
-    if (!sale || sale.refunded) return;
+    if (!sale) return;
+    if (sale.refunded || sale.voided) {
+      triggerToast(`Already ${sale.voided ? 'deleted' : 'refunded'} — nothing left to return`, 'info');
+      return;
+    }
     const kept = computeKeptItems(sale.items, returns);
     const returnedQty = sale.items.reduce((a, i) => a + i.qty, 0) - kept.reduce((a, i) => a + i.qty, 0);
     if (returnedQty <= 0) return;
@@ -1896,7 +1986,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // without a manager PIN. Anything older goes through the normal refund path.
   const handleUndoSale = async (saleId: string) => {
     const sale = sales.find(s => s.id === saleId);
-    if (!sale || sale.refunded) return;
+    if (!sale) return;
+    if (sale.refunded || sale.voided) {
+      triggerToast(`Already ${sale.voided ? 'deleted' : 'refunded'} — nothing left to undo`, 'info');
+      return;
+    }
     const ageMs = Date.now() - Date.parse(sale.timestamp);
     if (!Number.isFinite(ageMs) || ageMs > 60_000) {
       triggerToast('Too late to undo — ask a manager to refund it instead', 'error');
@@ -1919,6 +2013,92 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       if (err instanceof ApiError && (err.code === 'CLOSE_SESSION_NOT_FOUND' || err.status === 404)) return;
       triggerToast('Could not reopen the books on the server — check the connection', 'error');
     }
+  };
+
+  // Filing the close: the evening briefing goes to the owner's in-app inbox
+  // the moment the day is closed. Idempotent per day + department, and the
+  // one story the till, the inbox and WhatsApp all tell.
+  const handleCloseDayFinished = async (close: {
+    businessDate: string;
+    branch: string;
+    cash: {
+      collected: number;
+      cashSales: number;
+      phoneCollected?: number;
+      openingCapital: number;
+      drawerExpenses: number;
+      expectedInDrawer: number;
+      assigned: number;
+      unassigned: number;
+      countedCash?: number | null;
+      variance?: number | null;
+    };
+    closedByName: string;
+  }): Promise<{ id: string; body: string } | null> => {
+    try {
+      const dayTotals = closeTotals(close.businessDate, sales, expenses, creditPayments, creditEats);
+      const awaiting = momoTransfers
+        .filter(t => t.category === close.branch && t.receiptStatus === 'requested' && (t.createdAt || '').slice(0, 10) === close.businessDate)
+        .reduce((sum, t) => sum + (t.amount || 0), 0);
+      const payload = buildCloseSummaryPayload({
+        shopName: settings.shopName || 'My Shop',
+        businessDate: close.businessDate,
+        branch: close.branch,
+        tookToday: close.cash.collected,
+        cashSales: close.cash.cashSales,
+        phoneSales: close.cash.phoneCollected || 0,
+        openingFloat: close.cash.openingCapital,
+        drawerExpenses: close.cash.drawerExpenses,
+        expectedInDrawer: close.cash.expectedInDrawer,
+        assigned: close.cash.assigned,
+        unassigned: close.cash.unassigned,
+        counted: close.cash.countedCash ?? null,
+        variance: close.cash.variance ?? null,
+        creditGivenOut: dayTotals.credit,
+        creditCollectedBack: dayTotals.collectedCash,
+        awaitingHandover: awaiting,
+        closedByName: close.closedByName || activeStaff?.name || staffName || '',
+        ownerName: settings.ownerName || '',
+      });
+      const sent = await closeSummaryApi.send({
+        businessDate: close.businessDate,
+        branch: close.branch,
+        channel: 'in_app',
+        recipientRole: 'owner',
+        recipientName: settings.ownerName || 'Owner',
+        headline: payload.headline,
+        body: payload.body,
+        totals: payload.totals,
+        clientWriteId: closeSummaryClientWriteId(close.businessDate, close.branch),
+      });
+      return { id: sent.id, body: payload.body };
+    } catch {
+      return null;
+    }
+  };
+
+  // Committing tomorrow's plan: the server prices every line from the live
+  // recipes and files the record; the same total becomes that department's
+  // ingredient money so the kitchen works from what was just worked out.
+  // Whoever closed the day can do this — the settings PUT gate is bypassed
+  // by design, because this scoped, audited write IS the close action.
+  const handleCommitProductionPlan = async (plan: {
+    businessDate: string;
+    category: string;
+    lines: Array<{ productId: string; batchQty: number }>;
+    overrideTotal?: number | null;
+    note?: string;
+  }) => {
+    const saved = await productionPlanApi.save({
+      ...plan,
+      branch: tillBranch || '',
+      clientWriteId: `plan:${plan.businessDate}:${plan.category}:${tillBranch || 'shop'}`,
+    });
+    setSettings(prev => ({
+      ...prev,
+      eodCapital: { ...(prev.eodCapital || {}), [plan.category]: saved.total },
+    }));
+    return saved;
   };
 
   // What the till has left for tomorrow's production: the capital set aside at
@@ -2094,6 +2274,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       try { localStorage.setItem('boss_pos_staff_id', s.id); } catch {}
       setStaffName(s.name);
       setShowStaffSwitcher(false);
+      fetchAllData().catch(() => {});
       // Shift handover: count the drawer as it changes hands (optional, skippable).
       if (prevName && prevName !== s.name) {
         const raw = await promptDialog({ title: 'Shift handover', message: `Handover ${prevName} → ${s.name}.\nCount the drawer now (UGX)? Empty = skip.`, defaultValue: '', inputMode: 'numeric', placeholder: '0 = skip', confirmLabel: 'Count' });
@@ -2646,6 +2827,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             formatCurrency={formatCurrency} triggerToast={triggerToast}
             onBack={() => setActiveTab('analytics')}
             onReopenDay={handleReopenDay}
+            onCloseDayFinished={handleCloseDayFinished}
+            onShareCloseSummary={handleShareCloseSummary}
+            onCommitProductionPlan={handleCommitProductionPlan}
+            branch={tillBranch}
+            ownerPhone={settings.ownerPhone || ''}
+            closeSummaryAuto={settings.closeSummaryAuto !== false}
             lang={settings.language}
             onPrintClose={() => printDailyClose(new Date().toISOString().slice(0, 10), sales, expenses, products)}
             onSendClose={() => {
@@ -2828,6 +3015,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             {staffConfigured && <span className="hidden sm:inline text-[8px] text-zinc-600 shrink-0">{activeStaff?.role === 'manager' ? 'MGR' : 'CSH'}</span>}
           </button>
           <NotificationsBell onNavigate={(t) => setActiveTab(t)} />
+          {isManager && (
+            <button onClick={() => { refreshCloseSummaries(); setShowSummaryInbox(true); }}
+              className="relative p-1.5 bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 text-zinc-400 hover:text-gold-brand rounded-xl transition-all cursor-pointer shrink-0"
+              title={unreadSummaries.length > 0 ? `${unreadSummaries.length} unread close ${unreadSummaries.length === 1 ? 'summary' : 'summaries'}` : 'Close summaries'}
+              aria-label={unreadSummaries.length > 0 ? `Close summaries, ${unreadSummaries.length} unread` : 'Close summaries'}>
+              <Mail className="w-4 h-4" />
+              {unreadSummaries.length > 0 && (
+                <span aria-hidden="true" className="absolute -top-1.5 -right-1.5 bg-gold-brand text-black text-[9px] font-black min-w-4 h-4 px-1 rounded-full flex items-center justify-center border border-[#0F0F0F]">
+                  {unreadSummaries.length > 9 ? '9+' : unreadSummaries.length}
+                </span>
+              )}
+            </button>
+          )}
           <button onClick={() => {
             const next = theme === 'light' ? 'dark' : 'light';
             setTheme(next);
@@ -2857,6 +3057,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             formatCurrency={formatCurrency}
             onConfirm={confirmHandoff}
             onDismiss={() => {}}
+          />
+        )}
+        {showSummaryInbox && (
+          <CloseSummaryInbox
+            summaries={closeSummaries}
+            formatCurrency={formatCurrency}
+            triggerToast={triggerToast}
+            onRead={handleReadCloseSummary}
+            onShare={handleShareCloseSummary}
+            onClose={() => {
+              markSummariesSeen(closeSummaries.map(s => s.id));
+              setShowSummaryInbox(false);
+              refreshCloseSummaries();
+            }}
           />
         )}
         {!isOnline && (
@@ -3237,7 +3451,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Luganda covers Sell, Expenses, Money, Reports and Close day. Settings stay in English.</p>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop hours <SettingHelp label="Shop hours" text="Opening and closing times plus days off. Unaccounted-cash flags wait until after close — no more mid-day alarms for money that simply hasn't been moved yet. Blank = flag anytime (old behaviour)." /></label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Shop hours <SettingHelp label="Shop hours" text="Opening and closing times plus days off. End-of-day money nudges wait until after close — no more mid-day alarms for money that simply hasn't been assigned yet. Blank = nudge anytime (old behaviour)." /></label>
                 <div className="flex gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">Opens</p>

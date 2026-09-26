@@ -45,6 +45,18 @@ test('toast and notification changes are announced', () => {
   assert.match(read('src/components/NotificationsBell.tsx'), /aria-live/);
 });
 
+test('sold-out catalog taps always explain the next action', () => {
+  const sales = read('src/components/Sales.tsx');
+  assert.match(sales, /onOutOfStock=\{handleOutOfStock\}/);
+  assert.equal((sales.match(/onOutOfStock=\{handleOutOfStock\}/g) || []).length >= 2, true);
+});
+
+test('variant taps cannot be swallowed by the backdrop before the click', () => {
+  const sales = read('src/components/Sales.tsx');
+  assert.match(sales, /onMouseDown=\{\(event\) => \{ if \(event\.target === event\.currentTarget\) setVariantProduct\(null\); \}\}/);
+  assert.doesNotMatch(sales, /onMouseDown=\{\(\) => setVariantProduct\(null\)\}/);
+});
+
 test('barcode scanner is split from the initial Sales import', () => {
   const sales = read('src/components/Sales.tsx');
   assert.match(sales, /lazyRetry\(\(\) => import\('\.\/BarcodeScanner'\)\)/);

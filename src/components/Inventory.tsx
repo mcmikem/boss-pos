@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import { 
-  Search, Plus, AlertTriangle, Edit, Package, Save, X,
+  Search, Plus, Edit, Package, Save, X,
   PlusCircle, Truck, Hash, Barcode, Image, Trash2, Settings2, ListChecks, ChefHat, Upload
 } from 'lucide-react';
 import type { Product, ProductVariant, Supplier, SupplierPrice, Sale, Expense, Recipe, RecipeIngredient } from '../types';
@@ -10,6 +10,7 @@ import StocktakePanel from './StocktakePanel';
 import { RECIPE_UNITS, calculateRecipe, effectiveCost, emptyRecipe, suggestedFor, applySupplierPricesToRecipes } from '../utils/recipe';
 import { parseQty } from '../utils/units';
 import { expiryStatus, daysUntilExpiry } from '../utils/dates';
+import { LABELS, MoneyHero, MoneyStat } from './Design';
 import { staleProducts } from '../utils/stale';
 import { quotesForProduct, bestQuoteFor, restockQtyFor, buildRestockMessage, supplierWhatsAppUrl } from '../utils/suppliers';
 import { parseProductsCsv, PRODUCTS_TEMPLATE, type ImportResult } from '../utils/csvImport';
@@ -742,38 +743,34 @@ export default function Inventory({
         </div>
       </section>
 
-      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3" aria-label="Stock at a glance">
         <div className="boss-card p-3 border-l-4 border-l-zinc-500 flex flex-col justify-between">
-          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Products</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-white font-display">{products.length}</span>
-          </div>
+          <MoneyStat label="Products" value={products.length} />
         </div>
-        <div className="boss-card p-3 border-l-4 border-l-cyan-500 flex flex-col justify-between" title="Capital locked on shelves: cost × quantity on hand">
-          <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">On shelves</p>
-          <div className="flex items-baseline gap-2 mt-2 min-w-0">
-            <span className="text-lg sm:text-xl font-black text-white font-display truncate tabular-nums" title={formatCurrency(stockValue)}>{formatCurrency(stockValue)}</span>
-          </div>
+        <div className="boss-card p-3 border-l-4 border-l-cyan-500 flex flex-col justify-between">
+          <MoneyHero
+            label={LABELS.moneyOnShelves}
+            value={formatCurrency(stockValue)}
+            sub="Cost × quantity on hand"
+            tone="white"
+            title={formatCurrency(stockValue)}
+          />
         </div>
         <div className="boss-card p-3 border-l-4 border-l-rose-500 flex flex-col justify-between" id="tour-stock-alert">
-          <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">Low Stock</p>
-          <div className="flex items-center gap-2 mt-2">
-            <span className={`text-2xl font-black font-display ${lowStockProducts.length > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-500'}`}>
-              {lowStockProducts.length}
-            </span>
-            {lowStockProducts.length > 0 && <AlertTriangle className="w-4 h-4 text-rose-400 animate-bounce" />}
-          </div>
+          <MoneyStat
+            label={LABELS.lowStock}
+            value={lowStockProducts.length}
+            tone={lowStockProducts.length > 0 ? 'rose' : 'zinc'}
+            sub={lowStockProducts.length > 0 ? 'Needs restocking' : undefined}
+          />
         </div>
-        <div className="boss-card p-3 border-l-4 border-l-amber-500 flex flex-col justify-between" title="Stocked items with no sale in 30+ days — dead money, consider clearance">
-          <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Stale</p>
-          <div className="flex items-center gap-2 mt-2">
-            <span className={`text-2xl font-black font-display ${staleList.length > 0 ? 'text-amber-400' : 'text-zinc-500'}`}>
-              {staleList.length}
-            </span>
-          </div>
-          {deadCapital > 0 && (
-            <p className="text-[10px] text-zinc-500 font-bold uppercase mt-1 truncate tabular-nums">{formatCurrency(deadCapital)} tied up</p>
-          )}
+        <div className="boss-card p-3 border-l-4 border-l-amber-500 flex flex-col justify-between">
+          <MoneyStat
+            label={LABELS.notSelling}
+            value={staleList.length}
+            tone={staleList.length > 0 ? 'amber' : 'zinc'}
+            sub={deadCapital > 0 ? `${formatCurrency(deadCapital)} tied up` : 'No sale in 30+ days'}
+          />
         </div>
       </section>
 
@@ -898,7 +895,7 @@ export default function Inventory({
                       const d = staleDaysById.get(product.id);
                       return (
                         <p className="text-[10px] text-amber-500/90 font-bold mt-0.5 uppercase" title="No sale in 30+ days — consider a clearance price">
-                          Stale{d === null ? '' : ` ${d}d`} — clear it?
+                          Not selling{d === null ? '' : ` ${d}d`} — clear it?
                         </p>
                       );
                     })()}

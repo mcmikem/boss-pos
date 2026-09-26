@@ -123,6 +123,32 @@ test('handover history is separated from today', () => {
   assert.match(register, /Moved today/);
 });
 
+test('a manager profile without a manager credential gets a different, actionable warning', () => {
+  const api = read('src/api.ts');
+  const app = read('src/App.tsx');
+  assert.match(api, /usedStaffToken: Boolean\(getStaffToken\(\)\)/);
+  assert.match(app, /Manager profile, manager credential missing — enter the manager staff PIN again\./);
+  assert.match(app, /label: managerProfile && !usedStaffToken \? 'Sign in' : 'Switch seller'/);
+  assert.match(app, /setShowStaffSwitcher\(false\);\s*\n\s*fetchAllData\(\)\.catch\(\(\) => \{\}\);/);
+});
+
+test('background handover checks never raise the manager toast', () => {
+  const api = read('src/api.ts');
+  const app = read('src/App.tsx');
+  assert.match(api, /silentManager\?: boolean/);
+  assert.match(api, /MANAGER_REQUIRED' && !silentManager/);
+  assert.match(api, /pending.*fresh: true, silentManager: true/s);
+  assert.match(api, /money-handover\/summary.*fresh: true, silentManager: true/s);
+  assert.match(app, /if \(authState !== 'ready' \|\| !isManager\) return;/);
+});
+
+test('manager-only polling waits until staff membership is actually known', () => {
+  const app = read('src/App.tsx');
+  assert.match(app, /const \[staffLoaded, setStaffLoaded\] = useState\(false\);/);
+  assert.match(app, /const isManager = staffLoaded \? isManagerRole\(activeRole, staffConfigured\) : activeRole === 'manager';/);
+  assert.match(app, /setStaffList\(list\); setStaffLoaded\(true\);/);
+});
+
 test('a rejected credit explains WHY, not just "failed"', () => {
   const app = read('src/App.tsx');
   assert.match(app, /creditSaveFailure/);
@@ -209,4 +235,114 @@ test('the till unlock cannot downgrade a signed-in manager', () => {
   assert.equal(/staffApi\.verify[\s\S]{0,300}setAuthToken\(/.test(app), false);
   // A 401 drops the staff credential first and only re-locks when nothing is left.
   assert.match(api, /getStaffToken\(\) \|\| getAuthToken\(\)/);
+});
+
+test('closing a day files the owner summary automatically', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  assert.match(register, /onCloseDayFinished\?: \(close: \{/);
+  assert.match(register, /closeSummaryAuto !== false/);
+  assert.match(register, /Close summary sent to the owner/);
+  assert.match(register, /WhatsApp it/);
+  assert.match(app, /handleCloseDayFinished/);
+  assert.match(app, /closeSummaryApi\.send\(/);
+  assert.match(app, /closeSummaryClientWriteId\(close\.businessDate, close\.branch\)/);
+  assert.match(app, /recipientRole: 'owner'/);
+  assert.match(app, /onCloseDayFinished=\{handleCloseDayFinished\}/);
+});
+
+test('the owner summary tells one story in-app and on WhatsApp', () => {
+  const util = read('src/utils/closeSummary.ts');
+  assert.match(util, /export function buildCloseSummaryPayload/);
+  assert.match(util, /Expected in drawer/);
+  assert.match(util, /Not yet assigned/);
+  assert.match(util, /Counted:/);
+  assert.match(util, /Closed by/);
+});
+
+test('owner and managers have an inbox with read state and WhatsApp share', () => {
+  const app = read('src/App.tsx');
+  const inbox = read('src/components/CloseSummaryInbox.tsx');
+  assert.match(app, /closeSummaryApi\.inbox\(\)/);
+  assert.match(app, /closeSummaryApi\.markRead\(/);
+  assert.match(app, /closeSummaryApi\.markShared\(/);
+  assert.match(app, /setShowSummaryInbox\(true\)/);
+  assert.match(app, /unreadSummaries/);
+  assert.match(inbox, /role="dialog"/);
+  assert.match(inbox, /aria-modal="true"/);
+  assert.match(inbox, /Close summaries/);
+  assert.match(inbox, /WhatsApp/);
+});
+
+test('tomorrow is planned from recipes at close, not typed', () => {
+  const register = read('src/components/CategoryRegister.tsx');
+  const app = read('src/App.tsx');
+  const api = read('api/index.js');
+  assert.match(register, /Plan tomorrow/);
+  assert.match(register, /Same as today/);
+  assert.match(register, /Ingredient money needed/);
+  assert.match(register, /Use a different amount \(optional override\)/);
+  assert.match(register, /onCommitProductionPlan/);
+  assert.match(register, /Committed: /);
+  assert.match(app, /handleCommitProductionPlan/);
+  assert.match(app, /productionPlanApi\.save\(/);
+  assert.match(app, /eodCapital: \{ \.\.\.\(prev\.eodCapital \|\| \{\}\), \[plan\.category\]: saved\.total \}/);
+  assert.match(api, /CREATE TABLE IF NOT EXISTS production_plans/);
+  assert.match(api, /idx_production_plans_day/);
+  assert.match(api, /app\.post\('\/api\/production-plans'/);
+  assert.match(api, /app\.get\('\/api\/production-plans'/);
+  assert.match(api, /app\.delete\('\/api\/production-plans\/:id'/);
+});
+
+test('the morning starts from the plan, and closed days stay immutable', () => {
+  const sales = read('src/components/Sales.tsx');
+  const morning = read('src/components/MorningProduction.tsx');
+  const api = read('api/index.js');
+  assert.match(sales, /productionPlanApi\.get\(todayLocalKey\(\)\)/);
+  assert.match(sales, /plannedLines=\{plannedToday\}/);
+  assert.match(morning, /Planned last evening — make these first/);
+  assert.match(morning, /usePlannedLine/);
+  assert.match(api, /Plans never touch close_sessions/);
+  assert.match(api, /ON CONFLICT \(business_date, category, branch\) DO UPDATE/);
+});
+
+test('the design system rules every screen: one hero, one primary action, one vocabulary', () => {
+  const kit = read('src/components/Design.tsx');
+  assert.match(kit, /export function MoneyHero/);
+  assert.match(kit, /export function MoneyStat/);
+  assert.match(kit, /export function PrimaryAction/);
+  assert.match(kit, /export const LABELS/);
+  // Stock: money on shelves is the hero, the rest support it.
+  const stock = read('src/components/Inventory.tsx');
+  assert.match(stock, /<MoneyHero/);
+  assert.match(stock, /LABELS\.moneyOnShelves/);
+  assert.match(stock, /LABELS\.lowStock/);
+  assert.match(stock, /LABELS\.notSelling/);
+  // Expenses + Reports use the same heroes, not bespoke lookalikes.
+  const expenses = read('src/components/Expenses.tsx');
+  assert.match(expenses, /<MoneyHero/);
+  assert.match(expenses, /<MoneyStat/);
+  const reports = read('src/components/Analytics.tsx');
+  assert.match(reports, /<MoneyHero/);
+  assert.match(reports, /LABELS\.moneyIn/);
+});
+
+test('no screen speaks the old money language anymore', () => {
+  const files = [
+    'src/components/CategoryRegister.tsx',
+    'src/components/Inventory.tsx',
+    'src/components/Expenses.tsx',
+    'src/components/Analytics.tsx',
+    'src/components/Sales.tsx',
+    'src/components/Dashboard.tsx',
+    'src/components/MorningProduction.tsx',
+  ].map(read);
+  for (const source of files) {
+    assert.doesNotMatch(source, /Left to move/);
+    assert.doesNotMatch(source, /still out/i);
+    assert.doesNotMatch(source, /accounted for/i);
+    assert.doesNotMatch(source, /Collected today/);
+    assert.doesNotMatch(source, /NOT moved/);
+    assert.doesNotMatch(source, /FLAG for review/);
+  }
 });

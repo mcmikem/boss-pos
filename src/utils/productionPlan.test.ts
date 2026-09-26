@@ -127,3 +127,17 @@ describe('budget against the plan', () => {
     expect(shortfall(12400, 0, 37200)).toBe(24800);
   });
 });
+
+describe('planning scope', () => {
+  it('keeps a department plan to its own category', () => {
+    const products = [
+      { id: 'p-chap', name: 'Chapati', category: 'Eatery', cost: 400, price: 1000, stockQty: 30, lowStockThreshold: 5 },
+      { id: 'p-cola', name: 'Cola', category: 'Drinks', cost: 2000, price: 2500, stockQty: 40, lowStockThreshold: 5 },
+    ] as never;
+    const plan = buildProductionPlan(products, [
+      { productId: 'p-chap', batchQty: 10 },
+      { productId: 'p-cola', batchQty: 5 },
+    ], { businessDate: '2026-09-27', category: 'Eatery' });
+    expect(plan.lines.map(l => l.productId)).toEqual(['p-chap']);
+  });
+});

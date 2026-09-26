@@ -1,5 +1,6 @@
 import type { Sale, CreditEat, Product } from '../types';
 import { expiryStatus } from './dates';
+import { isLiveSale } from './saleStatus';
 
 // Boss morning-briefing math: pure + day-key-injected so tests don't depend
 // on the device clock or timezone helpers.
@@ -12,7 +13,7 @@ export function revenueOnDay(sales: Sale[], dayKey: string, dayOf: (ts: string) 
   let revenue = 0;
   let count = 0;
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (dayOf(s.timestamp) !== dayKey) continue;
     revenue += s.total || 0;
     count += 1;

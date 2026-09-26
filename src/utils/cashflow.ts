@@ -1,5 +1,6 @@
 import type { Expense, MomoTransfer, Product, ProductionRegister, Sale, WastageLog } from '../types';
 import { localDayKey } from './dates';
+import { isLiveSale } from './saleStatus';
 
 // ---------------------------------------------------------------------------
 // Drawer equation per department per day. Two separate questions, never mixed:
@@ -216,7 +217,7 @@ export function collectedByCategory(
 ): Record<string, number> {
   const map: Record<string, number> = {};
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (s.paymentMethod === 'Credit / Book') continue;
     if (localDayKey(s.timestamp) !== dayKey) continue;
     for (const item of s.items) {
@@ -304,7 +305,7 @@ export function tenderByCategory(
   const touch = (cat: string): { cash: number; momo: number } =>
     (map[cat] = map[cat] || { cash: 0, momo: 0 });
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (s.paymentMethod === 'Credit / Book') continue;
     if (localDayKey(s.timestamp) !== dayKey) continue;
     const cats = new Map<string, number>();
@@ -400,7 +401,7 @@ function madeOn(
 function soldOn(productId: string, sales: Sale[], day: string): number {
   let n = 0;
   for (const s of sales) {
-    if (s.refunded) continue;
+    if (!isLiveSale(s)) continue;
     if (localDayKey(s.timestamp) !== day) continue;
     for (const i of s.items) if (i.productId === productId) n += i.qty || 0;
   }
@@ -529,7 +530,7 @@ export function findMissingProduction(
     let soldSoFar = 0;
     if (salesForDay) {
       for (const s of salesForDay) {
-        if (s.refunded) continue;
+        if (!isLiveSale(s)) continue;
         if (localDayKey(s.timestamp) !== dayKey) continue;
         for (const i of s.items) if (i.productId === prod.id) soldSoFar += i.qty || 0;
       }
@@ -639,7 +640,7 @@ export function leftoverFor(
   wastage: WastageLog[],
   yesterdayKey: string,
 ): LeftoverRow[] {
-  const daySales = sales.filter((s) => !s.refunded && localDayKey(s.timestamp) === yesterdayKey);
+  const daySales = sales.filter((s) => isLiveSale(s) && localDayKey(s.timestamp) === yesterdayKey);
   // Opening at the START of yesterday (auto-carried from earlier days) so a
   // two-day-old tray still counts — yesterday's sales may have eaten it.
   let openingYesterday: Map<string, number>;
@@ -701,8 +702,8 @@ export function sellerRisk(sales: Sale[], dayKey?: string): SellerRisk[] {
     const key = (s.staffName || '').trim() || 'Unknown';
     const cur = map.get(key) || { name: key, sales: 0, revenue: 0, refunds: 0, discount: 0, risk: 'ok' as const, reason: '' };
     cur.sales += 1;
-    if (s.refunded) cur.refunds += 1;
-    else cur.revenue += s.total || 0;
+    if (isLiveSale(s)) cur.revenue += s.total || 0;
+    else cur.refunds += 1;
     cur.discount += s.discount || 0;
     map.set(key, cur);
   }
@@ -730,7 +731,7 @@ export function momoMismatch(
   dayKey: string,
 ): { momoSales: number; floatOut: number; gap: number } {
   const momoSales = sales
-    .filter((s) => !s.refunded && localDayKey(s.timestamp) === dayKey)
+    .filter((s) => isLiveSale(s) && localDayKey(s.timestamp) === dayKey)
     .filter((s) => s.paymentMethod === 'MTN MoMo' || s.paymentMethod === 'Airtel Money')
     .reduce((a, s) => a + (s.total || 0), 0);
   const floatOut = transfers
@@ -869,7 +870,7 @@ export function buildTheftFlags(args: {
     }
   }
   // Sold without morning production and without automatic leftover cover.
-  const daySales = args.sales.filter((s) => !s.refunded && localDayKey(s.timestamp) === args.dayKey);
+  const daySales = args.sales.filter((s) => isLiveSale(s) && localDayKey(s.timestamp) === args.dayKey);
   const lines = daySales.flatMap((s) => s.items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })));
   let opening: Map<string, number> | undefined;
   try {
@@ -898,7 +899,7 @@ export function buildTheftFlags(args: {
     });
   }
   // Refund / void velocity: ≥3 refunds or ≥20% of today's tickets.
-  const refundedCount = daySales.filter((s) => s.refunded).length + args.sales.filter((s) => s.refunded && localDayKey(s.timestamp) === args.dayKey).length / 2;
+  const refundedCount = daySales.filter((s) => s.refunded || s.voided).length + args.sales.filter((s) => (s.refunded || s.voided) && localDayKey(s.timestamp) === args.dayKey).length / 2;
   const ticketCount = daySales.length;
   const voids = args.voidCount || 0;
   const badTickets = Math.floor(refundedCount) + voids;

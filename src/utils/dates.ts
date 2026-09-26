@@ -26,6 +26,16 @@ export function todayLocalKey(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+// Shift a YYYY-MM-DD key by whole days in local time. Powers "plan
+// tomorrow" without leaking into UTC date arithmetic.
+export function shiftDayKey(dayKey: string, days: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey || '');
+  if (!m) return todayLocalKey();
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  d.setDate(d.getDate() + (Number.isFinite(days) ? Math.trunc(days) : 0));
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 // Whole days from today until a YYYY-MM-DD expiry date. Negative = expired,
 // 0 = expires today. NaN-safe: unparseable dates return null (no alert).
 export function daysUntilExpiry(expiryDate: string | undefined | null, todayKey?: string): number | null {

@@ -15,10 +15,10 @@ export function salesCsv(sales: Sale[]): string {
   const rows: unknown[][] = [];
   for (const s of sales) {
     if (s.items.length === 0) {
-      rows.push([s.timestamp, s.orderNumber, '', '', '', '', s.paymentMethod, s.customerName || '', s.staffName || '', s.discount || 0, s.total, s.refunded ? 'yes' : 'no']);
+      rows.push([s.timestamp, s.orderNumber, '', '', '', '', s.paymentMethod, s.customerName || '', s.staffName || '', s.discount || 0, s.total, s.voided ? 'voided' : s.refunded ? 'refunded' : 'no']);
     }
     for (const i of s.items) {
-      rows.push([s.timestamp, s.orderNumber, i.productName, i.qty, i.unitPrice, i.lineTotal, s.paymentMethod, s.customerName || '', s.staffName || '', s.discount || 0, s.total, s.refunded ? 'yes' : 'no']);
+      rows.push([s.timestamp, s.orderNumber, i.productName, i.qty, i.unitPrice, i.lineTotal, s.paymentMethod, s.customerName || '', s.staffName || '', s.discount || 0, s.total, s.voided ? 'voided' : s.refunded ? 'refunded' : 'no']);
     }
   }
   return toCsv(['date', 'order', 'item', 'qty', 'unit_price', 'line_total', 'payment', 'customer', 'seller', 'discount', 'sale_total', 'refunded'], rows);

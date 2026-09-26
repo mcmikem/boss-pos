@@ -24,11 +24,14 @@ interface MorningProductionProps {
   // batch spends it, so the kitchen can see what is left to work with.
   availableBudget?: number;
   onRequestTopUp?: (amount: number) => void;
+  // What last evening's close committed the kitchen to make. Shown first so
+  // the batch starts from the plan, not from memory.
+  plannedLines?: Array<{ productId: string; productName: string; batchQty: number; totalCost: number }>;
 }
 
 export default function MorningProduction({
   products, productionRegisters, sales = [], wastageLogs = [], onAddProduction, onDeleteProduction,
-  formatCurrency, triggerToast, availableBudget, onRequestTopUp,
+  formatCurrency, triggerToast, availableBudget, onRequestTopUp, plannedLines = [],
 }: MorningProductionProps) {
   const eateryProducts = useMemo(
     () => products.filter(p => p.category === 'Eatery' || (p.category === 'Drinks' && !!p.recipe)),
@@ -51,6 +54,17 @@ export default function MorningProduction({
     [productionRegisters, today]
   );
   const todayCost = todayMade.reduce((s, p) => s + p.total, 0);
+
+  const usePlannedLine = (line: { productId: string; productName: string; batchQty: number }) => {
+    const prod = eateryProducts.find(x => x.id === line.productId || x.name === line.productName);
+    if (!prod) {
+      triggerToast(`${line.productName} is no longer on the menu`, 'error');
+      return;
+    }
+    handleSelect(prod.name);
+    setProdQty(String(Math.max(1, Math.round(line.batchQty))));
+    triggerToast(`${prod.name}: planned ${Math.round(line.batchQty)} — adjust and save`, 'info');
+  };
 
 
   // Yesterday's leftovers auto-carry as today's opening — kitchen makes less.
@@ -191,6 +205,28 @@ export default function MorningProduction({
           <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1.5">
             This was set aside at close for tomorrow's production. Logging a batch spends it.
           </p>
+        </div>
+      )}
+
+      {plannedLines.length > 0 && (
+        <div className="bg-violet-950/25 border border-violet-800/40 rounded-xl p-3 space-y-2">
+          <p className="text-[10px] font-black text-violet-300 uppercase tracking-widest">
+            Planned last evening — make these first
+          </p>
+          {plannedLines.map(line => (
+            <div key={line.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white truncate">{line.productName}</p>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                  {Math.round(line.batchQty)} planned · {formatCurrency(Math.round(line.totalCost))} ingredients
+                </p>
+              </div>
+              <button onClick={() => usePlannedLine(line)}
+                className="shrink-0 h-9 px-3 bg-violet-600/20 border border-violet-600/40 text-violet-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-violet-600/30 cursor-pointer flex items-center gap-1">
+                Use <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

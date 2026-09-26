@@ -73,7 +73,7 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
       if (waiting.length === 0) return;
       const owed = waiting.reduce((s, j) => s + Math.round(j.price - (j.deposit || 0)), 0);
       pushNotice('info', `${waiting.length} repair${waiting.length !== 1 ? 's' : ''} overdue for pickup`,
-        `${fmt(owed)} still out past the due date — tap Repairs, notify them.`,
+        `${fmt(owed)} unpaid by customers past the due date — tap Repairs, notify them.`,
         `repair-wait:${dayKeyOf()}`);
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps

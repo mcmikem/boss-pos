@@ -101,7 +101,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       if (waiting.length === 0) return;
       const owed = waiting.reduce((s, o) => s + Math.round(o.totalAmount - (o.depositPaid || 0)), 0);
       pushNotice('info', `${waiting.length} tailoring order${waiting.length !== 1 ? 's' : ''} overdue for pickup`,
-        `${fmt(owed)} still out with customers past the expected date — tap Tailoring, notify them.`,
+        `${fmt(owed)} unpaid by customers past the expected date — tap Tailoring, notify them.`,
         `tailor-wait:${dayKeyOf()}`);
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,7 +228,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
     const idx = STATUS_ORDER.indexOf(order.status);
     if (idx === -1 || idx === STATUS_ORDER.length - 1) return;
     const next = STATUS_ORDER[idx + 1];
-    // Handover with money still out: ask HOW it was settled before moving —
+    // Handover with unpaid balances: ask HOW it was settled before moving —
     // cash/MoMo rings a sale, Book puts it on credit for collection.
     const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
     if (next === 'delivered' && balance > 0 && onAddSale) {

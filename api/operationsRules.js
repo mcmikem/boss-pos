@@ -157,6 +157,74 @@ export function validateHandover(input = {}) {
   };
 }
 
+export function recipeBatchCost(recipe) {
+  if (!recipe || !Array.isArray(recipe.ingredients)) return 0;
+  return roundMoney(recipe.ingredients.reduce((sum, ing) => {
+    const qty = Math.max(0, Number(ing?.qty) || 0);
+    const unitCost = Math.max(0, Number(ing?.unitCost) || 0);
+    const waste = 1 + Math.max(0, Number(ing?.wastePct) || 0) / 100;
+    return sum + qty * unitCost * waste;
+  }, 0));
+}
+
+export function parseProductRecipe(product) {
+  if (!product) return null;
+  if (product.recipe && typeof product.recipe === 'object' && !Array.isArray(product.recipe)) return product.recipe;
+  if (typeof product.recipe === 'string' && product.recipe) {
+    try {
+      const parsed = JSON.parse(product.recipe);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  }
+  return null;
+}
+
+export function planLineCost(product, batchQty) {
+  const recipe = parseProductRecipe(product);
+  const hasRecipe = !!recipe && Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0;
+  const yieldQty = Math.max(1, Number(recipe?.yield) || 1);
+  const batches = batchQty > 0 ? batchQty / yieldQty : 0;
+  const ingredientCost = hasRecipe ? roundMoney(recipeBatchCost(recipe) * batches) : 0;
+  const overhead = roundMoney((Number(recipe?.overhead) || 0) * batches);
+  return { hasRecipe, batches: roundMoney(batches), ingredientCost, overhead, totalCost: roundMoney(ingredientCost + overhead) };
+}
+
+export function validateProductionPlan(input = {}, productRows = []) {
+  const date = businessDate(input.businessDate || input.date, 'businessDate');
+  if (date.error) return date;
+  const category = String(input.category || 'Eatery').trim().slice(0, 80);
+  if (!['Eatery', 'Drinks'].includes(category)) return { error: 'Production plans cover Eatery or Drinks', code: 'INVALID_CATEGORY' };
+  const rawLines = Array.isArray(input.lines) ? input.lines : [];
+  if (rawLines.length < 1 || rawLines.length > 200) return { error: 'A plan needs 1 to 200 lines', code: 'INVALID_LINES' };
+  const products = new Map(productRows.map((p) => [String(p.id), p]));
+  const lines = [];
+  const seen = new Set();
+  for (const raw of rawLines) {
+    const productId = String(raw?.productId || '').trim();
+    if (!productId || seen.has(productId)) return { error: 'Plan lines need unique product ids', code: 'INVALID_LINES' };
+    const product = products.get(productId);
+    if (!product || product.deleted) return { error: `Unknown or deleted product: ${productId}`, code: 'UNKNOWN_PRODUCT', productId };
+    if (product.isService) return { error: `Services cannot be produced: ${productId}`, code: 'SERVICE_PRODUCT', productId };
+    const qty = quantity(raw?.batchQty ?? raw?.quantity ?? raw?.qty);
+    if (qty.error) return { ...qty, productId };
+    seen.add(productId);
+    lines.push({ productId, batchQty: qty.value });
+  }
+  const override = input.overrideTotal == null && input.override == null
+    ? null
+    : money(input.overrideTotal ?? input.override, { allowZero: true });
+  if (override && override.error) return override;
+  return {
+    businessDate: date.value,
+    category,
+    branch: String(input.branch || '').trim().slice(0, 80),
+    lines,
+    overrideTotal: override ? override.value : null,
+    note: String(input.note || '').slice(0, 500),
+    idempotencyKey: String(input.clientWriteId || input.idempotencyKey || '').trim().slice(0, 200) || null,
+  };
+}
+
 export function validateExpense(input = {}, allowedCategories = []) {
   const description = requiredText(input.description, 'description', 300);
   if (description.error) return description;
