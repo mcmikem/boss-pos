@@ -859,3 +859,36 @@ test('the deployed-artifact verifier proves itself before it is trusted', () => 
   assert.match(verifier, /\.flatMap\(/);
   assert.match(verifier, /custom-\$\{Date\.now\(\)\}/);
 });
+
+// The design programme, pinned as rules so a later change cannot quietly undo
+// the thing that makes a single-business till feel built for one business.
+test('a shop that trades in one department is never shown the others', () => {
+  const sales = read('src/components/Sales.tsx');
+  // Every shop is handed all nine default categories on setup, so the CONFIGURED
+  // list cannot decide who this shop is — a tailor was opening onto nine chips.
+  assert.match(sales, /const liveDepartments = useMemo\(/);
+  assert.match(sales, /categories\.filter\(\(c\) => stocked\.has\(c\)\)/);
+  assert.match(sales, /\{liveDepartments\.length > 1 && \(/);
+  assert.equal(/\{categories\.length > 1 && \(/.test(sales), false);
+  // A logged batch makes a kitchen real before it has any products, so a new
+  // chapati shop is recognised from its first morning rather than its first
+  // stock import.
+  assert.match(sales, /for \(const r of productionRegisters\) if \(r\.category\) stocked\.add\(r\.category\);/);
+  // And with no chips to say what this is, the screen says it.
+  assert.match(sales, /liveDepartments\.length === 1 && selectedCategory !== 'All'/);
+});
+
+test('a Today screen leads with the number that changes a decision', () => {
+  const registry = read('src/components/departmentRegistry.ts');
+  // A shelf asks where am I; a kitchen asks did I make money. Money on shelves
+  // is meaningless when the shelf is a tray of chapati.
+  assert.match(registry, /export function kitchenStats\(/);
+  assert.match(registry, /label: 'Profit so far'/);
+  assert.match(registry, /label: 'On the tray'/);
+  // Profit is revenue less the ingredients actually paid, on live sales only.
+  assert.match(registry, /const costOfSold = sold\.reduce/);
+  assert.match(registry, /const profit = Math\.round\(soldValue - costOfSold\)/);
+  assert.match(registry, /isLiveSale\(s\)/);
+  // Before the first batch, the only useful figure is what yesterday left.
+  assert.match(registry, /label: 'On the tray from yesterday'/);
+});

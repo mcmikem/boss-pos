@@ -3056,6 +3056,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+            creditEats={creditEats}
 
             ingredientBudgetToday={ingredientBudgetToday}
             onRecordIngredientTopUp={handleIngredientTopUp}
@@ -3225,6 +3226,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onUndoSale={handleUndoSale}
             onGoToStock={() => setActiveTab('inventory')}
             onGoClose={() => setActiveTab('registers')}
+            creditEats={creditEats}
             ingredientBudgetToday={ingredientBudgetToday}
             onRecordIngredientTopUp={handleIngredientTopUp}
             hideMoney={!!settings.blindClose && !isManager}

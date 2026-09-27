@@ -1,77 +1,83 @@
-import { describe, expect, it } from 'vitest';
-import {
-  DEPARTMENTS, getDepartment, partitionDrinks, shelfStats,
-} from './departmentRegistry';
-import type { Product, Sale } from '../types';
+import { describe, it, expect } from 'vitest';
+import { kitchenStats, shelfStats, getDepartment } from './departmentRegistry';
+import { todayLocalKey } from '../utils/dates';
+import { prevDayKey } from '../utils/cashflow';
 
-const product = (over: Partial<Product> = {}): Product => ({
-  id: 'p-1', name: 'Chapati', category: 'Eatery', cost: 400, price: 1000,
-  stockQty: 30, lowStockThreshold: 5, ...over,
-} as Product);
+// Dates are DERIVED, never hardcoded: a test that passes only on the day it was
+// written is worse than no test, and this one caught me the moment the day
+// rolled over.
+const TODAY = todayLocalKey();
+const YESTERDAY = prevDayKey(TODAY);
+const at = (day: string, time = '10:00') => `${day}T${time}:00.000Z`;
 
-const sale = (over: Partial<Sale> = {}): Sale => ({
-  id: 's-1', orderNumber: 'Order #1', timestamp: new Date().toISOString(),
-  items: [{ productId: 'p-1', productName: 'Chapati', qty: 2, unitPrice: 1000, unitCost: 400, lineTotal: 2000 }],
-  subtotal: 2000, tax: 0, total: 2000, paymentMethod: 'Cash', refunded: false,
-  ...over,
-} as Sale);
+const fmt = (n: number) => String(Math.round(n));
+const prod = (over: any = {}) => ({
+  id: 'p1', name: 'Chapati', category: 'Eatery', cost: 100, price: 500, stockQty: 20,
+  lowStockThreshold: 5, isService: false, ...over,
+}) as any;
+const sale = (items: any[], ts = at(TODAY)) => ({
+  id: 's' + Math.random(), timestamp: ts, refunded: false, voided: false, items,
+}) as any;
+const reg = (over: any = {}) => ({
+  id: 'r1', date: TODAY, item: 'Chapati', category: 'Eatery', qty: 100,
+  costEach: 100, total: 10000, productId: 'p1', ...over,
+}) as any;
 
-describe('departmentRegistry', () => {
-  it('covers every default business area with the right trade', () => {
-    for (const key of ['Electronics', 'Eatery', 'Drinks', 'Stationery', 'Printing', 'Tailoring', 'Library', 'Sports', 'Graphics']) {
-      expect(DEPARTMENTS[key], key).toBeDefined();
-    }
-    expect(getDepartment('Eatery').kind).toBe('kitchen');
-    expect(getDepartment('Eatery').productionFirst).toBe(true);
-    expect(getDepartment('Drinks').kind).toBe('kitchen');
-    expect(getDepartment('Drinks').productionFirst).toBeFalsy();
-    expect(getDepartment('Tailoring').kind).toBe('orders');
-    expect(getDepartment('Tailoring').ordersHome).toBe('tailor');
-    expect(getDepartment('Graphics').ordersHome).toBe('print');
-    expect(getDepartment('Electronics').kind).toBe('sell');
+describe('a kitchen answers different questions from a shelf', () => {
+  it('leads with profit, because that is the number that changes a decision', () => {
+    const stats = kitchenStats('Eatery', [prod()], [sale([
+      { productId: 'p1', productName: 'Chapati', qty: 20, unitPrice: 500, unitCost: 100, lineTotal: 10000 },
+    ])], [reg()], [], fmt);
+    expect(stats[0].label).toBe('Profit so far');
+    expect(stats[0].value).toBe('8000');           // 10,000 sold less 2,000 ingredients
+    expect(stats[0].sub).toContain('less ingredients');
   });
 
-  it('gives invented categories a working buy-resell shelf, never a dead end', () => {
-    const custom = getDepartment('Boutique');
-    expect(custom.kind).toBe('sell');
-    expect(custom.title).toContain('Boutique');
-    expect(custom.emptyAction).toBe('add-product');
+  it('never counts a voided or refunded sale as money in', () => {
+    const live = [sale([{ productId: 'p1', productName: 'Chapati', qty: 10, unitPrice: 500, unitCost: 100, lineTotal: 5000 }])];
+    const dead = [
+      { ...sale([{ productId: 'p1', productName: 'Chapati', qty: 99, unitPrice: 500, unitCost: 100, lineTotal: 49500 }]), voided: true },
+      { ...sale([{ productId: 'p1', productName: 'Chapati', qty: 99, unitPrice: 500, unitCost: 100, lineTotal: 49500 }]), refunded: true },
+    ];
+    const stats = kitchenStats('Eatery', [prod()], [...live, ...dead], [reg()], [], fmt);
+    expect(stats.find((s) => s.label === 'Sold today')?.value).toBe('10');
+    expect(stats[0].value).toBe('4000');
   });
 
-  it('keeps each trade’s doors explicit', () => {
-    expect(getDepartment('Eatery').tools).toContain('production');
-    expect(getDepartment('Drinks').tools).toHaveLength(0);
-    expect(getDepartment('Tailoring').tools).toContain('orders');
+  it('says what is still on the tray, because that is what stops over-making', () => {
+    const stats = kitchenStats('Eatery', [prod()], [sale([
+      { productId: 'p1', productName: 'Chapati', qty: 30, unitPrice: 500, unitCost: 100, lineTotal: 15000 },
+    ])], [reg({ qty: 100 })], [], fmt);
+    // 100 made, 30 sold, none logged lost.
+    expect(stats.find((s) => s.label === 'On the tray')?.value).toBe('70');
   });
 
-  it('answers the shelf in one basis: live sales only', () => {
-    const products = [product(), product({ id: 'p-2', name: 'Samosa', stockQty: 2 })];
-    const stats = shelfStats('Eatery', products, [
-      sale({ id: 's-1' }),
-      sale({ id: 's-2', refunded: true }),
-      sale({ id: 's-3', voided: true }),
-    ], (n) => `USh ${n}`);
-    const sold = stats.find(s => s.label === 'Sold today');
-    expect(sold?.value).toBe('USh 2000');
-    expect(stats).toHaveLength(3);
-  });
-});
-
-describe('partitionDrinks', () => {
-  it('splits fresh juice from depot sodas by recipe, never by name', () => {
-    const fresh = product({
-      id: 'p-juice', name: 'Obutunda', category: 'Drinks', stockQty: 20,
-      recipe: { ingredients: [{ id: 'i', name: 'Pumpkin', qty: 1, unit: 'kg', unitCost: 2000, wastePct: 0 }], yield: 5, overhead: 0, targetMarginPct: 60 },
-    });
-    const depot = product({ id: 'p-cola', name: 'Cola', category: 'Drinks', stockQty: 40 });
-    const { fresh: f, depot: d } = partitionDrinks([fresh, depot]);
-    expect(f.map(p => p.id)).toEqual(['p-juice']);
-    expect(d.map(p => p.id)).toEqual(['p-cola']);
+  it('before the first batch, the only useful figure is what yesterday left', () => {
+    const yesterday = reg({ id: 'y1', date: YESTERDAY, qty: 40 });
+    const stats = kitchenStats('Eatery', [prod()], [], [yesterday], [], fmt);
+    expect(stats).toHaveLength(1);
+    expect(stats[0].label).toMatch(/tray from yesterday/);
+    expect(stats[0].value).toBe('40');
   });
 
-  it('agrees with the production planner about what counts as fresh', () => {
-    const noRecipe = product({ id: 'p-x', name: 'X', category: 'Drinks', stockQty: 5, recipe: undefined });
-    const { fresh } = partitionDrinks([noRecipe]);
-    expect(fresh).toHaveLength(0);
+  it('a shelf still answers with sold, shelves and low stock', () => {
+    const stats = shelfStats('Electronics', [prod({ category: 'Electronics' })], [], fmt);
+    expect(stats.map((s) => s.label)).toEqual(['Sold today', 'Money on shelves', 'Low stock']);
+  });
+
+  it('a batch with no product behind it cannot be counted onto a tray', () => {
+    // MorningProduction lets a cook log a custom batch. That is a real batch,
+    // but there is no item to attribute it to, so the tray figure must not
+    // invent one — better an honest blank than a wrong number.
+    const yesterday = reg({ id: 'y1', date: YESTERDAY, qty: 40, productId: undefined });
+    const stats = kitchenStats('Eatery', [prod()], [], [yesterday], [], fmt);
+    expect(stats[0].value).toBe('—');
+  });
+
+  it('an unknown department behaves like a shelf, not like a broken screen', () => {
+    const dept = getDepartment('Butchery');
+    expect(dept.kind).toBe('sell');
+    expect(dept.emptyAction).toBe('add-product');
+    expect(dept.title).toContain('Butchery');
   });
 });

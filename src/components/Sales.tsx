@@ -7,7 +7,7 @@ import {
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
   CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult, CreditEat } from '../types';
 import { nextOrderNumber, quoteApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import { isLiveSale } from '../utils/saleStatus';
@@ -48,8 +48,9 @@ const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
 const AreaHome = lazyRetry(() => import('./AreaHome'));
 import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';
-import { getDepartment, shelfStats, partitionDrinks } from './departmentRegistry';
-import DepartmentToday from './DepartmentToday';const Bookings = lazyRetry(() => import('./Bookings'));
+import { getDepartment, shelfStats, kitchenStats, partitionDrinks } from './departmentRegistry';
+import DepartmentToday from './DepartmentToday';
+import DepartmentActions, { buildActionCards } from './DepartmentActions';const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -137,6 +138,8 @@ interface SalesProps {
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
   onGoClose?: () => void;
+  // The credit book, so the Today screen can say who owes — and take a tap to it.
+  creditEats?: CreditEat[];
   // Money set aside at close for tomorrow's ingredients. The kitchen spends it
   // as batches are logged, and asks for a top-up when a day needs more.
   ingredientBudgetToday?: number;
@@ -207,7 +210,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, canEditPrices, onRequestManagerSignIn, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, canEditPrices, onRequestManagerSignIn, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, creditEats = [], ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const effectiveDraftScope = useMemo<CheckoutDraftScope>(() => ({
@@ -222,11 +225,6 @@ export default function Sales({
   const [inStockOnly, setInStockOnly] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_instock_only') === '1'; } catch { return false; }
   });
-  // Single-category shops (the common case) skip the chips row entirely and
-  // sell straight from their one category — tools keyed off it keep working.
-  useEffect(() => {
-    if (categories.length === 1) setSelectedCategory(categories[0]);
-  }, [categories]);
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('boss_pos_pinned') || '[]'); } catch { return []; }
@@ -394,6 +392,30 @@ export default function Sales({
     setGuideDismissed(true);
   };
   const catalog = demoMode ? DEMO_PRODUCTS : products;
+
+  // The departments a shop ACTUALLY trades in. Every shop is handed all nine
+  // default categories on setup, so the configured list is worthless for
+  // deciding who this shop is: a tailor who sells only tailoring was opening
+  // onto nine chips, eight of them wrong. Stock (or a logged batch, for a
+  // kitchen before its first product) is what makes a department real.
+  const liveDepartments = useMemo(() => {
+    const stocked = new Set<string>();
+    for (const p of catalog) if (p.category) stocked.add(p.category);
+    if (productionRegisters.length) {
+      for (const r of productionRegisters) if (r.category) stocked.add(r.category);
+    }
+    const real = categories.filter((c) => stocked.has(c));
+    // Nothing stocked yet: keep the configured list so a new shop can still be
+    // navigated (and so the empty state has somewhere to send them).
+    return real.length ? real : categories;
+  }, [catalog, categories, productionRegisters.length]);
+
+  // A shop that trades in one department gets that department's own screen —
+  // kitchen opens on making, a shelf opens on the grid — with no chips and no
+  // "All" to think about. Tools keyed off the selection keep working unchanged.
+  useEffect(() => {
+    if (liveDepartments.length === 1) setSelectedCategory(liveDepartments[0]);
+  }, [liveDepartments]);
   // Street mode: roadside-stall selling — each tap on a plain product sells
   // one unit for cash instantly (no cart, no confirm, no receipt). Products
   // with variants or per-unit pricing still open their picker.
@@ -1947,8 +1969,9 @@ export default function Sales({
           </button>
         )}
 
-        {/* Categories — hidden for single-category shops (their world is the whole screen) */}
-        {categories.length > 1 && (
+        {/* Departments — hidden when this shop trades in one. A tailor should
+            never be told they also run a library. */}
+        {liveDepartments.length > 1 && (
         <div className="relative -mx-4 min-w-0 max-w-[calc(100%+2rem)] overflow-hidden px-4 sm:mx-0 sm:max-w-none sm:px-0">
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
@@ -1960,7 +1983,7 @@ export default function Sales({
               }`}>
               <span className="text-sm uppercase tracking-wider font-black">{t(lang, 'all')}</span>
             </button>
-              {sortedCategories.map(cat => {
+              {sortedCategories.filter((cat) => liveDepartments.includes(cat)).map(cat => {
                 const isActive = selectedCategory === cat;
                 const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
@@ -2299,12 +2322,54 @@ export default function Sales({
           <section className="space-y-2">
             {(() => {
               const dept = getDepartment(selectedCategory);
-              if (dept.kind !== 'sell' || selectedCategory === 'All') return null;
+              if (selectedCategory === 'All') return null;
               return (
-                <DepartmentToday
-                  config={dept}
-                  stats={shelfStats(selectedCategory, products, salesHistory, formatCurrency)}
-                />
+                <>
+                  <DepartmentToday
+                    config={dept}
+                    stats={dept.kind === 'sell'
+                      ? shelfStats(selectedCategory, products, salesHistory, formatCurrency)
+                      : kitchenStats(selectedCategory, products, salesHistory, productionRegisters, wastageLogs, formatCurrency)}
+                  />
+                  <DepartmentActions
+                    cards={buildActionCards({
+                      kind: dept.kind,
+                      category: selectedCategory,
+                      products,
+                      sales: salesHistory,
+                      productionRegisters,
+                      wastageLogs,
+                      creditEats,
+                      formatCurrency,
+                    })}
+                    onAction={(action) => {
+                      // Each card goes straight to the work, never to a report.
+                      if (action === 'production') { setShowProduction(true); return; }
+                      if (action === 'reorder') { onGoToStock?.(); return; }
+                      if (action === 'credit') { onGoClose?.(); return; }
+                    }}
+                  />
+                </>
+              );
+            })()}
+            {/* One-department shop: no chips to say what this is, so the screen
+                says it. This is the line that makes a one-business till feel
+                like it was built for that business and nothing else. */}
+            {liveDepartments.length === 1 && selectedCategory !== 'All' && (() => {
+              const dept = getDepartment(selectedCategory);
+              const Icon = dept.icon;
+              return (
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-gold-brand/10 border border-gold-brand/30 flex items-center justify-center shrink-0">
+                    <Icon className="w-5 h-5 text-gold-brand" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-base font-black text-white uppercase tracking-tight font-display truncate">
+                      {dept.title.replace(/^Today\s*—\s*/, '')}
+                    </h2>
+                    <p className="text-[11px] font-bold text-zinc-500 uppercase truncate">{dept.subtitle}</p>
+                  </div>
+                </div>
               );
             })()}
             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">

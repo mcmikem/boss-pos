@@ -1,8 +1,9 @@
 import type { ComponentType } from 'react';
 import { flatMap } from '../utils/arrays';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
-import type { Product, Sale } from '../types';
+import type { Product, ProductionRegister, Sale, WastageLog } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
+import { prevDayKey } from '../utils/cashflow';
 import { isLiveSale } from '../utils/saleStatus';
 import { plannableProducts } from '../utils/productionPlan';
 
@@ -46,7 +47,7 @@ export interface DepartmentStat {
   label: string;
   value: string;
   sub?: string;
-  tone: 'white' | 'emerald' | 'amber' | 'cyan' | 'gold' | 'rose';
+  tone: 'white' | 'emerald' | 'amber' | 'cyan' | 'gold' | 'rose' | 'zinc';
 }
 
 function visuals(key: string) {
@@ -178,6 +179,80 @@ export function shelfStats(
     { label: 'Money on shelves', value: fmt(shelfValue), tone: 'white', sub: 'Cost × on hand' },
     { label: 'Low stock', value: lowCount > 0 ? String(lowCount) : '—', tone: lowCount > 0 ? 'rose' : 'white' },
   ];
+}
+
+// A kitchen's three answers are different from a shelf's: what was MADE, what
+// SOLD, and what is still on the tray. Money on shelves is meaningless when the
+// "shelf" is a tray of chapati, and "low stock" is a lie — the kitchen makes to
+// order. So the figures change with the trade, which is the whole point of this
+// registry.
+export function kitchenStats(
+  category: string,
+  products: Product[],
+  salesHistory: Sale[],
+  productionRegisters: ProductionRegister[],
+  wastageLogs: WastageLog[],
+  fmt: (n: number) => string,
+): DepartmentStat[] {
+  const today = todayLocalKey();
+  const yesterday = prevDayKey(today);
+  const mine = (p?: Product) => (p ? p.category === category : true);
+  const madeToday = productionRegisters.filter(r => r.date === today && r.category === category);
+  const madeValue = madeToday.reduce((sum, r) => sum + (r.total || 0), 0);
+  const madePieces = madeToday.reduce((sum, r) => sum + (r.qty || 0), 0);
+
+  const ids = new Set(products.filter(mine).map(p => p.id));
+  const sold = flatMap(
+    salesHistory.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === today),
+    s => s.items,
+  ).filter(i => ids.has(i.productId));
+  const soldValue = sold.reduce((sum, i) => sum + (i.lineTotal || 0), 0);
+  const soldPieces = sold.reduce((sum, i) => sum + (i.qty || 0), 0);
+
+  // Profit is revenue minus what the ingredients actually cost, from the same
+  // batches that were logged. One basis, live sales only.
+  const costOfSold = sold.reduce((sum, i) => sum + (Number(i.unitCost) || 0) * (i.qty || 0), 0);
+  const profit = Math.round(soldValue - costOfSold);
+
+  // Still on the tray: made, minus sold, minus what was logged as a true loss.
+  const lostToday = wastageLogs
+    .filter(w => w.date === today && w.reason !== 'remaining' && ids.has(w.productId || ''))
+    .reduce((sum, w) => sum + (w.qty || 0), 0);
+  const onTray = Math.max(0, madePieces - soldPieces - lostToday);
+
+  const stats: DepartmentStat[] = [];
+  if (madePieces > 0 || soldPieces > 0) {
+    stats.push({
+      label: 'Profit so far',
+      value: fmt(profit),
+      tone: profit > 0 ? 'emerald' : profit < 0 ? 'rose' : 'white',
+      sub: `${fmt(soldValue)} sold less ingredients`,
+    });
+    stats.push({ label: 'Made today', value: `${madePieces}`, tone: 'gold', sub: madeValue ? `${fmt(madeValue)} of ingredients` : 'nothing logged yet' });
+    stats.push({ label: 'Sold today', value: `${soldPieces}`, tone: 'white', sub: soldValue ? fmt(soldValue) : 'no sales yet' });
+    stats.push({ label: 'On the tray', value: `${onTray}`, tone: onTray > 0 ? 'amber' : 'zinc', sub: 'sell before making more' });
+  } else {
+    // A kitchen before its first batch of the day: the only useful thing to say
+    // is what yesterday left, so the batch can start from it.
+    const left = flatMap(products.filter(mine), (p) => {
+      const made = productionRegisters
+        .filter(r => r.date === yesterday && r.productId === p.id)
+        .reduce((sum, r) => sum + (r.qty || 0), 0);
+      const soldYesterday = flatMap(
+        salesHistory.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === yesterday),
+        s => s.items,
+      ).filter(i => i.productId === p.id).reduce((sum, i) => sum + (i.qty || 0), 0);
+      return [{ p, left: made - soldYesterday }];
+    }).filter(r => r.left > 0);
+    const tray = left.reduce((sum, r) => sum + r.left, 0);
+    stats.push({
+      label: 'On the tray from yesterday',
+      value: tray > 0 ? `${tray}` : '—',
+      tone: tray > 0 ? 'amber' : 'zinc',
+      sub: tray > 0 ? 'sell what is left before making more' : 'nothing carried',
+    });
+  }
+  return stats;
 }
 
 // Drinks is two businesses sharing one chip. Fresh lines (they carry a
