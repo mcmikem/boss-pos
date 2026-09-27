@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "API_ONLY=1 PORT=3001 node --env-file .env server.js & vite --port=3000 --host=0.0.0.0",
     "dev:api": "API_ONLY=1 PORT=3001 node --env-file .env server.js",
-    "build": "vite build && npm run budget",
+    "build": "vite build && npm run budget && npm run browser-apis",
     "budget": "node scripts/check-build-budget.mjs",
+    "browser-apis": "node scripts/check-browser-apis.mjs",
     "start": "node server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

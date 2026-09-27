@@ -81,6 +81,11 @@ test('package and focused guard exist', () => {
   assert.match(packageJson.scripts.build, /npm run budget/);
   assert.equal(packageJson.scripts.budget, 'node scripts/check-build-budget.mjs');
   assert.ok(existsSync(resolve(root, 'scripts/check-build-budget.mjs')));
+  // The browser-API floor is checked as part of the build, because five real
+  // bugs came from calling an API the shipped bundles do not polyfill.
+  assert.match(packageJson.scripts.build, /npm run browser-apis/);
+  assert.equal(packageJson.scripts['browser-apis'], 'node scripts/check-browser-apis.mjs');
+  assert.ok(existsSync(resolve(root, 'scripts/check-browser-apis.mjs')));
   assert.ok(existsSync(resolve(root, 'tests/frontend-upgrades.test.js')));
 });
 
@@ -805,4 +810,30 @@ test('the notes future work reads are not allowed to contradict the code', () =>
   // And the browser floor, which is what let three money-path bugs through.
   assert.match(notes, /Chrome 49/);
   assert.match(notes, /degrade rather than throw/);
+});
+
+test('the browser-API floor is enforced, with every exception justified', () => {
+  const guard = read('scripts/check-browser-apis.mjs');
+  const sentry = read('src/utils/sentry.ts');
+  // Object.fromEntries is Chrome 73 with no polyfill in the legacy bundle. It
+  // was introduced here TODAY, inside a try/catch that would have silently
+  // swallowed the throw and left the error throttle dead on every old phone.
+  // The only mention left is the comment saying why it is not used.
+  assert.equal(/Object\.fromEntries\s*\(/.test(sentry), false);
+  assert.match(sentry, /Object\.fromEntries is Chrome 73/);
+  // The floor matches what the build actually ships.
+  assert.match(guard, /const MODERN_FLOOR = 64/);
+  assert.match(guard, /const LEGACY_FLOOR = 49/);
+  // The APIs behind the five production bugs are all named.
+  for (const id of ['AbortController', 'navigator.clipboard', 'Array.prototype.flatMap', 'Object.fromEntries']) {
+    assert.ok(guard.includes(id), `guard does not cover ${id}`);
+  }
+  // And every exception must name its handling, so the allowlist is a list of
+  // decisions rather than a list of holes.
+  const allowed = guard.match(/const ALLOWED = new Map\(\[[\s\S]*?\]\);/)?.[0] || '';
+  const entries = allowed.split('\n').filter((l) => l.trim().startsWith('['));
+  assert.ok(entries.length > 0);
+  for (const entry of entries) {
+    assert.ok(/,\s*'[^']{20,}'/.test(entry), `allowlist entry must justify itself: ${entry.trim()}`);
+  }
 });

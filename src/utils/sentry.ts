@@ -289,7 +289,12 @@ function writeRepeatState(state: Record<string, RepeatState>): void {
   try {
     // Keep only the recent handful; this is a throttle, not a history.
     const entries = Object.entries(state).sort((a, b) => b[1].lastReportedAt - a[1].lastReportedAt).slice(0, 40);
-    localStorage.setItem(REPEAT_STATE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    // Object.fromEntries is Chrome 73 and the legacy bundle has no polyfill for
+    // it, so on an old phone the try/catch would swallow the throw and this
+    // throttle would never persist. Build the object by hand.
+    const trimmed: Record<string, RepeatState> = {};
+    for (const [key, value] of entries) trimmed[key] = value;
+    localStorage.setItem(REPEAT_STATE_KEY, JSON.stringify(trimmed));
   } catch {}
 }
 
