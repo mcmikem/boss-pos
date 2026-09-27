@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { copyText } from '../utils/copy';
 import { X, MailOpen, Share2, CheckCheck } from 'lucide-react';
 import type { CloseSummary } from '../api';
 
@@ -22,12 +23,10 @@ export default function CloseSummaryInbox({
   };
 
   const copyBody = async (body: string) => {
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(body);
-      else throw new Error('no clipboard');
+    if (await copyText(body)) {
       triggerToast('Summary copied', 'success');
-    } catch {
-      triggerToast('Copy not available on this device', 'error');
+    } else {
+      triggerToast('Copy blocked on this device', 'error');
     }
   };
 

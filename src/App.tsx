@@ -29,6 +29,7 @@ import { reconcileCartPrices } from './utils/cart';
 import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyClose';
 import { buildCloseSummaryPayload, closeSummaryClientWriteId } from './utils/closeSummary';
 import { readClientErrorLog, supportSummary, type ClientErrorRecord } from './utils/sentry';
+import { copyText } from './utils/copy';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
@@ -409,6 +410,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
+  // When the clipboard is refused outright, the support details are shown so
+  // they can be selected and pasted by hand rather than lost.
+  const [supportFallbackText, setSupportFallbackText] = useState('');
   // Two accounts can share a 4-digit PIN. The gate then asks which person this
   // is rather than guessing, and no token is issued until they answer.
   const [unlockCandidates, setUnlockCandidates] = useState<Array<{ id: string; name: string; role: 'manager' | 'cashier' }> | null>(null);
@@ -897,11 +901,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     let controller: AbortController | null = null;
     const connect = async () => {
       if (closed) return;
-      controller = new AbortController();
       try {
+        // AbortController is missing on some older Android WebViews, and this
+        // line used to sit OUTSIDE the try — so the whole live-sync stream died
+        // in an unhandled rejection on those phones. Live sync is a
+        // convenience: the 3-minute poll above still refreshes every figure, so
+        // a device without it degrades instead of breaking.
+        const hasAbort = typeof AbortController !== 'undefined';
+        const ctrl = hasAbort ? new AbortController() : null;
+        controller = ctrl;
         const res = await fetch('/api/events', {
           headers: { Authorization: `Bearer ${token}` },
-          signal: controller.signal,
+          ...(ctrl ? { signal: ctrl.signal } : {}),
         });
         if (!res.ok || !res.body) throw new Error('sse failed');
         const reader = res.body.getReader();
@@ -929,7 +940,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       }
       if (!closed) setTimeout(connect, 1000);
     };
-    connect();
+    // Belt and braces: nothing escaping this effect as an unhandled rejection.
+    connect().catch(() => {});
     return () => { closed = true; try { controller?.abort(); } catch {} };
   }, [authState, applyBootData]);
 
@@ -4725,16 +4737,30 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     lockHistory: lockLog.slice(0, 5).map(l => l.reason).join(' | ') || 'none',
                     signedInAs: activeStaff ? `${activeStaff.name} (${isManager ? 'manager' : 'cashier'})` : 'till only',
                   });
-                  try {
-                    if (!navigator.clipboard?.writeText) throw new Error('no clipboard');
-                    await navigator.clipboard.writeText(summary);
+                  // This button is how a problem report gets its context, so it
+                  // must not come back empty on an older phone: the selection
+                  // fallback is used when the clipboard API refuses.
+                  const copied = await copyText(summary);
+                  if (copied) {
                     triggerToast('Support details copied', 'success');
-                  } catch {
-                    triggerToast('Copy not available on this device', 'error');
+                  } else {
+                    setSupportFallbackText(summary);
+                    triggerToast('Copy blocked — the details are shown below so they can be pasted', 'error');
                   }
                 }} className="w-full h-10 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:border-gold-brand/40 transition-all cursor-pointer">
                   Copy support details
                 </button>
+                {supportFallbackText && (
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-bold text-amber-300 uppercase">Copy was blocked — select and send these</p>
+                    <textarea readOnly value={supportFallbackText} onFocus={(e) => e.currentTarget.select()}
+                      className="w-full h-28 bg-[#0A0A0A] border border-white/5 text-[10px] text-zinc-400 rounded-xl p-2 font-mono outline-none" />
+                    <button onClick={() => setSupportFallbackText('')}
+                      className="h-8 px-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-lg text-[10px] font-black uppercase tracking-wider cursor-pointer">
+                      Hide
+                    </button>
+                  </div>
+                )}
               </div>
             </>)}
             </div>

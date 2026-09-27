@@ -598,7 +598,10 @@ test('no screen announces a save it has not awaited', () => {
       for (let i = 0; i < lines.length; i++) {
         const m = /^\s*(on[A-Z]\w+|handle[A-Z]\w+)\(/.exec(lines[i]);
         if (!m || lines[i].includes('await')) continue;
-        const window = lines.slice(i, i + 7).join('\n');
+        // Tight window on purpose: a save and its confirmation sit together. A
+        // wider one sweeps in unrelated toasts further down the same handler and
+        // reports copy confirmations as save failures.
+        const window = lines.slice(i, i + 4).join('\n');
         if (/triggerToast\(/.test(window) && /'success'/.test(window)) {
           // handleAddToCart is local cart state with deliberate feedback.
           if (m[1] === 'handleAddToCart') continue;
@@ -609,6 +612,21 @@ test('no screen announces a save it has not awaited', () => {
   };
   walk(join(root, 'src'));
   assert.deepEqual(offenders, [], `un-awaited write announced as success: ${offenders.join(', ')}`);
+
+  // The window must still be tight ENOUGH to catch the real thing.
+  const sample = [
+    '  const onThing = () => {',
+    '    onSaveThing({ id: 1 });',
+    "    triggerToast('Saved', 'success');",
+    '  };',
+  ];
+  const flagged = sample.some((ln, i) => {
+    const m = /^\s*(on[A-Z]\w+|handle[A-Z]\w+)\(/.exec(ln);
+    if (!m || ln.includes('await')) return false;
+    const w = sample.slice(i, i + 4).join('\n');
+    return /triggerToast\(/.test(w) && /'success'/.test(w);
+  });
+  assert.equal(flagged, true, 'the sweep must still catch an un-awaited save announced as success');
 });
 
 test('a phone-only change is labelled as one', () => {
@@ -682,4 +700,36 @@ test('a failed outbox snapshot can never leave a read hanging', () => {
   // Every snapshot write in that function goes through the guarded helper.
   const unguarded = reader.replace(/const persist = [\s\S]*?\n    \};/, '');
   assert.equal(/writeOutboxSnapshot\(tx,/.test(unguarded), false);
+});
+
+// Two more signals from the same production data, both on the one older phone:
+// "AbortController is not defined" and a denied clipboard write.
+test('live sync degrades instead of throwing on a browser without AbortController', () => {
+  const app = read('src/App.tsx');
+  const sse = app.match(/\/\/ SSE instant sync[\s\S]*?\n  \}, \[authState, applyBootData\]\);/)?.[0] || '';
+  // The controller used to be constructed OUTSIDE the try, so the whole stream
+  // died in an unhandled rejection on older Android WebViews.
+  assert.match(sse, /const hasAbort = typeof AbortController !== 'undefined'/);
+  assert.match(sse, /const ctrl = hasAbort \? new AbortController\(\) : null/);
+  assert.match(sse, /\.\.\.\(ctrl \? \{ signal: ctrl\.signal \} : \{\}\)/);
+  // And nothing escapes the effect unhandled even so.
+  assert.match(sse, /connect\(\)\.catch\(\(\) => \{\}\)/);
+});
+
+test('copying works where the clipboard API exists but refuses', () => {
+  const app = read('src/App.tsx');
+  const copy = read('src/utils/copy.ts');
+  // navigator.clipboard exists on an older Android WebView and denies every
+  // write. That is how "Copy support details" produced empty reports, which is
+  // the one thing a support report must never be.
+  assert.match(copy, /export async function copyText/);
+  assert.match(copy, /catch \{\s*\/\/ Permission denied or no clipboard API/);
+  assert.match(copy, /document\.execCommand\('copy'\)/);
+  assert.match(copy, /document\.body\.removeChild\(area\)/);
+  // Every call site goes through it, and none of them claim success on failure.
+  assert.match(app, /const copied = await copyText\(summary\)/);
+  assert.match(app, /setSupportFallbackText\(summary\)/);
+  assert.match(read('src/components/Customers.tsx'), /await copyText\(text\)/);
+  assert.match(read('src/components/CloseSummaryInbox.tsx'), /await copyText\(body\)/);
+  assert.equal(/throw new Error\('no clipboard'\)/.test(app), false);
 });

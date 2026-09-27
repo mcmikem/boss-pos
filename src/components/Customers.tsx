@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { copyText } from '../utils/copy';
 import { Users, Plus, X, Star, Bell, BellOff, MessageCircle, Trash2, Check, UserPlus, Copy } from 'lucide-react';
 import type { Sale, Product } from '../types';
 import { statsFor, customerWhatsAppUrl, type CustomerProfile } from '../utils/customers';
@@ -76,12 +77,10 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
   const copySubscribedNumbers = async () => {
     if (subscribed.length === 0) { triggerToast('No subscribed numbers yet', 'info'); return; }
     const text = subscribed.map(c => `${c.name}: ${c.phone}`).join('\n');
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else throw new Error('no clipboard');
+    if (await copyText(text)) {
       triggerToast(`${subscribed.length} numbers copied for broadcast`, 'success');
-    } catch {
-      triggerToast('Copy not available on this device', 'error');
+    } else {
+      triggerToast('Copy blocked on this device — long-press each number instead', 'error');
     }
   };
 
