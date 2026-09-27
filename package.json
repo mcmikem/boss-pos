@@ -17,7 +17,8 @@
     "lint": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:guards": "node --test tests/frontend-upgrades.test.js",
-    "smoke": "node scripts/smoke-prod.mjs"
+    "smoke": "node scripts/smoke-prod.mjs",
+    "verify:deployed": "node scripts/verify-deployed-fixes.mjs"
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",

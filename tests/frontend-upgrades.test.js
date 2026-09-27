@@ -84,6 +84,9 @@ test('package and focused guard exist', () => {
   // The browser-API floor is checked as part of the build, because five real
   // bugs came from calling an API the shipped bundles do not polyfill.
   assert.match(packageJson.scripts.build, /npm run browser-apis/);
+  // Proof that the fixes are in the ARTIFACT, not just the repository.
+  assert.equal(packageJson.scripts['verify:deployed'], 'node scripts/verify-deployed-fixes.mjs');
+  assert.ok(existsSync(resolve(root, 'scripts/verify-deployed-fixes.mjs')));
   assert.equal(packageJson.scripts['browser-apis'], 'node scripts/check-browser-apis.mjs');
   assert.ok(existsSync(resolve(root, 'scripts/check-browser-apis.mjs')));
   assert.ok(existsSync(resolve(root, 'tests/frontend-upgrades.test.js')));
@@ -836,4 +839,23 @@ test('the browser-API floor is enforced, with every exception justified', () => 
   for (const entry of entries) {
     assert.ok(/,\s*'[^']{20,}'/.test(entry), `allowlist entry must justify itself: ${entry.trim()}`);
   }
+});
+
+test('the deployed-artifact verifier proves itself before it is trusted', () => {
+  const verifier = read('scripts/verify-deployed-fixes.mjs');
+  // It reads the live precache manifest rather than trusting the repo, and it
+  // checks every needle against the local build FIRST. A verifier that cries
+  // wolf is worse than none: the first version of this one reported six
+  // failures that were all false positives from minification and chunk layout.
+  assert.match(verifier, /sw\.js/);
+  assert.match(verifier, /localAll\.includes\(m\.needle\)/);
+  assert.match(verifier, /The verifier itself is wrong/);
+  assert.match(verifier, /\!localAll\.includes\(m\.needle\)/);
+  // It reads the server build and refuses to pass against a different one.
+  assert.match(verifier, /\/api\/version/);
+  assert.match(verifier, /expected && parsed\.short !== expected/);
+  // And it checks regressions, not just additions.
+  assert.match(verifier, /const FORBIDDEN = \[/);
+  assert.match(verifier, /\.flatMap\(/);
+  assert.match(verifier, /custom-\$\{Date\.now\(\)\}/);
 });
