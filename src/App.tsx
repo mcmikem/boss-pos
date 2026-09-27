@@ -1581,7 +1581,6 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffToken(null);
     try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
     setStaffName('');
-    setSellAsTillSession(true);
     // Kept, deliberately: a re-lock at noon should still offer this morning's
     // seller in one tap. Forgetting happens at hand-over (signInAsSeller
     // overwrites it) and at sign-out, where the shift has genuinely ended.
@@ -3887,7 +3886,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           verifying={staffVerifying}
           error={staffVerifyError}
           onVerify={handleVerifyStaff}
-          onSellAsTill={() => { unlockAsTillOnly(); markUnlocked(); setAuthState('ready'); fetchAllData().catch(() => {}); }}
+          onSellAsTill={() => { unlockAsTillOnly(); setSellAsTillSession(true); markUnlocked(); setAuthState('ready'); fetchAllData().catch(() => {}); }}
           onClose={() => {}}
         />
       )}

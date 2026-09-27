@@ -1108,3 +1108,15 @@ test('the till writes each PIN, and a dead credential never says "Unauthorized"'
   assert.match(main, /Reload the till/);
   assert.match(main, /Nothing you sold today has been lost/);
 });
+
+test('the rescue door still asks who you are; only the choice skips it', () => {
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // unlockAsTillOnly is the rescue door. Setting the suppression flag inside
+  // it made a till-PIN unlock silently skip the name screen, landing the seller
+  // in the app with no name and no prompt. The flag belongs on the explicit
+  // choice only.
+  const tillOnly = app.match(/const unlockAsTillOnly = \(\) \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.equal(/setSellAsTillSession/.test(tillOnly), false);
+  assert.match(app, /onSellAsTill=\{\(\) => \{ unlockAsTillOnly\(\); setSellAsTillSession\(true\)/);
+  assert.match(app, /\{staffConfigured && !activeStaff && !sellAsTillSession && \(/);
+});
