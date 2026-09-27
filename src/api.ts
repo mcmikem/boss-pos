@@ -963,12 +963,23 @@ export async function revokeAllSessions(): Promise<boolean> {
   return true;
 }
 
-export async function nextOrderNumber(): Promise<string | null> {
+// How long a SALE is willing to stand still waiting for its receipt number.
+// The default here used to be the full write timeout — 30 seconds, times three
+// retries — before the sale was even attempted, with the confirm dialog frozen
+// and every way out disabled. On a phone with a bad data bundle that is the
+// difference between a sale and an abandoned customer.
+//
+// It is safe to give up: the server replaces any "Temp #…" number with a real
+// one when the sale lands (api/index.js), so the receipt catches up rather than
+// the ledger ending up with a duplicate.
+const ORDER_NUMBER_WAIT_MS = 2500;
+
+export async function nextOrderNumber(timeoutMs: number = ORDER_NUMBER_WAIT_MS): Promise<string | null> {
   try {
     const res = await fetchTimeout(`${BASE}/api/orders/next`, {
       method: 'POST',
       headers: { Authorization: getAuthHeader() },
-    }, WRITE_TIMEOUT_MS);
+    }, timeoutMs);
     if (res.ok) {
       const data = await res.json();
       // Keep the local offline fallback counter in sync so a later offline

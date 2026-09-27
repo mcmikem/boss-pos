@@ -380,7 +380,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       return next;
     });
   };
-  const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>('sales');
+  // Which screen she was on survives a re-lock. It used to reset to Sell every
+  // time, while the half-built SALE survived — so the one thing you can lose by
+  // locking the till was where you were, which is the thing that costs nothing
+  // to keep. (The lock screen stays an early return on purpose: rendering the
+  // app underneath it would fire data fetches and open the event stream on a
+  // locked till.)
+  const [activeTab, setActiveTab] = useState<'sales' | 'inventory' | 'analytics' | 'expenses' | 'registers'>(() => {
+    try {
+      const stored = localStorage.getItem('boss_pos_tab');
+      return stored === 'inventory' || stored === 'analytics' || stored === 'expenses' || stored === 'registers' || stored === 'sales'
+        ? stored
+        : 'sales';
+    } catch {
+      return 'sales';
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('boss_pos_tab', activeTab); } catch {}
+  }, [activeTab]);
   const [showSuppliers, setShowSuppliers] = useState(false);
   const [showMore, setShowMore] = useState(false);
   // Simple → Full graduation (#25): beginners get Sell / Money / More until

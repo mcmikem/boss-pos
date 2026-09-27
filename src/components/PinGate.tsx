@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, Loader2 } from 'lucide-react';
 import { readLockLog, isRapidRelock } from '../utils/locklog';
 
 interface PinGateProps {
@@ -20,6 +20,21 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
   const [attempts, setAttempts] = useState(0);
   const [lockedUntil, setLockedUntil] = useState<number>(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // A PIN takes up to two round-trips to check (the person, then the till), and
+  // this screen used to show four filled dots and a live-looking keypad for the
+  // whole of it. It looked broken, and tapping Clear plus four more digits in
+  // that window started a SECOND unlock competing with the first.
+  const [busy, setBusy] = useState(false);
+  // Ticks once a second so the countdown under the keypad is real time left,
+  // not a sentence that says 30s for 30s and then vanishes.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const iv = setInterval(() => setTick(n => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, [lockedUntil]);
+  const secondsLeft = lockedUntil ? Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000)) : 0;
+  const lockedOut = secondsLeft > 0;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -37,12 +52,13 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
   });
 
   const handleDigit = async (d: string) => {
-    if (Date.now() < lockedUntil) return;
+    if (busy || Date.now() < lockedUntil) return;
     setError('');
     const next = pin + d;
     if (next.length > 4) return;
     setPin(next);
     if (next.length === 4) {
+      setBusy(true);
       try {
         await onUnlock(next);
       } catch (err) {
@@ -55,21 +71,24 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
           const until = Date.now() + LOCKOUT_MS;
           setLockedUntil(until);
           setAttempts(0);
-          setError(serverLocked ? msg : `Too many attempts. Try again in ${LOCKOUT_MS / 1000}s.`);
-          setTimeout(() => setError(''), LOCKOUT_MS);
+          setError(serverLocked ? msg : 'Too many attempts.');
         } else {
           setError(msg);
         }
+      } finally {
+        setBusy(false);
       }
     }
   };
 
   const handleClear = () => {
+    if (busy) return;
     setPin('');
     setError('');
   };
 
   const handleBackspace = () => {
+    if (busy) return;
     setPin(prev => prev.slice(0, -1));
   };
 
@@ -87,10 +106,12 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
           </p>
           <div className="w-full max-w-[280px] space-y-2 mb-4">
             {candidates.map(c => (
-              <button key={c.id} onClick={async () => {
+              <button key={c.id} disabled={busy} onClick={async () => {
                 setError('');
+                setBusy(true);
                 try { await onPickPerson?.(c.id); }
                 catch (err) { setError((err as Error)?.message || 'Wrong PIN'); }
+                finally { setBusy(false); }
               }}
                 className="w-full h-14 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 text-white text-base font-black flex items-center justify-between px-4 active:scale-[0.99] transition-all cursor-pointer">
                 <span className="truncate">{c.name}</span>
@@ -112,34 +133,39 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
             <p className="text-[10px] text-zinc-600 font-bold mb-1">Last lock: {lockInfo.last.reason}</p>
           ) : null}
 
-          <div className="flex gap-3 mb-8">
+          <div className="flex gap-3 mb-8 items-center justify-center">
             {[0, 1, 2, 3].map(i => (
               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${pin.length > i ? 'bg-gold-brand border-gold-brand' : 'border-zinc-600'}`} />
             ))}
+            {busy && <Loader2 className="w-4 h-4 ml-1 text-gold-brand animate-spin" aria-label="Checking your PIN" />}
           </div>
         </>
       )}
 
-      {!candidates?.length && error && <p className="text-xs text-rose-400 font-bold mb-4">{error}</p>}
+      {!candidates?.length && error && (
+        <p className={`text-xs font-bold mb-4 text-center ${lockedOut ? 'text-amber-300' : 'text-rose-400'}`}>
+          {error}{lockedOut ? ` Try again in ${secondsLeft}s.` : ''}
+        </p>
+      )}
 
       {!candidates?.length && (
         <div className="grid grid-cols-3 gap-3 max-w-[240px]">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => (
-            <button key={n} onClick={() => handleDigit(String(n))}
-              className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 text-white text-xl font-black active:scale-90 transition-all cursor-pointer">
+            <button key={n} onClick={() => handleDigit(String(n))} disabled={busy || lockedOut}
+              className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 text-white text-xl font-black active:scale-90 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
               {n}
             </button>
           ))}
-          <button onClick={handleClear}
-            className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs font-bold active:scale-90 transition-all cursor-pointer">
+          <button onClick={handleClear} disabled={busy || lockedOut}
+            className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs font-bold active:scale-90 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
             Clear
           </button>
-          <button onClick={() => handleDigit('0')}
-            className="w-16 h-16 rounded-2xl bg-gold-brand text-black text-xl font-black active:scale-90 transition-all cursor-pointer">
+          <button onClick={() => handleDigit('0')} disabled={busy || lockedOut}
+            className="w-16 h-16 rounded-2xl bg-gold-brand text-black text-xl font-black active:scale-90 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
             0
           </button>
-          <button onClick={handleBackspace}
-            className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs font-bold active:scale-90 transition-all cursor-pointer">
+          <button onClick={handleBackspace} disabled={busy || lockedOut}
+            className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs font-bold active:scale-90 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
             ←
           </button>
         </div>

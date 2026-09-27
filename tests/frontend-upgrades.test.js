@@ -1027,3 +1027,32 @@ test('the app says where it is, and never shows two different numbers as one', (
   assert.match(reg, />Expected<\/th>/);
   assert.match(reg, />On hand<\/th>/);
 });
+
+test('nothing at the till can look broken, vanish, or hang', () => {
+  const gate = read('src/components/PinGate.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const api = read('src/api.ts').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // The lock screen awaited a PIN (up to two round-trips) with four filled dots
+  // and a live-looking keypad, and accepted a second unlock meanwhile.
+  assert.match(gate, /const \[busy, setBusy\] = useState\(false\)/);
+  assert.match(gate, /if \(busy \|\| Date\.now\(\) < lockedUntil\) return;/);
+  assert.match(gate, /disabled=\{busy \|\| lockedOut\}/);
+  // The lockout said "try again in 30s" and swallowed every tap meanwhile.
+  assert.match(gate, /const secondsLeft = lockedUntil \? Math\.max\(0, Math\.ceil/);
+  assert.match(gate, /Try again in \$\{secondsLeft\}s/);
+  // A sale waited the full 30s write timeout for a receipt number before it was
+  // even attempted. The server renumbers a Temp # on arrival, so giving up early
+  // is safe and the receipt catches up.
+  assert.match(api, /const ORDER_NUMBER_WAIT_MS = 2500/);
+  assert.equal(/\}, WRITE_TIMEOUT_MS\);\n    if \(res\.ok\) \{\n      const data = await res\.json\(\);\n      \/\/ Keep the local offline fallback counter/.test(api), false);
+  // Parked sales were only reachable through a FAB that only exists when the
+  // cart is not empty.
+  assert.match(sales, /const renderHeldStrip = \(\) =>/);
+  assert.match(sales, /tap it under Held to sell it/);
+  // Re-locking used to throw away the screen, while the cart draft survived.
+  assert.match(app, /localStorage\.getItem\('boss_pos_tab'\)/);
+  assert.match(app, /localStorage\.setItem\('boss_pos_tab', activeTab\)/);
+  // A spinner, because "Saving sale…" looks the same at 200ms and at a stall.
+  assert.match(read('src/components/ConfirmSaleModal.tsx'), /animate-spin/);
+});

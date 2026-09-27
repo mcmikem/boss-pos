@@ -5,7 +5,8 @@ import {
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
   Coins, Smartphone, UserCheck, Percent, User,
   Barcode, Wallet, ChefHat, ArrowRightLeft, Scissors, X, Palette, Zap, RotateCcw,
-  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame
+  CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame,
+  PauseCircle
 } from 'lucide-react';
 import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult, CreditEat } from '../types';
 import { nextOrderNumber, quoteApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
@@ -288,7 +289,7 @@ export default function Sales({
     setPendingRecovery(null);
     clearPending();
     setCart([]);
-    triggerToast('Sale parked — recall it from the cart', 'success');
+    triggerToast('Sale parked — tap it under Held to sell it', 'success');
   };
   // Parked-cart age so stale holds (yesterday's prices, forgotten names)
   // get recalled or dropped instead of lingering forever.
@@ -318,6 +319,24 @@ export default function Sales({
     setParked(unparkCart(id, parkedScope));
     triggerToast(changed ? `Recalled ${entry.name}'s sale — prices updated to today's` : `Recalled ${entry.name}'s sale`, 'info');
   };
+  // Parked sales used to be reachable ONLY from inside the cart sheet, and the
+  // gold FAB that opens that sheet only appears when the cart has something in
+  // it. So the moment you parked a half-built sale and the cart emptied, the
+  // way back to it disappeared — and the toast even said "recall it from the
+  // cart". One tap here instead, on the screen she is actually looking at.
+  const renderHeldStrip = () => (parked.length > 0 && !simpleTill) ? (
+    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label="Held sales">
+      {parked.map(p => (
+        <button key={p.id} onClick={() => recallParked(p.id)}
+          className="flex items-center gap-2 pl-3 pr-3 py-2.5 rounded-xl bg-white/5 border border-white/15 text-zinc-200 text-xs font-black whitespace-nowrap active:scale-95 transition-all cursor-pointer shrink-0 min-h-[44px]">
+          <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+          {p.name} • {formatCurrency(parkedTotal(p))}
+          <span className="text-[10px] font-bold text-zinc-500">{parkedAge(p.createdAt)}</span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   const renderParkedRows = () => (parked.length > 0 && !simpleTill) ? (
     <div className="space-y-1.5">
       <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Parked ({parked.length})</p>
@@ -1284,6 +1303,9 @@ export default function Sales({
       setPendingRecovery(null);
       clearPending();
     }
+    // Two and a half seconds, then the local counter. The server renumbers a
+    // "Temp #" when the sale lands, so the receipt is only briefly behind
+    // rather than the sale being stuck behind a round-trip.
     let orderNumber: string | undefined = recoverySale?.orderNumber || (await nextOrderNumber()) || undefined;
     if (!orderNumber) orderNumber = localOrderNumber();
     const saleId = recoverySale?.id || `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2021,6 +2043,9 @@ export default function Sales({
             ))}
           </div>
         )}
+
+        {/* Held sales sit above the grid: reachable with an empty cart. */}
+        {renderHeldStrip()}
 
         {/* Departments — hidden when this shop trades in one. A tailor should
             never be told they also run a library. */}
