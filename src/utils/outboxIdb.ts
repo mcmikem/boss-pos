@@ -288,10 +288,16 @@ function readCanonicalOutbox(db: IDBDatabase, local: OutboxMirror | null): Promi
       observeRevision(markerRevision);
       if (local) observeRevision(local.revision);
       const records = hasMarker ? parsedRecords : recordValues.length > 0 ? parsedRecords : null;
+      // The read already has its answer; persisting the snapshot is best-effort.
+      // A throw in here used to reject an inner promise nobody was listening to,
+      // so this promise never settled and the caller waited forever.
+      const persist = (snapshotEntries: unknown[], snapshotRevision: number) => {
+        try { writeOutboxSnapshot(tx, snapshotEntries, snapshotRevision); } catch { /* localStorage mirror is the fallback */ }
+      };
       if (markerRecord && records) {
         if (local && local.revision > markerRevision) {
           result = { entries: local.entries, revision: local.revision, initialized: true };
-          writeOutboxSnapshot(tx, local.entries, local.revision);
+          persist(local.entries, local.revision);
         } else {
           result = { entries: records, revision: markerRevision, initialized: true };
         }
@@ -304,7 +310,7 @@ function readCanonicalOutbox(db: IDBDatabase, local: OutboxMirror | null): Promi
       }
       const revision = nextRevision(local?.revision || markerRevision);
       result = { entries: merged, revision, initialized: true };
-      writeOutboxSnapshot(tx, merged, revision);
+      persist(merged, revision);
     };
     const failed = (error: unknown) => {
       try { tx.abort(); } catch {}
@@ -325,10 +331,25 @@ function readCanonicalOutbox(db: IDBDatabase, local: OutboxMirror | null): Promi
   });
 }
 
+// The outbox records store is created WITHOUT a keyPath, so it has no key
+// generator and `put(value)` with no key argument throws a DataError. That is
+// not theoretical: it was happening on every write, on every device, and only
+// the localStorage mirror hid it. Devices created after a future version bump
+// may have a keyPath instead, so the shape is detected rather than assumed —
+// passing a key to a store that HAS a keyPath is itself an error.
+export function putOutboxRecord(store: IDBObjectStore, entry: unknown, index: number): void {
+  if (store.keyPath) {
+    store.put(entry);
+    return;
+  }
+  const id = entry && typeof entry === 'object' ? (entry as { id?: unknown }).id : undefined;
+  store.put(entry, id != null ? String(id) : `idx-${index}`);
+}
+
 function writeOutboxSnapshot(tx: IDBTransaction, entries: unknown[], revision: number): void {
   const records = tx.objectStore(OUTBOX_RECORDS_STORE);
   records.clear();
-  for (const entry of entries) records.put(entry);
+  entries.forEach((entry, index) => putOutboxRecord(records, entry, index));
   tx.objectStore(OUTBOX_META_STORE).put({ version: OUTBOX_FORMAT_VERSION, revision, updatedAt: revision, count: entries.length }, OUTBOX_META_KEY);
   tx.objectStore(OUTBOX_STORE).put(JSON.stringify(entries), OUTBOX_KEY);
 }

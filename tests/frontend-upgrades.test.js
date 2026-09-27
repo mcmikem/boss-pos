@@ -649,3 +649,37 @@ test('inventory and supplier writes wait for the server', () => {
   assert.match(app, /Not saved \\u2014/);
   assert.match(app, /only a manager can change prices and stock/);
 });
+
+// Found in production, not in review: 688 unhandled rejections on one phone, all
+// "Failed to execute 'put' on 'IDBObjectStore': ... the key parameter was not
+// provided". The outbox records store is created with no keyPath, so every
+// single IndexedDB write of the outbox threw. Only the localStorage mirror hid
+// it — and the read path could then hang forever.
+test('the outbox record store is written in a shape the store actually accepts', () => {
+  const idb = read('src/utils/outboxIdb.ts');
+  // Every store is created out-of-line, with no key generator.
+  assert.match(idb, /db\.createObjectStore\(OUTBOX_RECORDS_STORE\)/);
+  assert.equal(/createObjectStore\(OUTBOX_RECORDS_STORE,/.test(idb), false);
+  // ...so the put must supply a key, or detect a keyPath if a future version
+  // creates one (passing a key to a keyed store is itself an error).
+  assert.match(idb, /export function putOutboxRecord\(store: IDBObjectStore, entry: unknown, index: number\)/);
+  const fn = idb.match(/export function putOutboxRecord[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(fn, /if \(store\.keyPath\) \{\s*\n\s*store\.put\(entry\);\s*\n\s*return;/);
+  assert.match(fn, /store\.put\(entry, id != null \? String\(id\) : `idx-\$\{index\}`\)/);
+  // And a bare keyless put must not survive anywhere in the snapshot writer.
+  const snapshot = idb.match(/function writeOutboxSnapshot[\s\S]*?\n\}/)?.[0] || '';
+  assert.equal(/records\.put\(entry\)/.test(snapshot), false);
+  assert.match(snapshot, /entries\.forEach\(\(entry, index\) => putOutboxRecord\(records, entry, index\)\)/);
+});
+
+test('a failed outbox snapshot can never leave a read hanging', () => {
+  const idb = read('src/utils/outboxIdb.ts');
+  // writeOutboxSnapshot is called from a .then callback inside readCanonicalOutbox,
+  // so a throw there rejected a promise nobody awaited and the read never settled.
+  const reader = idb.match(/function readCanonicalOutbox[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(reader, /const persist = \(snapshotEntries: unknown\[\], snapshotRevision: number\) => \{/);
+  assert.match(reader, /try \{ writeOutboxSnapshot\(tx, snapshotEntries, snapshotRevision\); \} catch \{/);
+  // Every snapshot write in that function goes through the guarded helper.
+  const unguarded = reader.replace(/const persist = [\s\S]*?\n    \};/, '');
+  assert.equal(/writeOutboxSnapshot\(tx,/.test(unguarded), false);
+});
