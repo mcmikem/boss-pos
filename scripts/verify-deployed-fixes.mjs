@@ -35,6 +35,8 @@ const MARKERS = [
   { id: 'money moved is labelled in plain words', needle: 'Phone float', why: 'cash to a manager was impossible' },
   { id: 'the mobile money reference is optional in the form', needle: 'Mobile money reference', why: 'the reference was mandatory' },
   { id: 'the till float key is allowed for a seller', needle: 'eodCapital', why: "tomorrow's opening never left the phone" },
+  { id: 'the sign-in screen highlights nobody', needle: 'Tap your name first', why: 'a correct PIN was checked against the wrong person' },
+  { id: 'today\'s seller is offered in one tap', needle: 'Sold earlier today', why: 'the name was hunted for in a grid on every re-lock' },
 ];
 
 // A needle that must NOT be there, for regressions that were deletions.
