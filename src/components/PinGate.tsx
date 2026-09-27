@@ -101,8 +101,11 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
       {candidates?.length ? (
         <>
           <p className="text-xs text-gold-brand font-bold uppercase tracking-wider mb-1">Who is this?</p>
-          <p className="text-[11px] text-zinc-500 font-bold uppercase mb-4 text-center max-w-[260px] leading-snug">
-            This PIN is used by more than one person. Tap your name.
+          <p className="text-[11px] text-zinc-500 font-bold uppercase mb-1 text-center max-w-[260px] leading-snug">
+            This PIN opens {candidates.length} accounts. Tap yours.
+          </p>
+          <p className="text-[11px] text-amber-300/90 font-bold uppercase mb-4 text-center max-w-[280px] leading-snug">
+            If your name is not here, the PIN you just typed is not the one saved for you. Ask a manager to reset it — do not pick somebody else's.
           </p>
           <div className="w-full max-w-[280px] space-y-2 mb-4">
             {candidates.map(c => (

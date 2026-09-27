@@ -1056,3 +1056,26 @@ test('nothing at the till can look broken, vanish, or hang', () => {
   // A spinner, because "Saving sale…" looks the same at 200ms and at a stall.
   assert.match(read('src/components/ConfirmSaleModal.tsx'), /animate-spin/);
 });
+
+test('one PIN means one person, and nobody is forced to be somebody else', () => {
+  const server = read('api/index.js').replace(/^\s*\/\/.*$/gm, '');
+  const gate = read('src/components/PinGate.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const sw = read('src/components/StaffSwitcher.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // Four accounts ended up sharing one PIN. The sign-in screen cannot tell them
+  // apart, so it asks the seller to choose — which is how a person ends up
+  // selling under a colleague's name. One PIN, one person, enforced on create
+  // and on change, and it says whose it is.
+  assert.match(server, /code: 'DUPLICATE_PIN'/);
+  assert.equal((server.match(/code: 'DUPLICATE_PIN'/g) || []).length, 2);
+  assert.match(server, /cannot use that PIN — \$\{clash\.name\} already has it/);
+  assert.match(server, /That PIN already belongs to \$\{taken\.name\}/);
+  // The mandatory screen had no exit, so it pushed her into picking somebody.
+  assert.match(sw, /onSellAsTill\?: \(\) => void/);
+  assert.match(sw, /Sell as the till instead/);
+  assert.match(app, /!activeStaff && !sellAsTillSession/);
+  assert.match(app, /setSellAsTillSession\(false\);\n    rememberSellerToday/);
+  // And the ambiguity screen says what is true instead of leaving her guessing.
+  assert.match(gate, /This PIN opens \{candidates\.length\} accounts/);
+  assert.match(gate, /do not pick somebody else/);
+});

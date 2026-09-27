@@ -6808,14 +6808,24 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
   const name = text(b.name, 80);
   const role = b.role === 'manager' ? 'manager' : 'cashier';
   if (!name) return res.status(400).json({ error: 'Staff name is required' });
-  const clash = (await sql`SELECT id, active FROM staff`).find((row) => sameStaffName(row.name, name));
-  if (clash) {
+  const nameClash = (await sql`SELECT id, active FROM staff`).find((row) => sameStaffName(row.name, name));
+  if (nameClash) {
     return res.status(409).json({
-      error: `${text(name, 80)} is already on this till${clash.active ? '' : ' (disabled)'}. Open that account to change their PIN instead of adding the same person twice.`,
+      error: `${text(name, 80)} is already on this till${nameClash.active ? '' : ' (disabled)'}. Open that account to change their PIN instead of adding the same person twice.`,
       code: 'DUPLICATE_STAFF',
     });
   }
   if (!/^\d{4}$/.test(String(b.pin || ''))) return res.status(400).json({ error: 'A 4-digit PIN is required' });
+  // One PIN, one person. Four accounts sharing a PIN is not a convenience: the
+  // lock screen then cannot tell them apart and asks the seller to pick, so a
+  // person ends up signing in — and selling — under somebody else's name.
+  const clash = (await sql`SELECT name, active FROM staff`).find(row => verifyStoredPin(row.pin_hash, String(b.pin)));
+  if (clash) {
+    return res.status(409).json({
+      error: `${text(name, 80)} cannot use that PIN — ${clash.name} already has it. Give ${text(name, 80)} a PIN nobody else has, so the till can tell them apart at sign-in.`,
+      code: 'DUPLICATE_PIN',
+    });
+  }
   const salt = randomBytes(16).toString('hex');
   const hash = pinHashFormat(salt, hashPinStrong(String(b.pin), salt));
   const id = `st-${randomUUID()}`;
@@ -6834,16 +6844,24 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
   const active = b.active !== undefined ? !!b.active : !!rows[0].active;
   if (!name) return res.status(400).json({ error: 'Staff name is required' });
   if (!sameStaffName(rows[0].name, name)) {
-    const clash = (await sql`SELECT id, active FROM staff WHERE id <> ${req.params.id}`).find((row) => sameStaffName(row.name, name));
-    if (clash) {
+    const renameClash = (await sql`SELECT id, active FROM staff WHERE id <> ${req.params.id}`).find((row) => sameStaffName(row.name, name));
+    if (renameClash) {
       return res.status(409).json({
-        error: `${text(name, 80)} is already on this till${clash.active ? '' : ' (disabled)'}. Two people cannot share a name here — the sign-in screen would not know which is which.`,
+        error: `${text(name, 80)} is already on this till${renameClash.active ? '' : ' (disabled)'}. Two people cannot share a name here — the sign-in screen would not know which is which.`,
         code: 'DUPLICATE_STAFF',
       });
     }
   }
   await sql`UPDATE staff SET name=${name}, role=${role}, active=${active} WHERE id=${req.params.id}`;
   if (/^\d{4}$/.test(String(b.pin || ''))) {
+    const others = await sql`SELECT name, active, pin_hash FROM staff WHERE id <> ${req.params.id}`;
+    const taken = others.find(row => verifyStoredPin(row.pin_hash, String(b.pin)));
+    if (taken) {
+      return res.status(409).json({
+        error: `That PIN already belongs to ${taken.name}. Two people on one PIN is why the sign-in screen has to guess — give ${name} a PIN nobody else has.`,
+        code: 'DUPLICATE_PIN',
+      });
+    }
     const salt = randomBytes(16).toString('hex');
     await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(String(b.pin), salt))} WHERE id=${req.params.id}`;
   }

@@ -536,6 +536,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     [staffList],
   );
   const [sellerToday, setSellerToday] = useState<SellerToday | null>(() => sellerTodayOf());
+  // She chose to sell without a name. The mandatory "Who is selling?" screen
+  // used to have no exit at all, so a seller whose own PIN did not match was
+  // pushed into picking a colleague — and every sale she rang was stamped with
+  // that colleague's name. Selling unattributed is wrong; selling as somebody
+  // else is worse.
+  const [sellAsTillSession, setSellAsTillSession] = useState(false);
   // Same stored preference the till grid reads; nothing is stored = off, which
   // is what an untouched till has always shown.
   const [showSoldOut, setShowSoldOut] = useState<boolean>(() => {
@@ -1557,6 +1563,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffToken(null);
     try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
     setStaffName('');
+    setSellAsTillSession(true);
     // Kept, deliberately: a re-lock at noon should still offer this morning's
     // seller in one tap. Forgetting happens at hand-over (signInAsSeller
     // overwrites it) and at sign-out, where the shift has genuinely ended.
@@ -1570,6 +1577,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // the sign-in screen. Remembering the name never skips the PIN — see
   // utils/staffMemory for why that would be a lie in the ledger.
   const signInAsSeller = async (s: { id: string, name: string; role: 'manager' | 'cashier'; token?: string }) => {
+    // A real sign-in ends any till-only session, so the question is asked again
+    // at the next lock rather than silently carrying on with no name.
+    setSellAsTillSession(false);
     rememberSellerToday({ id: s.id, name: s.name, role: s.role });
     setSellerToday({ id: s.id, name: s.name, role: s.role, day: dayKeyOf() });
     if (s.token) setStaffToken(s.token);
@@ -3802,7 +3812,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           onClose={() => setShowStaffSwitcher(false)}
         />
       )}
-      {staffConfigured && !activeStaff && (
+      {staffConfigured && !activeStaff && !sellAsTillSession && (
         <StaffSwitcher
           staff={switcherStaff}
           today={sellerToday}
@@ -3810,6 +3820,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           verifying={staffVerifying}
           error={staffVerifyError}
           onVerify={handleVerifyStaff}
+          onSellAsTill={() => { unlockAsTillOnly(); markUnlocked(); setAuthState('ready'); fetchAllData().catch(() => {}); }}
           onClose={() => {}}
         />
       )}

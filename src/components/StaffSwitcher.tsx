@@ -10,6 +10,11 @@ interface StaffSwitcherProps {
   onVerify: (id: string, pin: string) => void;
   onClose: () => void;
   today?: { id: string; name: string } | null;
+  /** Selling without signing in as anybody. The screen used to have no way out
+   *  when it was mandatory, so a seller whose own PIN did not match was pushed
+   *  into picking a colleague — and every sale she rang came out under that
+   *  colleague's name. */
+  onSellAsTill?: () => void;
 }
 
 // "Who is selling?" — PIN-checked identity switch. Shown mandatorily when
@@ -23,7 +28,7 @@ interface StaffSwitcherProps {
 //  2. Make anyone hunt for their own name in a scrolling grid. Whoever sold
 //     earlier today is offered first, in one tap. It is a shortcut to the
 //     name, not a way around the PIN: the PIN is still what proves it.
-export default function StaffSwitcher({ staff, mandatory, verifying, error, onVerify, onClose, today }: StaffSwitcherProps) {
+export default function StaffSwitcher({ staff, mandatory, verifying, error, onVerify, onClose, today, onSellAsTill }: StaffSwitcherProps) {
   const [selectedId, setSelectedId] = useState<string>('');
   const [pin, setPin] = useState('');
 
@@ -103,9 +108,15 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
           className="w-full h-12 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 transition-all disabled:opacity-40 cursor-pointer">
           {verifying ? 'Checking…' : 'Start selling'}
         </button>
+        {onSellAsTill && (
+          <button onClick={onSellAsTill}
+            className="w-full h-11 mt-3 rounded-xl border border-white/10 text-zinc-400 text-[10px] font-black uppercase tracking-widest hover:border-white/20 hover:text-zinc-200 transition-all cursor-pointer">
+            Sell as the till instead
+          </button>
+        )}
         {error && staff.length > 1 && (
           <p className="text-[10px] text-zinc-500 text-center mt-3">
-            Not working? Use the till PIN at the lock screen and sell as the till — a manager can sort the PIN later.
+            Your name not on this list? Your PIN is not the one saved for you — ask a manager to reset it in Settings, then try again.
           </p>
         )}
         {mandatory && (
