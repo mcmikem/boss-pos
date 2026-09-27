@@ -12,7 +12,46 @@
 - Eatery is a snacks business with exact menu: chappati 500, samosa/sumbusa 300 (couple/pair 500, big 500), egg roll 1000, coconut cookies pair 500, shortbread cookies pair 500, cookies on a plate 2500, sausage 1000, half cakes 500 & 1000, meat samosa 1000, black tea 500, milk tea 1000
 - Tailoring stays in the Tailoring category (order screen via "Manage Tailor Orders"), NOT a nav tab
 - Must run on old Android browsers (legacy build + downleveled CSS already deployed)
-- PIN must not be stored in plaintext (SHA-256 with cyrb53 fallback)
+- PINs are never stored in plaintext: salted PBKDF2 (120k iterations) on the server, and the device caches only the hash so offline unlock works. `cyrb53`/the `fb_` prefix no longer exist.
+
+## Current state (read this before changing anything)
+
+Verified against the live database, not from memory. The list below is what is
+true now; older sections of this file are a history and may describe code that
+has since changed.
+
+### The PIN model (this is the thing most likely to be got wrong)
+- **One PIN per person.** A staff PIN opens the till and signs the seller in at
+  the same time. The lock screen asks whose PIN it is (`POST /api/staff/unlock`).
+- **Manager authority is the signed-in staff account**, checked by the server on
+  ~87 routes (`requireManager` in `api/index.js`). No PIN
+  authorises anything by itself.
+- **The shop's PIN is a rescue door** for a new phone or a broken sign-in. It
+  opens the device and grants nothing.
+- **No phone-only "manager PIN" exists.** It was collected as if it approved
+  voids and refunds, and the server then refused the write anyway.
+
+### What a seller may do without a manager
+Selling, taking payment, recording money in/out, logging a loss or a tray carry,
+logging a kitchen batch, correcting their own entry from today, counting the
+drawer, setting tomorrow's opening float, and (only as an explicit
+`recipeCostsOnly` write) carrying paid ingredient prices into a recipe.
+Changing prices, settings, staff, purchase orders, credit limits, reports, and
+voiding a sale are manager-only.
+
+### Where the real bugs came from
+Every serious bug found recently was invisible to code review and surfaced from
+production data instead: the IndexedDB outbox store could never be written to,
+live sync was dead on a WebView without `AbortController`, the clipboard denied
+every write so support reports came back empty, and two money-path calls
+depended on APIs the build does not polyfill. **Old-Android compatibility is the
+recurring theme** — treat an old device as a first-class test target, and check
+`audit_log` (`client.error`, `write.refused`) rather than guessing.
+
+### Not yet verified
+Everything in `QA.md` under "Seller can-do list" and "Still to confirm" needs a
+real phone. No fix in this codebase has been confirmed by shop use since the
+close-day and sell-screen audits.
 
 ## Progress
 ### Done
@@ -51,6 +90,7 @@
 - Variant products in Sales show "Options" badge, no qty stepper — tap opens picker
 - Eatery menu seeded with ON CONFLICT DO NOTHING so user edits aren't overwritten
 - Continue shipped stack: legacy build for old Android, `deLayerCSS` + lightningcss downlevel, SHA-256 PNG hashing
+- **Browser-API floor is a live constraint, not a formality.** The legacy bundle targets Chrome 49 and the modern bundle starts at Chrome 64, so APIs newer than 64 are NOT polyfilled (`flatMap`, `AbortController`, `navigator.clipboard`, `Intl` locales). Anything on a money path must degrade rather than throw — see `src/utils/money.ts` and `src/utils/arrays.ts`.
 
 ## Next Steps
 - Ask user to verify on device (hard refresh loads fresh products due to cache v3)
@@ -64,8 +104,8 @@
 - Commits pushed: `eed5ac1` (HEAD, large-format calc + invoice), `87566f1` (design & print module), `d8850cd` (offline unlock fix), `bb0b57c` (offline settings cache + cached-PIN unlock), `68f8452` (recipe costing), `74507f5` (eatery cleanup + catalog sync + offline idempotency + audit trail), `59d9bc9` (cache v2), `22803d3` (expenses + variants), `178269c` (tailoring + fixes), `9291e4a` (old Android support), `dafd0dc` (tailor into Tailoring)
 - Vercel: till prod `https://imac-pos.vercel.app` (project `imac-pos`); public landing `https://boss-pos-ug.vercel.app` (project `boss-pos-ug`, root `landing/`, CLI 51.7.0 at `/usr/local/bin/vercel`)
 - Old-Android stack already live: `@vitejs/plugin-legacy@^6.1.1` (NOT v8), `lightningcss@^1.33.0`, `deLayerCSS()` unwraps `@layer` + converts `oklch()`→`rgb()`, targets `Android >= 5 / Chrome >= 49 / iOS >= 12 / Safari >= 12`, all 107 `color-mix` guarded by `@supports`
-- `src/utils/crypto.ts`: SHA-256 via `crypto.subtle` with `cyrb53` fallback prefixed `fb_`
-- Old plaintext PINs won't match new hashes — users must clear/re-set PIN
+- `src/utils/crypto.ts`: reproduces the server's PBKDF2 derivation, with a pure-JS SHA-256/HMAC/PBKDF2 fallback for WebViews whose `crypto.subtle` lacks PBKDF2 (Chrome < 58)
+- One PIN per person: the staff PIN opens the till AND signs the seller in. The shop PIN is a labelled rescue door that grants nothing. There is no phone-only "manager PIN" — it never could authorise anything and was removed.
 - `products.imageurl` + `variants` via CREATE TABLE + guarded ALTER TABLE; upload 200px / JPEG 0.6 / max 100KB
 - Recipe costing: `recipe TEXT` column (guarded ALTER); suggested price = `COGS/unit ÷ (1 − targetMargin/100)`; waste lowers ingredient cost via `÷(1−waste/100)`
 - Tailoring: routes `GET/POST /api/tailoring-orders`, `PUT/DELETE /api/tailoring-orders/:id`; workTypes `repair | custom | sportswear`; statuses `pending | in_progress | completed | delivered`
@@ -91,4 +131,4 @@
 - `src/components/Analytics.tsx`: self-fetches `designOrders`, design revenue/profit in totals (subtracts material + labor + transport)
 - `src/types.ts`: `DesignOrder` (incl. `transportCost`, orderType `'sticker'`)
 - `vite.config.ts`: legacy plugin + `deLayerCSS()` + lightningcss downlevel
-- `src/utils/crypto.ts`: SHA-256 hashPin with cyrb53 fallback
+- `src/utils/crypto.ts`: PBKDF2 matching the server, with a pure-JS fallback

@@ -788,3 +788,21 @@ test('a repeating client failure is one row that says how loud it is', () => {
   assert.match(sentry, /state\[key\] = \{ count: 0, lastReportedAt: now \}/);
   assert.match(sentry, /const occurrences = seen \? \(seen\.count \|\| 1\) \+ 1 : 1;/);
 });
+
+test('the notes future work reads are not allowed to contradict the code', () => {
+  const notes = read('.opencode/summary.md');
+  // It claimed SHA-256 with a cyrb53 fallback and that old PINs must be
+  // re-set. The code is salted PBKDF2 with a pure-JS fallback for old WebViews,
+  // and a stale claim here misleads whoever (or whatever) reads it next.
+  assert.doesNotMatch(notes, /cyrb53 fallback/);
+  assert.match(notes, /salted PBKDF2/);
+  // The current-state section is the one that matters, and it must state the
+  // model accurately.
+  assert.match(notes, /## Current state/);
+  assert.match(notes, /One PIN per person/);
+  assert.match(notes, /rescue door/);
+  assert.match(notes, /No phone-only "manager PIN" exists/);
+  // And the browser floor, which is what let three money-path bugs through.
+  assert.match(notes, /Chrome 49/);
+  assert.match(notes, /degrade rather than throw/);
+});
