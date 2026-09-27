@@ -30,6 +30,7 @@ import { printDailyClose, closeTotals, buildCloseSummary } from './utils/dailyCl
 import { buildCloseSummaryPayload, closeSummaryClientWriteId } from './utils/closeSummary';
 import { readClientErrorLog, supportSummary, type ClientErrorRecord } from './utils/sentry';
 import { copyText } from './utils/copy';
+import { formatUgx } from './utils/money';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
@@ -1831,12 +1832,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const formatCurrency = (ugxVal: number) => {
-    return new Intl.NumberFormat('en-UG', {
-      style: 'currency', currency: 'UGX',
-      minimumFractionDigits: 0, maximumFractionDigits: 0
-    }).format(ugxVal);
-  };
+  // Every price, total and balance on every screen goes through here, and the
+  // legacy bundle's floor is Chrome 49 — so this must not be able to throw.
+  const formatCurrency = (ugxVal: number) => formatUgx(ugxVal);
 
   const handleAddProduct = async (newProd: Product): Promise<boolean> => {
     const stamped = { ...newProd, updatedAt: new Date().toISOString() };

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, Suspense, type Dispatch, type SetStateAction } from 'react';
+import { flatMap } from '../utils/arrays';
 import { lazyRetry } from '../utils/lazyRetry';
 import { 
   Search, Plus, Minus, Trash2, ShoppingCart, Check, Tag,
@@ -362,9 +363,7 @@ export default function Sales({
     // screen shows it as "planned" so the batch starts from the plan.
     if (selectedCategory === 'Eatery' || selectedCategory === 'Drinks') {
       productionPlanApi.get(todayLocalKey()).then(rows => {
-        const lines = rows
-          .filter(r => r.category === selectedCategory)
-          .flatMap(r => r.lines || []);
+        const lines = flatMap(rows.filter(r => r.category === selectedCategory), r => r.lines || []);
         setPlannedToday(lines.map(l => ({
           productId: String(l.productId || ''),
           productName: String(l.productName || ''),

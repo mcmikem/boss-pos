@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { flatMap } from '../utils/arrays';
 import { CATEGORY_VISUALS, DEFAULT_CATEGORY_VISUAL } from '../data/categoryVisuals';
 import type { Product, Sale } from '../types';
 import { localDayKey, todayLocalKey } from '../utils/dates';
@@ -165,9 +166,7 @@ export function shelfStats(
 ): DepartmentStat[] {
   const today = todayLocalKey();
   const inCat = products.filter(p => p.category === category);
-  const soldToday = salesHistory
-    .filter(s => isLiveSale(s) && localDayKey(s.timestamp) === today)
-    .flatMap(s => s.items)
+  const soldToday = flatMap(salesHistory.filter(s => isLiveSale(s) && localDayKey(s.timestamp) === today), s => s.items)
     .filter(i => inCat.some(p => p.id === i.productId))
     .reduce((sum, i) => sum + (i.lineTotal || 0), 0);
   const shelfValue = inCat

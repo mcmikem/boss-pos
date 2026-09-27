@@ -1,4 +1,5 @@
 import type { Expense, MomoTransfer, Product, ProductionRegister, Sale, WastageLog } from '../types';
+import { flatMap } from './arrays';
 import { localDayKey } from './dates';
 import { isLiveSale } from './saleStatus';
 
@@ -664,8 +665,7 @@ export function leftoverFor(
       );
       if (!hasCarry) continue;
     }
-    const sold = daySales
-      .flatMap((s) => s.items)
+    const sold = flatMap(daySales, (s) => s.items)
       .filter((i) => i.productId === p.id)
       .reduce((s, i) => s + (i.qty || 0), 0);
     const lost = wastage
@@ -871,7 +871,7 @@ export function buildTheftFlags(args: {
   }
   // Sold without morning production and without automatic leftover cover.
   const daySales = args.sales.filter((s) => isLiveSale(s) && localDayKey(s.timestamp) === args.dayKey);
-  const lines = daySales.flatMap((s) => s.items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })));
+  const lines = flatMap(daySales, (s) => s.items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })));
   let opening: Map<string, number> | undefined;
   try {
     opening = openingForDay(args.products, args.production, args.sales, args.wastage, args.dayKey);

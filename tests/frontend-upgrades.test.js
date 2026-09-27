@@ -733,3 +733,43 @@ test('copying works where the clipboard API exists but refuses', () => {
   assert.match(read('src/components/CloseSummaryInbox.tsx'), /await copyText\(body\)/);
   assert.equal(/throw new Error\('no clipboard'\)/.test(app), false);
 });
+
+// Three of the worst bugs this session were old-Android compatibility failures
+// that no amount of review caught. This pins the two the build config promises
+// to support: Chrome 49 in the legacy bundle, Chrome 64 in the modern one.
+test('money formatting can never throw, whatever the browser\u2019s Intl knows', () => {
+  const app = read('src/App.tsx');
+  const money = read('src/utils/money.ts');
+  // It used to construct Intl.NumberFormat('en-UG') inline, per call, with no
+  // fallback — and it formats every price, total and balance on every screen.
+  assert.equal(/new Intl\.NumberFormat\('en-UG'/.test(app), false);
+  assert.match(app, /const formatCurrency = \(ugxVal: number\) => formatUgx\(ugxVal\);/);
+  // Probe the locale with a real value: some builds construct fine and only
+  // throw on first use.
+  assert.match(money, /const probe = fmt\.format\(1000\)/);
+  // Three rungs, ending at a grouping that cannot fail.
+  assert.match(money, /new Intl\.NumberFormat\('en-UG'/);
+  assert.match(money, /new Intl\.NumberFormat\('en-US'/);
+  assert.match(money, /return handRolled;/);
+  assert.match(money, /% 3 === 0\) grouped \+= ','/);
+  // And a formatter that starts throwing after being cached is replaced, not
+  // retried per call.
+  assert.match(money, /catch \{\s*\/\/ Last resort, and remember it/);
+});
+
+test('no hot path depends on flatMap, which the modern bundle does not polyfill', () => {
+  const arrays = read('src/utils/arrays.ts');
+  assert.match(arrays, /export function flatMap/);
+  // One level only, and it must survive a missing list — which is exactly what
+  // these callers pass on a first boot.
+  const fn = arrays.match(/export function flatMap[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(fn, /if \(!items\) return out;/);
+  assert.match(fn, /if \(!projected\) continue;/);
+
+  // Nothing on the money or cart paths may call the built-in.
+  for (const file of ['src/utils/cashflow.ts', 'src/components/Sales.tsx',
+                      'src/components/CategoryRegister.tsx', 'src/components/departmentRegistry.ts']) {
+    const src = read(file);
+    assert.equal(/\.flatMap\(/.test(src), false, `${file} still calls Array.prototype.flatMap`);
+  }
+});

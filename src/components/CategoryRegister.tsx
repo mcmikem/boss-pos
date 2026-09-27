@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { flatMap } from '../utils/arrays';
 import {
   Users, PackageX, Plus, Trash2, X,
   Check, Wallet, AlertTriangle, Coins, LayoutGrid, Smartphone, CalendarDays, ArrowRightLeft, FileText, ChevronDown, ChefHat
@@ -364,7 +365,7 @@ export default function CategoryRegister({
         .reduce((s, x) => s + (x.qty || 0), 0);
       const carried = catWastage.filter(x => x.productId === p.id && x.date === balanceDate && x.reason === 'remaining')
         .reduce((s, x) => s + (x.qty || 0), 0);
-      const sold = daySales.flatMap(s => s.items)
+      const sold = flatMap(daySales, s => s.items)
         .filter(i => i.productId === p.id)
         .reduce((s, i) => s + (i.qty || 0), 0);
       const expected = Math.max(0, opening + made - sold - lost);
