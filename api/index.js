@@ -1,7 +1,7 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
 import sharp from 'sharp';
-import { createHmac, createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, pbkdf2Sync, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider, saleVatTotal } from './efris.js';
 import { creditLimitDecision, normalizeCreditKey, summarizeCreditBalances } from './creditLimits.js';
 import { normalizeReportRange } from './reportRange.js';
@@ -1312,6 +1312,12 @@ async function requireAuth(req, res, next) {
   if (!token && req.path === '/api/events' && req.query && req.query.token) token = String(req.query.token);
   const auth = await verifyTokenPayload(token);
   if (!auth) return res.status(401).json({ error: 'Unauthorized', code: 'AUTH_REQUIRED' });
+  if (auth.staffId && !(await staffStillThere(auth.staffId))) {
+    return res.status(401).json({
+      error: 'That account is no longer on this till — sign in again',
+      code: 'STAFF_GONE',
+    });
+  }
   req.auth = auth;
   next();
 }
@@ -1342,6 +1348,30 @@ async function requestActor(req) {
 
 async function requestIsManager(req) {
   return managerAllowed(req.auth, await staffCount());
+}
+
+// A staff token whose person no longer exists is not a staff identity. Deleting
+// somebody and adding them again gives them a NEW account id, and the old token
+// kept working: the signature and the expiry were both fine, because nothing
+// ever looked the row up. A phone that had signed in as the deleted person went
+// on carrying a credential for an account that was gone, and every call it made
+// came back "Unauthorized" with nothing on screen to explain why.
+//
+// Cached briefly because requireAuth is the hot path and this is one indexed
+// lookup per request; a disabled person counts as gone, which is what turning
+// somebody "off" is for.
+const staffAliveCache = new Map();
+const STAFF_ALIVE_TTL_MS = 30 * 1000;
+async function staffStillThere(staffId) {
+  const id = String(staffId);
+  const hit = staffAliveCache.get(id);
+  const now = Date.now();
+  if (hit && now - hit.at < STAFF_ALIVE_TTL_MS) return hit.alive;
+  const rows = await sql`SELECT id FROM staff WHERE id=${id} AND active=true`;
+  const alive = rows.length > 0;
+  if (staffAliveCache.size > 500) staffAliveCache.clear();
+  staffAliveCache.set(id, { alive, at: now });
+  return alive;
 }
 
 function sessionDateValue(value) {
@@ -6785,6 +6815,31 @@ function mapStaff(r) {
   };
 }
 
+// The till ASSIGNS each person their own PIN. A shop that sets PINs by hand ends
+// up with four people on the same number, and then the sign-in screen cannot
+// tell them apart: it asks the seller to choose, and a person who cannot find
+// herself signs in — and sells — under a colleague's name. Generated here means
+// uniqueness is a property of the system, not of the manager's memory, and the
+// digits are shown once and never stored anywhere a person could read them back.
+function randomPinDigit() {
+  return String(randomInt(0, 10));
+}
+async function generateUniquePin(excludeId) {
+  const taken = await sql`SELECT id, name, pin_hash FROM staff WHERE active=true`;
+  const others = taken.filter((row) => row.id !== excludeId);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    // Four digits, first digit 1-9: a PIN that starts with 0 gets mistyped as
+    // three digits on a phone keypad often enough to matter.
+    const pin = String(randomInt(1, 10)) + randomPinDigit() + randomPinDigit() + randomPinDigit();
+    if (!others.some((row) => verifyStoredPin(row.pin_hash, pin))) return pin;
+  }
+  return null;
+}
+async function savePin(id, pin) {
+  const salt = randomBytes(16).toString('hex');
+  await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(pin, salt))} WHERE id=${id}`;
+}
+
 // A person is identified by their name at this till: the sign-in screen is a
 // list of names. Two accounts called YAWE means two PINs, one hidden row, and
 // a seller who swears she is set up and cannot get in. Refuse the second one.
@@ -6815,24 +6870,30 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
       code: 'DUPLICATE_STAFF',
     });
   }
-  if (!/^\d{4}$/.test(String(b.pin || ''))) return res.status(400).json({ error: 'A 4-digit PIN is required' });
-  // One PIN, one person. Four accounts sharing a PIN is not a convenience: the
-  // lock screen then cannot tell them apart and asks the seller to pick, so a
-  // person ends up signing in — and selling — under somebody else's name.
-  const clash = (await sql`SELECT name, active FROM staff`).find(row => verifyStoredPin(row.pin_hash, String(b.pin)));
-  if (clash) {
-    return res.status(409).json({
-      error: `${text(name, 80)} cannot use that PIN — ${clash.name} already has it. Give ${text(name, 80)} a PIN nobody else has, so the till can tell them apart at sign-in.`,
-      code: 'DUPLICATE_PIN',
-    });
+  // The manager adds a name and a role. The till writes the PIN, and hands it
+  // over once. If she does type one, it still has to be one nobody else has.
+  let pin = String(b.pin || '');
+  if (pin) {
+    if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'A PIN is 4 digits' });
+    const clash = (await sql`SELECT name, active FROM staff`).find(row => verifyStoredPin(row.pin_hash, pin));
+    if (clash) {
+      return res.status(409).json({
+        error: `${text(name, 80)} cannot use that PIN — ${clash.name} already has it. Leave it blank and the till will write one that nobody else has.`,
+        code: 'DUPLICATE_PIN',
+      });
+    }
+  } else {
+    pin = await generateUniquePin();
+    if (!pin) return res.status(503).json({ error: 'Could not find a free PIN just now — try again', code: 'NO_FREE_PIN' });
   }
-  const salt = randomBytes(16).toString('hex');
-  const hash = pinHashFormat(salt, hashPinStrong(String(b.pin), salt));
   const id = `st-${randomUUID()}`;
   const at = new Date().toISOString();
-  await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${hash}, true, ${at})`;
-  await audit('staff.create', `${name} (${role})`);
-  res.json({ id, name, role, active: true, hasPin: true });
+  const salt = randomBytes(16).toString('hex');
+  await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${pinHashFormat(salt, hashPinStrong(pin, salt))}, true, ${at})`;
+  // Never the digits. The audit can say a PIN was written, never what it is.
+  await audit('staff.create', `${name} (${role}) — PIN written by the till`);
+  // The only time these digits ever leave the server. Shown once, never stored.
+  res.json({ id, name, role, active: true, hasPin: true, pin });
 }));
 
 app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
@@ -6892,6 +6953,19 @@ app.delete('/api/staff/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM staff WHERE id=${req.params.id}`;
   await audit('staff.delete', `${person.name} (${person.role}) removed from the till`);
   res.json({ ok: true, id: req.params.id, name: person.name });
+}));
+
+// Hand somebody a new PIN without a manager having to invent one. The same
+// "show it once" rule: a PIN this app cannot read back is a PIN the shop cannot
+// lose, and a lost PIN is a person who cannot get in.
+app.post('/api/staff/:id/new-pin', requireManager, asHandler(async (req, res) => {
+  const rows = await sql`SELECT id, name, role FROM staff WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'That person is not on this till any more' });
+  const pin = await generateUniquePin(req.params.id);
+  if (!pin) return res.status(503).json({ error: 'Could not find a free PIN just now — try again', code: 'NO_FREE_PIN' });
+  await savePin(req.params.id, pin);
+  await audit('staff.pin', `${rows[0].name} (${rows[0].role}) was given a new PIN`);
+  res.json({ ok: true, id: req.params.id, name: rows[0].name, pin });
 }));
 
 app.post('/api/staff/verify', asHandler(async (req, res) => {

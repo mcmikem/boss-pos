@@ -204,28 +204,32 @@ function isDesktopLike(): boolean {
 }
 
 // Inline add-staff form used in Settings (first setup + later adds).
-function StaffFirstSetup({ onAdd }: { onAdd: (name: string, role: 'manager' | 'cashier', pin: string) => void }) {
+// Add a person: a NAME and a ROLE. The PIN is not typed and not remembered —
+// the till writes one that nobody else on this till has, and hands it over once.
+// Asking a manager to invent a PIN is how four people ended up on the same
+// number, which is what made the sign-in screen show four names and not hers.
+function StaffFirstSetup({ onAdd, busy }: { onAdd: (name: string, role: 'manager' | 'cashier') => void; busy?: boolean }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState<'manager' | 'cashier'>('cashier');
-  const [pin, setPin] = useState('');
   return (
-    <div className="flex items-center gap-2">
-      <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name"
-        className="flex-1 min-w-0 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
-      <button onClick={() => setRole(role === 'manager' ? 'cashier' : 'manager')}
-        className="h-10 px-2.5 text-[10px] font-black uppercase rounded-xl border border-gold-brand/40 text-gold-brand shrink-0" title="Toggle role">
-        {role === 'manager' ? 'MGR' : 'CSH'}
-      </button>
-      <input type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="PIN"
-        className="w-16 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-2 rounded-xl text-white font-bold text-center focus:border-gold-brand outline-none" />
-      <button onClick={() => {
-        if (!name.trim() || pin.length !== 4) return;
-        onAdd(name.trim(), role, pin);
-        setName(''); setPin('');
-      }} disabled={!name.trim() || pin.length !== 4}
-        className="h-10 px-3 bg-gold-brand text-black font-black uppercase text-[10px] rounded-xl disabled:opacity-40 shrink-0 cursor-pointer">
-        Add
-      </button>
+    <div>
+      <div className="flex items-center gap-2">
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="Name of the person you are adding"
+          className="flex-1 min-w-0 h-10 bg-[#0A0A0A] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
+        <button onClick={() => setRole(role === 'manager' ? 'cashier' : 'manager')}
+          className="h-10 px-2.5 text-[10px] font-black uppercase rounded-xl border border-gold-brand/40 text-gold-brand shrink-0"
+          title={role === 'manager' ? 'Manager: money out, voids, prices, reports' : 'Cashier: selling and spending only'}>
+          {role === 'manager' ? 'MGR' : 'CSH'}
+        </button>
+        <button onClick={() => { if (name.trim() && !busy) { onAdd(name.trim(), role); setName(''); } }}
+          disabled={!name.trim() || busy}
+          className="h-10 px-3 bg-gold-brand text-black font-black uppercase text-[10px] rounded-xl disabled:opacity-40 shrink-0 cursor-pointer">
+          {busy ? '…' : 'Add'}
+        </button>
+      </div>
+      <p className="text-[10px] text-zinc-600 mt-1.5 leading-snug">
+        Name and role is all you need. The till writes their PIN and shows it once — write it down and give it to them.
+      </p>
     </div>
   );
 }
@@ -1265,13 +1269,27 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // top bar keeps showing "Manager" while the wire carries a till token, and
   // every manager call fails with "switch to manager" on a manager's phone.
   useEffect(() => {
-    const onStaffRevoked = () => {
+    const onStaffRevoked = (event: Event) => {
+      // The server says WHY now, and the reason matters: "that account is no
+      // longer on this till" is a different instruction from "your session
+      // expired", and a bare "Unauthorized" told her nothing she could act on.
+      const reason = (event as CustomEvent<{ reason?: string }>)?.detail?.reason;
       const name = activeStaff?.name || staffName || '';
       setActiveStaffId(null);
-      try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
+      setStaffToken(null);
+      setStaffVerifyError(null);
+      try {
+        localStorage.removeItem('boss_pos_staff_id');
+        localStorage.removeItem('boss_pos_staff_today');
+      } catch {}
+      setSellerToday(null);
       setShowStaffSwitcher(false);
+      setSellAsTillSession(false);
+      // The credential is gone, so the till has to be opened again — otherwise
+      // the app sits "ready" with nothing that works and every call refuses.
+      setAuthState('locked');
       triggerToast(
-        name ? `Session expired for ${name} — enter the staff PIN again` : 'Staff session expired — enter the staff PIN again',
+        reason || (name ? `Session expired for ${name} — enter the staff PIN again` : 'Staff session expired — enter the staff PIN again'),
         'error',
         {
           label: 'Sign in',
@@ -1642,15 +1660,36 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (local && !local.startsWith('fb_')) {
       try {
         if (await verifyPinAgainstHash(pin, local)) {
+          // The phone knows the PIN already, so open the till without waiting.
+          // But it has NOT proved anything to the server yet, and this path used
+          // to fire a whole screen of data at a token it had not checked — a
+          // burst of "Unauthorized" with the error swallowed by a bare catch.
+          // Mint the token first, and if that cannot be done, stay locked and
+          // say why rather than sitting open with nothing working.
           unlockAsTillOnly();
           markUnlocked();
+          let minted = false;
+          try {
+            await authVerify(pin, 8000);
+            minted = true;
+          } catch {
+            // A dead connection still deserves an open till, but only if there is
+            // a token left from before. Without one there is nothing to save a
+            // sale with, so do not pretend the till works.
+            minted = !!localStorage.getItem('boss_pos_token');
+          }
+          if (!minted) {
+            unlockAsTillOnly();
+            setAuthState('locked');
+            throw new Error('No connection to sign you in — try again when online, or use the till PIN on its own.');
+          }
           setAuthState('ready');
           fetchAllData().catch(() => {});
-          // Background re-mint (short timeout so dead WiFi never blocks).
-          authVerify(pin, 8000).catch(() => {});
           return;
         }
-      } catch {}
+      } catch (err) {
+        if (err instanceof Error && /No connection to sign you in/.test(err.message)) throw err;
+      }
       // Local hash exists but did NOT match: it may be stale after a PIN
       // change on another till. Fall through to the server check below —
       // but only throw "wrong PIN" after the server also rejects.
@@ -2617,13 +2656,41 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setShowStaffSwitcher(true);
   };
 
-  const handleAddStaff = async (name: string, role: 'manager' | 'cashier', pin: string) => {
+  // The PIN is the till's to write, not the manager's to remember. It comes
+  // back exactly once, here, and is never stored on the phone afterwards.
+  const showNewPin = async (name: string, pin: string) => {
+    await confirmDialog({
+      title: `${name}'s PIN: ${pin}`,
+      message: `Write it down and give it to ${name} now — it is shown once and cannot be read back. Anyone who knows it signs in as ${name}, so it is their key, not a shared one. If it is lost, press NEW PIN beside their name to write another.`,
+      confirmLabel: 'I have written it down',
+    });
+  };
+
+  const handleAddStaff = async (name: string, role: 'manager' | 'cashier') => {
     try {
-      const created = await staffApi.create(name, role, pin);
+      const created = await staffApi.create(name, role);
       setStaffList(prev => [...prev, created]);
-      triggerToast(`${name} added as ${role}`, 'success');
+      await showNewPin(name, created.pin || '');
     } catch (err) {
       triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Failed to add staff', 'error');
+    }
+  };
+
+  const handleNewPin = async (id: string) => {
+    const person = staffList.find(s => s.id === id);
+    if (!person) return;
+    const ok = await confirmDialog({
+      title: `Write a new PIN for ${person.name}?`,
+      message: `Their old PIN stops working the moment the new one is written. Tell ${person.name} the new number before they next open the till.`,
+      confirmLabel: 'Write a new PIN',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await staffApi.newPin(id);
+      await showNewPin(res.name || person.name, res.pin || '');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Could not write a new PIN', 'error');
     }
   };
 
@@ -4380,12 +4447,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title={s.role === 'manager' ? `Make ${s.name} a cashier` : `Make ${s.name} a manager`}>
                           {s.role === 'manager' ? 'MGR' : 'CSH'}
                         </button>
-                        <button onClick={async () => {
-                          const pin = await promptDialog({ title: 'Reset staff PIN', message: `New 4-digit PIN for ${s.name}:`, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
-                          if (pin) handleUpdateStaff(s.id, { pin });
-                        }} className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400"
-                          title={s.hasPin ? `${s.name} has a PIN. Tap to set a new one.` : `${s.name} has no PIN yet — she cannot sign in until you set one.`}>
-                          {s.hasPin ? 'PIN' : 'NO PIN'}
+                        {/* The till writes the PIN. Asking a manager to invent
+                            one is how four people ended up sharing a number. */}
+                        <button onClick={() => handleNewPin(s.id)}
+                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400 hover:border-gold-brand/50 hover:text-gold-brand"
+                          title={s.hasPin ? `Write ${s.name} a new PIN. Their old one stops working.` : `${s.name} cannot sign in until they have a PIN.`}>
+                          {s.hasPin ? 'New PIN' : 'Give PIN'}
                         </button>
                         <button onClick={() => handleDeleteStaff(s.id)}
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-rose-900/60 text-rose-400/80 hover:border-rose-500 hover:text-rose-300"

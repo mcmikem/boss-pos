@@ -1171,6 +1171,19 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
           if (body.traceId) traceId = String(body.traceId);
         } catch {}
         if (res.status === 401 && path.startsWith('/api/') && (getAuthToken() || getStaffToken())) {
+          // The person behind this credential is no longer on the till. That is
+          // not a flaky network and not something a retry can fix, so do not
+          // spend two attempts discovering it: say what happened, in the
+          // server's own words, and stop using the dead credential at once.
+          if (code === 'STAFF_GONE') {
+            // Dead for good, not flaky: stop using it immediately rather than
+            // spending two more attempts finding that out.
+            consecutiveAuthFailures = 0;
+            clearAllTokens();
+            const gone = message || 'That account is no longer on this till — sign in again';
+            emitAuthRevoked({ path, reason: gone });
+            throw new Error(gone);
+          }
           if (inUnlockGrace() && !revokeRetried) {
             // Freshly unlocked, slow network: the background re-mint may not
             // have landed. Wait for it once, then decide.
@@ -1349,8 +1362,12 @@ export const supplierPriceApi = {
 
 export const staffApi = {
   list: () => api<StaffMember[]>('/api/staff'),
-  create: (name: string, role: 'manager' | 'cashier', pin: string) =>
-    api<StaffMember>('/api/staff', { method: 'POST', body: JSON.stringify({ name, role, pin }) }),
+  /** No PIN argument: the till writes one nobody else here has and returns it
+   *  once. Passing one is still allowed and still checked for clashes. */
+  create: (name: string, role: 'manager' | 'cashier', pin?: string) =>
+    api<StaffMember & { pin?: string }>('/api/staff', { method: 'POST', body: JSON.stringify({ name, role, ...(pin ? { pin } : {}) }) }),
+  newPin: (id: string) =>
+    api<{ ok: boolean; id: string; name: string; pin: string }>(`/api/staff/${id}/new-pin`, { method: 'POST' }),
   update: (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) =>
     api<StaffMember>(`/api/staff/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
   remove: (id: string) => api<{ ok: boolean; id: string; name: string }>(`/api/staff/${id}`, { method: 'DELETE' }),

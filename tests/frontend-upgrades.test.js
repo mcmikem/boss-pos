@@ -273,7 +273,11 @@ test('the rescue PIN never leaves a manager credential behind', () => {
   assert.match(tillOnly, /localStorage\.removeItem\('boss_pos_staff_id'\)/);
   // Both rescue paths (offline fast path and server check) go through it.
   const unlock = app.match(/const handleUnlock = async \(pin: string\)[\s\S]*?\n  \};/)?.[0] || '';
-  assert.equal((unlock.match(/unlockAsTillOnly\(\)/g) || []).length, 2);
+  // Both rescue paths go through it — and so does the new one: a phone that
+  // unlocks offline with no usable token left must NOT end up open.
+  assert.ok((unlock.match(/unlockAsTillOnly\(\)/g) || []).length >= 2);
+  assert.match(unlock, /if \(!minted\) \{\s*\n\s*unlockAsTillOnly\(\);\s*\n\s*setAuthState\('locked'\);/);
+  assert.match(unlock, /No connection to sign you in/);
 });
 
 test('no screen promises a PIN that cannot approve anything', () => {
@@ -1078,4 +1082,29 @@ test('one PIN means one person, and nobody is forced to be somebody else', () =>
   // And the ambiguity screen says what is true instead of leaving her guessing.
   assert.match(gate, /This PIN opens \{candidates\.length\} accounts/);
   assert.match(gate, /do not pick somebody else/);
+});
+
+test('the till writes each PIN, and a dead credential never says "Unauthorized"', () => {
+  const server = read('api/index.js').replace(/^\s*\/\/.*$/gm, '');
+  const api = read('src/api.ts').replace(/^\s*\/\/.*$/gm, '');
+  const main = read('src/main.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // A shop sets PINs by hand, four people end up on one number, and the sign-in
+  // screen then shows four names and not hers. So the till writes the PIN.
+  assert.match(server, /async function generateUniquePin/);
+  assert.match(server, /app\.post\('\/api\/staff\/:id\/new-pin', requireManager/);
+  // No PIN in the audit, ever: it can say one was written, never what it is.
+  assert.match(server, /PIN written by the till/);
+  assert.equal(/audit\([^)]*\$\{pin\}/.test(server), false);
+  // The digits come back exactly once.
+  assert.match(server, /res\.json\(\{ id, name, role, active: true, hasPin: true, pin \}\)/);
+  assert.equal(/localStorage\.setItem\('[^']*pin[^']*', created\.pin/.test(app), false);
+  // An account that is gone is not a valid identity, and the client is told why.
+  assert.match(server, /code: 'STAFF_GONE'/);
+  assert.match(api, /if \(code === 'STAFF_GONE'\)/);
+  assert.match(app, /setAuthState\('locked'\);\n      triggerToast\(\n        reason \|\|/);
+  // And a till that cannot start is never a black rectangle.
+  assert.match(main, /function paintRecovery/);
+  assert.match(main, /Reload the till/);
+  assert.match(main, /Nothing you sold today has been lost/);
 });
