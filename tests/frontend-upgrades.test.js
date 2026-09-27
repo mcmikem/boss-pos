@@ -892,3 +892,16 @@ test('a Today screen leads with the number that changes a decision', () => {
   // Before the first batch, the only useful figure is what yesterday left.
   assert.match(registry, /label: 'On the tray from yesterday'/);
 });
+
+test('a product with one option does not cost a sheet and a second tap', () => {
+  const sales = read('src/components/Sales.tsx');
+  const card = read('src/components/ProductCard.tsx');
+  // One option is not a choice. A single-variant product (one size, one colour,
+  // the only cut they make) used to open a sheet that asked for no decision.
+  assert.match(sales, /product\.variants && product\.variants\.length === 1\) \{\s*\n\s*handleVariantAdd\(product\.variants\[0\]\);/);
+  assert.match(sales, /product\.variants && product\.variants\.length > 1\) \{\s*\n\s*setVariantProduct\(product\);/);
+  // And the card says what is behind the tap instead of "500+".
+  assert.match(card, /const priceLabel = !hasVariants/);
+  assert.match(card, /`\$\{formatCurrency\(minPrice\)\}–\$\{formatCurrency\(maxPrice\)\}`/);
+  assert.equal(/\{hasVariants \? '\+' : ''\}/.test(card), false);
+});

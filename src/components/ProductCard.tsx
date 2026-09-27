@@ -21,7 +21,19 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
   const hasVariants = !!product.variants && product.variants.length > 0;
-  const minPrice = hasVariants ? Math.min(...(product.variants as { price: number }[]).map(v => v.price)) : product.price;
+  const variantPrices = hasVariants
+    ? (product.variants as { price: number }[]).map(v => Number(v.price) || 0)
+    : [];
+  const minPrice = hasVariants ? Math.min(...variantPrices) : product.price;
+  const maxPrice = hasVariants ? Math.max(...variantPrices) : product.price;
+  // "500+" told the seller nothing about what was behind the tap. A range does,
+  // and when every option costs the same it reads as a plain price — which is
+  // the truth, and means the card looks like any other.
+  const priceLabel = !hasVariants
+    ? formatCurrency(minPrice)
+    : maxPrice > minPrice
+      ? `${formatCurrency(minPrice)}–${formatCurrency(maxPrice)}`
+      : formatCurrency(minPrice);
   // Variant-aware in-cart state: ANY line for this product counts (a chapati
   // "Single" line must still light up the card), not just variant-less lines.
   const cartLines = cart?.filter(item => item.productId === product.id) || [];
@@ -75,7 +87,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
       <button
         onClick={handleClick}
         disabled={isOutOfStock && !onOutOfStock}
-        aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${formatCurrency(minPrice)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
+        aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${priceLabel}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
         className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col text-left focus-visible:outline-2 focus-visible:outline-gold-brand w-full min-h-[64px] ${
           isOutOfStock
             ? 'opacity-40 border-dashed border-rose-800/40'
@@ -105,7 +117,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
               never squeeze it out on narrow phones. Solid chip, always legible. */}
           {!isOutOfStock && (
             <div className="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md text-gold-brand text-xs font-black px-2.5 py-1 rounded-lg border border-white/15 shadow-md tabular-nums leading-none">
-              {formatCurrency(minPrice)}{hasVariants ? '+' : ''}
+              {priceLabel}
             </div>
           )}
         </div>
@@ -127,7 +139,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
     <div
       role="button"
       tabIndex={isOutOfStock && !onOutOfStock ? -1 : 0}
-      aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `${product.name}, ${formatCurrency(minPrice)}${hasVariants ? ' and up, has options' : ''}${!product.isService ? `, ${product.stockQty} in stock` : ''}${inCart ? `, ${cartQtyLabel} in cart` : ''}. Activate to ${hasVariants ? 'choose options' : 'add to cart'}.`}
+      aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `${product.name}, ${priceLabel}${hasVariants ? ', choose an option' : ''}${!product.isService ? `, ${product.stockQty} in stock` : ''}${inCart ? `, ${cartQtyLabel} in cart` : ''}. Activate to ${hasVariants ? 'choose options' : 'add to cart'}.`}
       aria-disabled={isOutOfStock && !onOutOfStock}
       onClick={handleClick}
       onKeyDown={(e) => {
@@ -192,7 +204,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             squeeze it out on narrow phones. Solid chip, always legible. */}
         {!isOutOfStock && (
           <div className="absolute bottom-2 left-2 bg-black/75 backdrop-blur-md text-gold-brand text-xs sm:text-[13px] font-black font-display px-2.5 py-1 rounded-lg border border-white/15 shadow-md tabular-nums leading-none">
-            {formatCurrency(minPrice)}{hasVariants ? '+' : ''}{product.saleUnit ? <span className="text-[10px] font-semibold"> / {product.saleUnit}</span> : null}
+            {priceLabel}{product.saleUnit ? <span className="text-[10px] font-semibold"> / {product.saleUnit}</span> : null}
           </div>
         )}
       </div>

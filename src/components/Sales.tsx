@@ -819,7 +819,14 @@ export default function Sales({
       streetSell(product);
       return;
     }
-    if (product.variants && product.variants.length > 0) {
+    // One option is not a choice. A product with a single variant (one size,
+    // one colour, the only cut they make) used to cost a tap on the card and
+    // then a tap on the only option in a sheet that asked for no decision.
+    if (product.variants && product.variants.length === 1) {
+      handleVariantAdd(product.variants[0]);
+      return;
+    }
+    if (product.variants && product.variants.length > 1) {
       setVariantProduct(product);
       return;
     }
