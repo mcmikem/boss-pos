@@ -6852,6 +6852,30 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
   res.json(after.length ? mapStaff(after[0]) : { id: req.params.id, name, role, active, hasPin: true });
 }));
 
+// Removing a person from the till. The duplicate-name rule made new ones
+// impossible, but a shop that already has two YAWEs needs a way to clear the
+// spare — and "turn it off" is not the same as gone, because the row still sits
+// in Settings looking like a person.
+app.delete('/api/staff/:id', requireManager, asHandler(async (req, res) => {
+  const rows = await sql`SELECT id, name, role, active FROM staff WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'That person is not on this till any more' });
+  const person = rows[0];
+  // Sales keep the name the seller typed, not the account id, so removing
+  // somebody never rewrites a single past sale. That is what makes this safe.
+  if (person.role === 'manager') {
+    const others = await sql`SELECT id FROM staff WHERE id <> ${req.params.id} AND role='manager' AND active=true`;
+    if (!others.length) {
+      return res.status(400).json({
+        error: `${person.name} is the only manager on this till. Make someone else a manager first, or turn this one off instead — off keeps their PIN and their history.`,
+        code: 'LAST_MANAGER',
+      });
+    }
+  }
+  await sql`DELETE FROM staff WHERE id=${req.params.id}`;
+  await audit('staff.delete', `${person.name} (${person.role}) removed from the till`);
+  res.json({ ok: true, id: req.params.id, name: person.name });
+}));
+
 app.post('/api/staff/verify', asHandler(async (req, res) => {
   const key = 'staff:' + attemptKey(clientIp(req));
   const now = Date.now();

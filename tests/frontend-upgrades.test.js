@@ -34,6 +34,8 @@ test('dialog surfaces expose names and focus management', () => {
     assert.match(source, /useDialogFocus/);
   }
   assert.match(read('src/components/Sheet.tsx'), /Escape/);
+  // Comments are prose, not behaviour: the old chip's label is quoted in a
+  // comment explaining why it went, and a guard must not trip on that.
   const sales = read('src/components/Sales.tsx');
   assert.match(sales, /role="dialog"/);
   assert.match(sales, /aria-modal/);
@@ -924,4 +926,26 @@ test('the sign-in screen never names a person the seller did not choose', () => 
   // And the once-a-day shortcut must not skip the PIN.
   assert.match(read('src/utils/staffMemory.ts'), /sale stamped with a guessed name is a lie in the ledger/);
   assert.equal(/onVerify\(todayPerson\.id, '0000'\)/.test(switcher), false);
+});
+
+test('a person can be removed from the till, and a spare name cannot be created', () => {
+  const server = read('api/index.js');
+  const app = read('src/App.tsx');
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // Deleting the spare YAWE: the row said "set up twice" and nothing could be
+  // done about it. Turning it off is not the same as gone.
+  assert.match(server, /app\.delete\('\/api\/staff\/:id', requireManager/);
+  assert.match(server, /code: 'LAST_MANAGER'/);
+  assert.match(server, /audit\('staff\.delete'/);
+  assert.match(app, /const handleDeleteStaff = async/);
+  // Sales carry the name the seller typed, not the account id, so removing
+  // somebody must not touch history.
+  assert.match(server, /Sales keep the name the seller typed, not the account id/);
+  // The sold-out chip is off the till: it sat above the products permanently,
+  // and its label contradicted what it did.
+  assert.equal(/Show sold-out too/.test(sales), false);
+  assert.equal(/In stock only/.test(sales), false);
+  assert.match(app, /Sold-out items on the grid/);
+  // No name grid may hide people behind a nested scroll again.
+  assert.equal(/max-h-\[32vh\] overflow-y-auto/.test(read('src/components/StaffSwitcher.tsx')), false);
 });

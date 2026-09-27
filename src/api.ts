@@ -1342,6 +1342,7 @@ export const staffApi = {
     api<StaffMember>('/api/staff', { method: 'POST', body: JSON.stringify({ name, role, pin }) }),
   update: (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) =>
     api<StaffMember>(`/api/staff/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
+  remove: (id: string) => api<{ ok: boolean; id: string; name: string }>(`/api/staff/${id}`, { method: 'DELETE' }),
   verify: (id: string, pin: string) =>
     api<StaffMember & { ok: boolean; token?: string }>('/api/staff/verify', { method: 'POST', body: JSON.stringify({ id, pin }) }),
   // Which person is this PIN? One PIN per person: the lock screen asks once and

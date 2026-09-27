@@ -71,7 +71,11 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
             <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-center mb-2">or someone else</p>
           </>
         )}
-        <div className="grid grid-cols-2 gap-2 mb-4 max-h-[32vh] overflow-y-auto">
+        {/* No inner scroll box. It used to cap this grid at 32vh, which on a
+            small phone put the last row of names — LILLIAN, YAWE, the two the
+            shop said were missing — below the fold with no hint that there was
+            anything to scroll. The whole card already scrolls. */}
+        <div className="grid grid-cols-2 gap-2 mb-4">
           {others.map((s) => (
             <button key={s.id} onClick={() => pick(s.id)}
               className={`h-14 rounded-xl border text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${

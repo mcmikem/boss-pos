@@ -496,6 +496,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     [staffList],
   );
   const [sellerToday, setSellerToday] = useState<SellerToday | null>(() => sellerTodayOf());
+  // Same stored preference the till grid reads; nothing is stored = off, which
+  // is what an untouched till has always shown.
+  const [showSoldOut, setShowSoldOut] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_instock_only') === '0'; } catch { return false; }
+  });
   const activeRole = activeStaff?.role || null;
   const [staffLoaded, setStaffLoaded] = useState(false);
   const isManager = staffLoaded ? isManagerRole(activeRole, staffConfigured) : activeRole === 'manager';
@@ -2562,6 +2567,46 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
+  // Removing somebody from the till. Turns it off AND clears it: the spare
+  // YAWE row was the reason the shop could not tell which PIN was which.
+  const handleDeleteStaff = async (id: string) => {
+    const person = staffList.find(s => s.id === id);
+    if (!person) return;
+    const isLastManager = person.role === 'manager' && !staffList.some(s => s.role === 'manager' && s.active && s.id !== id);
+    if (isLastManager) {
+      // The one action that would lock the whole shop out of everything.
+      if (!(await confirmDialog({
+        title: `${person.name} is the only manager`,
+        message: `${person.name} is the only manager on this till, so they cannot be removed — that would lock everyone out of money, stock and reports. Turn them off instead: they keep their PIN and their past sales, and can be turned back on.`,
+        confirmLabel: 'Turn off instead',
+      }))) return;
+      await handleUpdateStaff(id, { active: false });
+      return;
+    }
+    if (!(await confirmDialog({
+      title: `Remove ${person.name}?`,
+      message: `${person.name} will not be able to sign in at this till again. Their past sales keep their name, so reports do not change. This cannot be undone.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) return;
+    const prev = staffList;
+    setStaffList(list => list.filter(s => s.id !== id));
+    try {
+      await staffApi.remove(id);
+      triggerToast(`${person.name} removed from the till`, 'success');
+      // If this phone was signed in as them, it is now nobody — and the
+      // once-a-day shortcut must not keep offering a person who is gone.
+      if (activeStaff?.id === id) {
+        unlockAsTillOnly();
+        forgetSellerToday();
+        setSellerToday(null);
+      }
+    } catch (err) {
+      setStaffList(prev);
+      triggerToast(err instanceof Error ? err.message.slice(0, 100) : 'Could not remove that person', 'error');
+    }
+  };
+
   const handleUpdateStaff = async (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) => {
     // Somebody taken off the till must not still be offered on the sign-in
     // screen as "sold earlier today".
@@ -4121,6 +4166,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </div>
               </div>
               <div className="space-y-1">
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">The grid <SettingHelp label="The grid" text="Sold-out items can sit on the till grid or stay off it. Off keeps the grid to things you can actually sell right now; sold-out items are still counted and still listed in Stock." /></label>
+                <button onClick={() => {
+                    const next = !showSoldOut;
+                    setShowSoldOut(next);
+                    try { localStorage.setItem('boss_pos_instock_only', next ? '0' : '1'); } catch {}
+                    // The till screen is mounted underneath this dialog.
+                    window.dispatchEvent(new Event('boss_pos_instock_pref'));
+                  }}
+                  className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border ${showSoldOut ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                  {showSoldOut ? 'Sold-out items on the grid: On' : 'Sold-out items on the grid: Off'}
+                </button>
+                <p className="text-[10px] text-zinc-600">Set once, for this phone. It was a chip above the products where nobody could tell what it did.</p>
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Regulars reward <SettingHelp label="Regulars reward" text="Every Nth visit from the same customer earns a one-tap percent discount at checkout. The till counts past sales by name and offers it — never applies it on its own." /></label>
                 <div className="flex gap-2">
                   <input type="number" min="2" max="100" value={settings.loyaltyEveryN ?? 10}
@@ -4197,6 +4256,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                           title={s.hasPin ? `${s.name} has a PIN. Tap to set a new one.` : `${s.name} has no PIN yet — she cannot sign in until you set one.`}>
                           {s.hasPin ? 'PIN' : 'NO PIN'}
                         </button>
+                        <button onClick={() => handleDeleteStaff(s.id)}
+                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-rose-900/60 text-rose-400/80 hover:border-rose-500 hover:text-rose-300"
+                          title={`Remove ${s.name} from this till. Their past sales keep their name.`}>Del</button>
                         <button onClick={() => handleUpdateStaff(s.id, { active: !s.active })}
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title={s.active ? 'Disable' : 'Enable'}>
                           {s.active ? 'On' : 'Off'}

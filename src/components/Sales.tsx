@@ -222,9 +222,20 @@ export default function Sales({
   const pendingScope = useMemo<PendingSaleScope>(() => effectiveDraftScope, [effectiveDraftScope]);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   // Hide sold-out rows on crowded tills (per device). Services always show.
+  // Whether a sold-out row still sits on the grid. This used to be a chip above
+  // the products, permanently in the way, whose label also lied: with nothing
+  // stored it read "Show sold-out too" while sold-out items were already
+  // showing. It is a per-device preference now, set once in Settings.
   const [inStockOnly, setInStockOnly] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_instock_only') === '1'; } catch { return false; }
   });
+  useEffect(() => {
+    const onPref = () => {
+      try { setInStockOnly(localStorage.getItem('boss_pos_instock_only') === '1'); } catch {}
+    };
+    window.addEventListener('boss_pos_instock_pref', onPref);
+    return () => window.removeEventListener('boss_pos_instock_pref', onPref);
+  }, []);
   // Fast sellers: user-pinned products in a rush-hour strip (one tap to add).
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('boss_pos_pinned') || '[]'); } catch { return []; }
@@ -1965,15 +1976,6 @@ export default function Sales({
               </button>
             ))}
           </div>
-        )}
-
-        {/* In-stock filter for crowded catalogs (per device) */}
-        {catalog.some(p => !p.isService && p.stockQty <= 0) && (
-          <button onClick={() => setInStockOnly(v => { const n = !v; try { localStorage.setItem('boss_pos_instock_only', n ? '1' : '0'); } catch {} return n; })}
-            aria-pressed={inStockOnly} title="Hide sold-out items"
-            className={`self-start h-9 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all cursor-pointer active:scale-95 ${inStockOnly ? 'bg-emerald-950/40 border-emerald-600/40 text-emerald-300' : 'bg-[#141414]/60 border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
-            {inStockOnly ? '✓ In stock only' : 'Show sold-out too'}
-          </button>
         )}
 
         {/* Departments — hidden when this shop trades in one. A tailor should
