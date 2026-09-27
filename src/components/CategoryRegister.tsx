@@ -44,7 +44,7 @@ interface CategoryRegisterProps {
   onAddWastage: (w: WastageLog) => void | boolean | Promise<void | boolean>;
   onDeleteWastage: (id: string) => void | boolean | Promise<void | boolean>;
   onAddMomoTransfer: (t: MomoTransfer) => void | boolean | Promise<void | boolean>;
-  onDeleteMomoTransfer: (id: string) => void;
+  onDeleteMomoTransfer: (id: string) => void | boolean | Promise<void | boolean>;
   // Money out decides what the drawer, the float and the owner get, so it is a
   // manager action. Without a manager session the form never opens, and a
   // refused save keeps the amounts instead of losing them.
@@ -180,6 +180,27 @@ function CloseSection({ id, icon: Icon, title, hint, open, onToggle, action, chi
   );
 }
 
+/** Two-tap delete, borrowed from Expenses: the first tap arms it, the second
+ *  one acts, and it disarms itself after a few seconds. A 24px trash icon next
+ *  to a figure like "UGX 200,000 → Owner" is one fat-finger tap from a hole in
+ *  the day's money, and it used to say "Entry deleted" before the server was
+ *  even asked. */
+function useArmedDelete(timeoutMs = 4000) {
+  const [armedId, setArmedId] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arm = (id: string) => {
+    if (timer.current) clearTimeout(timer.current);
+    setArmedId(id);
+    timer.current = setTimeout(() => setArmedId(null), timeoutMs);
+  };
+  const disarm = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setArmedId(null);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return { armedId, arm, disarm };
+}
+
 export default function CategoryRegister({
   segments, products, sales, expenses = [], creditEats, productionRegisters, wastageLogs,
   momoTransfers,
@@ -195,6 +216,8 @@ export default function CategoryRegister({
   // every other business on this software must see their own name here.
   // Managers who can receive a handover and confirm it on their own phone.
   const managerList = staff.filter(m => m.active !== false && m.role === 'manager');
+  const wastageDelete = useArmedDelete();
+  const moneyOutDelete = useArmedDelete();
   const [handoffRecipient, setHandoffRecipient] = useState<{ id: string; name: string } | null>(null);
   // Masked money: blind closers see ••• everywhere except the inputs they
   // operate and the credit rows they must collect.
@@ -1572,8 +1595,15 @@ export default function CategoryRegister({
                   ) : (
                     <p className="text-sm font-black text-rose-400 font-display">-{fmt(w.lossAmount)}</p>
                   )}
-                  <button onClick={() => { onDeleteWastage(w.id); triggerToast('Entry deleted', 'info'); }}
-                    className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
+                  <button
+                    onClick={async () => {
+                      if (wastageDelete.armedId !== w.id) { wastageDelete.arm(w.id); return; }
+                      wastageDelete.disarm();
+                      if ((await onDeleteWastage(w.id)) === false) return;
+                      triggerToast('Entry deleted', 'info');
+                    }}
+                    aria-label={wastageDelete.armedId === w.id ? 'Tap again to delete this loss' : 'Delete this loss'}
+                    className={`p-2 rounded-lg cursor-pointer ${wastageDelete.armedId === w.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -1823,9 +1853,15 @@ export default function CategoryRegister({
                         </p>
                         {t.comment && <p className="text-[11px] text-zinc-400 mt-0.5">{t.comment}</p>}
                       </div>
-                      <button onClick={() => { onDeleteMomoTransfer(t.id); triggerToast('Entry deleted', 'info'); }}
-                        aria-label={`Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
-                        className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer shrink-0">
+                      <button
+                        onClick={async () => {
+                          if (moneyOutDelete.armedId !== t.id) { moneyOutDelete.arm(t.id); return; }
+                          moneyOutDelete.disarm();
+                          if ((await onDeleteMomoTransfer(t.id)) === false) return;
+                          triggerToast('Entry deleted', 'info');
+                        }}
+                        aria-label={moneyOutDelete.armedId === t.id ? `Tap again to delete ${fmt(t.amount)}` : `Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
+                        className={`p-2 rounded-lg cursor-pointer shrink-0 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -1853,9 +1889,15 @@ export default function CategoryRegister({
                           </p>
                           {t.comment && <p className="text-[11px] text-zinc-400 mt-0.5">{t.comment}</p>}
                         </div>
-                        <button onClick={() => { onDeleteMomoTransfer(t.id); triggerToast('Entry deleted', 'info'); }}
-                          aria-label={`Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
-                          className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer shrink-0">
+                        <button
+                          onClick={async () => {
+                            if (moneyOutDelete.armedId !== t.id) { moneyOutDelete.arm(t.id); return; }
+                            moneyOutDelete.disarm();
+                            if ((await onDeleteMomoTransfer(t.id)) === false) return;
+                            triggerToast('Entry deleted', 'info');
+                          }}
+                          aria-label={moneyOutDelete.armedId === t.id ? `Tap again to delete ${fmt(t.amount)}` : `Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
+                          className={`p-2 rounded-lg cursor-pointer shrink-0 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>

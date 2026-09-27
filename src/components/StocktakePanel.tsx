@@ -9,7 +9,7 @@ import { diffStocktake, shrinkageValue, surplusValue } from '../utils/stocktake'
 
 interface StocktakePanelProps {
   products: Product[];
-  onUpdateProduct: (p: Product) => void;
+  onUpdateProduct: (p: Product) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onBack: () => void;
@@ -52,16 +52,34 @@ export default function StocktakePanel({ products, onUpdateProduct, formatCurren
     if (diffs.length === 0 || applying) return;
     setApplying(true);
     try {
+      // Every count is awaited. This is the screen where a lie costs real
+      // stock: the counts came off a real shelf, and a refused write meant the
+      // shelf and the book disagreed with no way to tell which was right.
+      const answers = await Promise.all(diffs.map(d => onUpdateProduct({ ...d.product, stockQty: d.counted })));
+      const refused = answers.map((a, i) => (a === false ? diffs[i] : null)).filter(Boolean) as typeof diffs;
+      if (refused.length) {
+        triggerToast(`${refused.length} of ${diffs.length} counts were not saved — ${refused.map(d => d.product.name).slice(0, 2).join(', ')}`, 'error');
+        // Leave the counts on screen: they are the seller's work, and only they
+        // can retype them.
+        setCounts(prev => {
+          const next = { ...prev };
+          for (const d of refused) delete next[d.product.id];
+          return next;
+        });
+        return;
+      }
       for (const d of diffs) {
-        onUpdateProduct({ ...d.product, stockQty: d.counted });
         logAdjustment({
           ts: new Date().toISOString(), productId: d.product.id, name: d.product.name,
           type: 'set', qty: d.counted, reason: 'Stock-take count',
         });
       }
+      // Shrinkage is a finding, not a failure. It used to arrive as a RED error
+      // toast, so a stocktake that worked perfectly looked like something had
+      // gone wrong — which trains people to ignore red.
       triggerToast(
         `Stocktake applied: ${diffs.length} line${diffs.length !== 1 ? 's' : ''}${shrink > 0 ? ` • shrinkage ${formatCurrency(shrink)}` : ''}${surplus > 0 ? ` • surplus ${formatCurrency(surplus)}` : ''}`,
-        shrink > 0 ? 'error' : 'success'
+        shrink > 0 ? 'info' : 'success'
       );
       setCounts({});
     } finally {

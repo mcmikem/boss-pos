@@ -949,3 +949,26 @@ test('a person can be removed from the till, and a spare name cannot be created'
   // No name grid may hide people behind a nested scroll again.
   assert.equal(/max-h-\[32vh\] overflow-y-auto/.test(read('src/components/StaffSwitcher.tsx')), false);
 });
+
+test('a delete never says it deleted something the server kept', () => {
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const reg = read('src/components/CategoryRegister.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const prod = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // Every write path was converted to return the server's answer. The deletes
+  // and the bulk paths were the ones left behind, and they are the ones that
+  // move money: a money-out row, a loss, a production batch.
+  assert.match(app, /const handleDeleteMomoTransfer = async \(id: string\): Promise<boolean>/);
+  assert.match(app, /const handlePayCredit = async \(saleId: string, amount: number\): Promise<boolean>/);
+  assert.match(app, /const handleSaveCustomer = async \(c: CustomerProfile\): Promise<boolean>/);
+  // The screens must ask the server, and must not announce before they do.
+  assert.match(reg, /if \(\(await onDeleteMomoTransfer\(t\.id\)\) === false\) return;/);
+  assert.match(reg, /if \(\(await onDeleteWastage\(w\.id\)\) === false\) return;/);
+  assert.match(prod, /if \(\(await onDeleteProduction\(p\.id\)\) === false\) return;/);
+  // A 24px trash icon beside a money figure is one tap from a hole in the day.
+  assert.match(reg, /function useArmedDelete/);
+  // A stocktake that worked is not an error, and shrinkage is a finding.
+  assert.match(read('src/components/StocktakePanel.tsx'), /shrink > 0 \? 'info' : 'success'/);
+  assert.match(read('src/components/StocktakePanel.tsx'), /onUpdateProduct: \(p: Product\) => void \| boolean/);
+  // "Repeated N batches" was printed before a single one was attempted.
+  assert.match(prod, /Repeated \$\{okCount\} of \$\{yesterdayRegs\.length\} batches/);
+});

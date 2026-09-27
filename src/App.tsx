@@ -2672,7 +2672,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return `Payment not recorded${e?.message ? ` \u2014 ${String(e.message).slice(0, 80)}` : ''}`;
   };
 
-  const handlePayCredit = async (saleId: string, amount: number) => {
+  // Answers the same way the book-line path does: true only once the server
+  // has it. A void here meant the ledger cleared the typed amount and said
+  // "Payment recorded" for a payment the server had refused — the worst kind of
+  // lie, because the money was still owed and nobody was told.
+  const handlePayCredit = async (saleId: string, amount: number): Promise<boolean> => {
     const payment: CreditPayment = {
       id: `cp-${Date.now()}`,
       saleId,
@@ -2683,9 +2687,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try {
       await creditPaymentApi.create(payment);
       triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+      return true;
     } catch (err) {
       setCreditPayments(prev => prev.filter(p => p.id !== payment.id));
       triggerToast(paymentSaveFailure(err), 'error');
+      return false;
     }
   };
 
@@ -2742,7 +2748,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleSaveCustomer = async (c: CustomerProfile) => {
+  const handleSaveCustomer = async (c: CustomerProfile): Promise<boolean> => {
     const exists = customers.some(x => x.id === c.id);
     const stamped = { ...c, updatedAt: new Date().toISOString() };
     setCustomers(prev => exists ? prev.map(x => x.id === c.id ? stamped : x) : [stamped, ...prev]);
@@ -2755,7 +2761,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         ? prevList.map(x => x.id === c.id ? (prev || x) : x)
         : prevList.filter(x => x.id !== c.id));
       triggerToast('Failed to sync profile — reverted', 'error');
+      return false;
     }
+    return true;
   };
 
   const handleDeleteCustomer = async (id: string) => {
@@ -2832,7 +2840,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           : prod
       ));
     }
-    try { await productionRegisterApi.remove(id); return true; } catch (err) {
+    try {
+      await productionRegisterApi.remove(id);
+      // The ingredients spend this batch auto-created is a SEPARATE row in
+      // Expenses, and deleting the batch does not touch it — so the day's money
+      // stays spent against a batch that no longer exists. It is not deleted
+      // here on purpose: matching it by description could take out a real
+      // expense. It is named instead, so nobody is left with a silent hole.
+      const orphan = expenses.find(e => e.description === `Ingredients \u00b7 ${prev?.qty} \u00d7 ${prev?.item}` && e.linkedProductName === (prev?.item || ''));
+      if (orphan && prev) {
+        triggerToast(`Batch removed \u2014 the ${formatCurrency(orphan.amount)} ingredient spend is still in Spend`, 'info');
+      }
+      return true;
+    } catch (err) {
       if (prev) setProductionRegisters(list => [prev, ...list]);
       if (prev?.productId && prev.qty > 0) {
         setProducts(list => list.map(prod =>
@@ -2945,12 +2965,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleDeleteMomoTransfer = async (id: string) => {
+  // A money move is the most destructive thing a seller can do from a phone, so
+  // it answers like every other write: true only once the server has it. The
+  // screen used to say "Entry deleted" the instant the row vanished locally,
+  // which on a refusal was a UGX 200,000 move that was never removed and a
+  // message saying it was.
+  const handleDeleteMomoTransfer = async (id: string): Promise<boolean> => {
     const prev = momoTransfers.find(t => t.id === id);
     setMomoTransfers(prev => prev.filter(t => t.id !== id));
-    try { await momoTransferApi.remove(id); } catch {
+    try { await momoTransferApi.remove(id); return true; } catch {
       if (prev) setMomoTransfers(list => [prev, ...list]);
       triggerToast('Failed to delete transfer', 'error');
+      return false;
     }
   };
 

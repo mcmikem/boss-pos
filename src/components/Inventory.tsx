@@ -240,15 +240,22 @@ export default function Inventory({
   }, [products]);
 
   const supplierPriceSync = useMemo(() => applySupplierPricesToRecipes(products, supplierPrices), [products, supplierPrices]);
-  const applySupplierPrices = () => {
+  const applySupplierPrices = async () => {
     const changed = supplierPriceSync.changedProducts;
     if (changed.length === 0) {
       triggerToast('Supplier prices are already in sync with recipes', 'info');
       return;
     }
-    changed.forEach(product => onUpdateProduct(product));
+    // Bulk write, so it is awaited the same way: "applied to N recipes" is only
+    // true if the server took them.
+    const answers = await Promise.all(changed.map(product => onUpdateProduct(product)));
+    const refused = answers.filter(a => a === false).length;
     const recipeCount = supplierPriceSync.changedRecipes;
     const recipeLabel = `${recipeCount} recipe${recipeCount === 1 ? '' : 's'}`;
+    if (refused > 0) {
+      triggerToast(`${refused} of ${changed.length} price changes were not saved`, 'error');
+      return;
+    }
     triggerToast(`Supplier prices applied to ${recipeLabel}`, 'success');
   };
 
@@ -341,7 +348,7 @@ export default function Inventory({
     setEditVariants(prev => prev.filter(v => v.id !== id));
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingProduct) return;
 
     const nameTrimmed = editName.trim();
@@ -415,7 +422,12 @@ export default function Inventory({
       recipe: sanitizeRecipe(editRecipe),
     };
 
-    onUpdateProduct(updated);
+    // Wait for the server's answer. This fires on every restock and every price
+    // change, and it used to close the editor and say "Updated Rice" before the
+    // write had even been attempted — so a refusal snapped the number back with
+    // a green tick already shown.
+    const saved = await onUpdateProduct(updated);
+    if (saved === false) return;
     // Close the loop: arriving stock cost money, so log it as a Stock
     // Purchase in the same save. Empty = free transfer, no expense.
     const paidNum = parseFloat(stockPaid) || 0;

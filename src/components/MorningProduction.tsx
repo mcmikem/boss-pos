@@ -105,11 +105,20 @@ export default function MorningProduction({
   const repeatYesterday = async () => {
     if (yesterdayRegs.length === 0) return;
     if (!(await confirmDialog({ title: 'Repeat batch', message: `Log yesterday's ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} again for today?`, confirmLabel: 'Repeat' }))) return;
-    yesterdayRegs.forEach(r => onAddProduction({
+    // Awaited, and honest about the count. "Repeated 6 batches" was printed
+    // before a single one had been attempted, so a refusal just lost the batch
+    // and left the day's production short with no warning.
+    const answers = await Promise.all(yesterdayRegs.map(r => onAddProduction({
       ...r,
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: today,
-    }));
+    })));
+    const refused = answers.filter(a => a === false).length;
+    const okCount = yesterdayRegs.length - refused;
+    if (refused > 0) {
+      triggerToast(`Repeated ${okCount} of ${yesterdayRegs.length} batches — ${refused} not saved`, 'error');
+      return;
+    }
     triggerToast(`Repeated ${yesterdayRegs.length} batch${yesterdayRegs.length !== 1 ? 'es' : ''} for today`, 'success');
   };
   const leftovers = useMemo(
@@ -560,8 +569,15 @@ export default function MorningProduction({
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 <p className="text-sm font-black text-amber-400 font-display">{formatCurrency(p.total)}</p>
-                <button onClick={() => { onDeleteProduction(p.id); triggerToast('Production entry deleted', 'info'); }}
-                  className="p-1.5 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
+                <button onClick={async () => {
+                    // Awaited: this used to announce the deletion before the
+                    // server had been asked, and it takes the batch's stock out
+                    // of sellable too, so a refusal has to be visible.
+                    if ((await onDeleteProduction(p.id)) === false) return;
+                    triggerToast('Production entry deleted', 'info');
+                  }}
+                  aria-label={`Delete the ${p.item} batch`}
+                  className="p-2 text-zinc-600 hover:text-rose-400 rounded-lg hover:bg-rose-950/30 cursor-pointer">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>

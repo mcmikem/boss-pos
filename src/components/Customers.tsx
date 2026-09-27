@@ -8,7 +8,7 @@ interface CustomersProps {
   sales: Sale[];
   products: Product[];
   customers: CustomerProfile[];
-  onSaveCustomer: (c: CustomerProfile) => void;
+  onSaveCustomer: (c: CustomerProfile) => void | boolean | Promise<void | boolean>;
   onDeleteCustomer: (id: string) => void;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -27,8 +27,12 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
   const [editing, setEditing] = useState<CustomerProfile | null>(null);
   const [isNew, setIsNew] = useState(false);
 
-  const persist = (next: CustomerProfile) => {
-    onSaveCustomer(next);
+  // A regular's discount percentage is money taken off every future sale, so
+  // the sheet must not close on a save the server refused. It waited for
+  // nothing before and said "Profile saved" either way.
+  const persist = async (next: CustomerProfile): Promise<boolean> => {
+    const written = await onSaveCustomer(next);
+    return written !== false;
   };
 
   const filtered = useMemo(() => {
@@ -233,12 +237,12 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
                     <Trash2 className="w-4 h-4" />
                   </button>
                 )}
-                <button onClick={() => {
+                <button onClick={async () => {
                     const name = editing.name.trim();
                     if (!name) { triggerToast('Enter a name', 'error'); return; }
                     const dup = list.find(c => c.id !== editing.id && c.name.trim().toLowerCase() === name.toLowerCase());
                     if (dup) { triggerToast('That regular already exists', 'error'); return; }
-                    persist({ ...editing, name });
+                    if (!(await persist({ ...editing, name }))) return;
                     triggerToast(isNew ? `${name} joined the regulars` : 'Profile saved', 'success');
                     setEditing(null);
                   }}
