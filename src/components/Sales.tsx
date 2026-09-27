@@ -1778,8 +1778,18 @@ export default function Sales({
           <span>{t(lang, 'subtotal')}</span><span className="line-through">{formatCurrency(subtotal)}</span>
         </div>
       )}
+      {/* The payment buttons are the first thing in the editor, and on a 640px
+          phone the sheet needs more room than it has — so they scroll away
+          while this footer stays pinned, offering "Complete sale • UGX 12,000"
+          with no sign of whether that is cash, mobile money or the credit book.
+          The chosen method rides along with the figure. */}
       <div className="flex justify-between items-center">
-        <span className="text-[13px] font-semibold text-zinc-300">{t(lang, 'total')}</span>
+        <span className="text-[13px] font-semibold text-zinc-300">
+          {t(lang, 'total')}
+          {paymentMethod && cart.length > 0 && (
+            <span className="ml-2 text-[10px] font-black uppercase tracking-widest text-gold-brand/90">{t(lang, paymentMethod.toLowerCase() as never) || paymentMethod}</span>
+          )}
+        </span>
         <span className={`${compact ? 'text-xl' : 'text-2xl'} font-bold text-gold-brand font-display tabular-nums`}>{formatCurrency(total)}</span>
       </div>
       <button type="button" onClick={requestCompleteSale} disabled={isDisabled} title={isDisabled && disabledReason ? disabledReason : undefined}

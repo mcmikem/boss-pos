@@ -1452,9 +1452,14 @@ export default function CategoryRegister({
                     <th className="text-right py-1.5 px-2 font-bold text-amber-400">{t(lang, 'madeK')}</th>
                     <th className="text-right py-1.5 px-2 font-bold text-emerald-400">{t(lang, 'soldK')}</th>
                     <th className="text-right py-1.5 px-2 font-bold text-rose-400">{t(lang, 'lostK')}</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-zinc-400" title="Opening + made − sold − lost">Exp</th>
-                    <th className="text-right py-1.5 px-2 font-bold text-emerald-300">Left</th>
-                    <th className="text-right py-1.5 pl-2 font-bold">{t(lang, 'checkK')}</th>
+                    {/* Spelled out. "Exp", "Left" and "Check" only ever explained
+                        themselves through a title= tooltip, which a finger on a
+                        cheap Android can never reach — so three of the columns a
+                        close is judged on were a guess. The tooltip stays as a
+                        redundant extra. */}
+                    <th className="text-right py-1.5 px-2 font-bold text-zinc-400 whitespace-nowrap" title="Opening + made − sold − lost">Expected</th>
+                    <th className="text-right py-1.5 px-2 font-bold text-emerald-300 whitespace-nowrap">On hand</th>
+                    <th className="text-right py-1.5 pl-2 font-bold whitespace-nowrap">{t(lang, 'checkK')}</th>
                   </tr>
                 </thead>
                 <tbody>

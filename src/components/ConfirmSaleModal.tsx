@@ -135,11 +135,15 @@ export default function ConfirmSaleModal({
               <span className="text-xs font-bold text-gold-light tabular-nums shrink-0">{formatCurrency(item.lineTotal)}</span>
             </div>
           ))}
-          {cart.length > 6 && <p className="text-[10px] text-zinc-500 font-bold uppercase pt-1">+{cart.length - 6} more item{cart.length - 6 !== 1 ? 's' : ''}</p>}
+          {/* "items" meant two different things on one dialog: cart.length is
+              LINES, the count below is UNITS. Ten lines of 47 units showed
+              "+4 more items" directly above "Items 47", so the two numbers
+              contradicted each other on the screen where she commits money. */}
+          {cart.length > 6 && <p className="text-[10px] text-zinc-500 font-bold uppercase pt-1">+{cart.length - 6} more line{cart.length - 6 !== 1 ? 's' : ''}</p>}
         </div>
         <div id="confirm-sale-summary" className="bg-[#0A0A0A] border border-white/5 rounded-xl p-4 space-y-2 mb-4">
           <div className="flex justify-between text-xs">
-            <span className="text-zinc-400">{t(lang, 'itemsLabel')}</span>
+            <span className="text-zinc-400">{t(lang, 'itemsLabel')} (units)</span>
             <span className="font-bold text-white">{cart.reduce((s, i) => s + i.qty, 0)} {t(lang, 'items')}</span>
           </div>
           {discountNum > 0 && (

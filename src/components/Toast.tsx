@@ -21,13 +21,17 @@ export default function Toast({ message, type, action, onClose }: ToastProps) {
   const actionRef = useRef(action);
   actionRef.current = action;
 
+  // Keyed on the message, and the empty deps were the bug: every later message
+  // reused this same mounted Toast, so it inherited whatever was LEFT of the
+  // previous message's four seconds. Ring six items in six seconds and the last
+  // confirmation could be gone before she looked up from the till.
   useEffect(() => {
     // Action toasts linger so there's time to read and tap.
     const timer = setTimeout(() => {
       onCloseRef.current();
     }, actionRef.current ? 6000 : 4000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [message]);
 
   const bgStyles = {
     success: 'bg-emerald-950 border border-emerald-500/30 text-emerald-300',

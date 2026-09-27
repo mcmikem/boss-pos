@@ -997,3 +997,33 @@ test('nothing that costs money is one tap from gone', () => {
   // The keyboard came up over the grid on every tap of Sell.
   assert.match(sales, /window\.matchMedia\('\(pointer: coarse\)'\)\.matches/);
 });
+
+test('the app says where it is, and never shows two different numbers as one', () => {
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const toast = read('src/components/Toast.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const modal = read('src/components/ConfirmSaleModal.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const inv = read('src/components/Inventory.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const reg = read('src/components/CategoryRegister.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // Nothing named the screen. One nav item covered two screens each, so four
+  // of five screens had no name at all.
+  assert.match(app, /const SCREEN_TITLES: Record<string, string>/);
+  assert.match(app, /SCREEN_TITLES\[activeTab\]/);
+  // Eight settings doors in a 320px strip showed three of them.
+  assert.match(app, /grid grid-cols-4 sm:grid-cols-8 gap-1\.5/);
+  assert.equal(/overflow-x-auto scrollbar-none">\s*\{SETTINGS_SECTIONS/.test(app), false);
+  // A toast inherited the REMAINING time of the one before it, so a confirmation
+  // could be gone in under a second, and a background sync report could replace
+  // the sentence explaining why her money was refused.
+  assert.match(toast, /\}, \[message\]\);/);
+  assert.match(app, /<Toast key=\{toastMessage\}/);
+  assert.match(app, /toastTypeRef\.current === 'error' && type !== 'error'/);
+  // "items" meant lines in one place and units in another, on one dialog.
+  assert.match(modal, /more line\{/);
+  assert.match(modal, /\(units\)/);
+  // Two bare money figures per stock row, one of them sometimes computed.
+  assert.match(inv, /product\.recipe \? 'Recipe cost' : 'Cost'/);
+  assert.match(inv, />Price<\/p>/);
+  // Three close-day columns explained only through tooltips a finger can't reach.
+  assert.match(reg, />Expected<\/th>/);
+  assert.match(reg, />On hand<\/th>/);
+});

@@ -894,9 +894,15 @@ export default function Inventory({
                     )}
                   </div>
                 </div>
-                <div className="text-right flex items-center gap-4">
+                <div className="text-right flex items-start gap-4">
+                  {/* Two bare figures stacked, with nothing saying which was
+                      which — and the lower one is sometimes a typed cost and
+                      sometimes a recipe-derived one, so it is not even the same
+                      kind of number from row to row. */}
                   <div>
+                    <p className="text-[9px] uppercase tracking-widest text-zinc-600 font-black leading-none">Price</p>
                     <p className="text-[13px] font-bold text-zinc-100 font-display tabular-nums">{formatCurrency(product.price)}</p>
+                    <p className="text-[9px] uppercase tracking-widest text-zinc-600 font-black leading-none mt-1">{product.recipe ? 'Recipe cost' : 'Cost'}</p>
                     <p className="text-[11px] text-zinc-500 font-medium mt-0.5 tabular-nums">{formatCurrency(effectiveCost(product))}</p>
                       {(() => {
                       const best = bestQuoteFor(supplierPrices, product.id);

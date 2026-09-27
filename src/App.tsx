@@ -258,6 +258,28 @@ function SettingsSection({ id, icon: Icon, title, hint, open, onToggle, children
   );
 }
 
+// "Where am I?" The bottom nav highlighted one item for two different screens
+// (Money covered both Reports and Spend; More covered both Stock and Close day),
+// and nothing anywhere said the name of the screen you were on — so four of the
+// five screens had no name at all. The top bar now carries it, which is also
+// where the eye already goes looking for the shop name.
+const SCREEN_TITLES: Record<string, string> = {
+  sales: 'Sell',
+  analytics: 'Sales report',
+  expenses: 'Spend',
+  inventory: 'Stock',
+  registers: 'Close day',
+  suppliers: 'Suppliers',
+  customers: 'Regulars',
+  tailoring: 'Tailor',
+  designs: 'Designs',
+  eatery: 'Eatery',
+  production: 'Production',
+  repairs: 'Repairs',
+  bookings: 'Bookings',
+  quotes: 'Quotes',
+};
+
 const SETTINGS_SECTIONS = [
   { key: 'shop', label: 'Shop' },
   { key: 'selling', label: 'Selling' },
@@ -545,6 +567,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [isQuickSale, setIsQuickSale] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
+  // Read inside triggerToast, which must not re-create itself on every message.
+  const toastMessageRef = useRef<string | null>(null);
+  const toastTypeRef = useRef<'success' | 'error' | 'info'>('success');
   const [toastAction, setToastAction] = useState<ToastAction | undefined>(undefined);
   const [apiError, setApiError] = useState(false);
   const [isOnline, setIsOnline] = useState(() => {
@@ -578,7 +603,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   const readyRef = useRef(false);
 
+  // One slot, so the newest message wins — except over an error that is still
+  // on screen. "Managers only" and "that day's books are closed" are the two
+  // sentences in this app she most needs to read, and a three-minute sync
+  // report was replacing them mid-read.
   const triggerToast: TriggerToast = (msg, type, action) => {
+    if (toastTypeRef.current === 'error' && type !== 'error' && toastMessageRef.current) return;
+    toastTypeRef.current = type;
+    toastMessageRef.current = msg;
     setToastMessage(msg);
     setToastType(type);
     setToastAction(action);
@@ -3392,6 +3424,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           <h1 className="text-xs sm:text-sm md:text-base font-black text-gold-brand uppercase tracking-tighter font-display truncate max-w-[90px] min-[400px]:max-w-[130px] sm:max-w-none shrink-0">
             {settings.shopName}
           </h1>
+          {SCREEN_TITLES[activeTab] && (
+            <span aria-current="page" className="text-[10px] font-black uppercase tracking-widest text-zinc-300 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 shrink-0 whitespace-nowrap">
+              {SCREEN_TITLES[activeTab]}
+            </span>
+          )}
           {!isOnline && (
             <span className="text-[8px] bg-rose-950/40 text-rose-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-rose-500/30 animate-pulse">
               Offline
@@ -3729,7 +3766,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         </ErrorBoundary>
       )}
 
-      {toastMessage && <Toast message={toastMessage} type={toastType} action={toastAction} onClose={() => { setToastMessage(null); setToastAction(undefined); }} />}
+      {/* Keyed by the message so each notice gets its own full four seconds —
+          see Toast.tsx. An error also refuses to be overwritten by a routine
+          background report ("Synced 3 offline changes" every three minutes),
+          which used to replace the sentence explaining why her money was
+          refused, inside its own four seconds. */}
+      {toastMessage && <Toast key={toastMessage} message={toastMessage} type={toastType} action={toastAction} onClose={() => { toastMessageRef.current = null; toastTypeRef.current = 'success'; setToastMessage(null); setToastAction(undefined); }} />}
 
       {showStaffSwitcher && staffConfigured && (
         <StaffSwitcher
@@ -3823,10 +3865,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               ) : (
               <>
               {/* Section doors: seven areas, one open at a time — jump via chips. */}
-              <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur flex gap-1.5 overflow-x-auto scrollbar-none">
+              {/* Wraps instead of scrolling. Eight doors needed roughly 600px of
+                  strip inside a ~320px sheet, so only the first three were ever
+                  visible and the rest were cut with no fade, no arrow and no
+                  hint that the row moved — the PINs and Data doors were simply
+                  invisible unless you happened to try scrolling sideways. */}
+              <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur grid grid-cols-4 sm:grid-cols-8 gap-1.5">
                 {SETTINGS_SECTIONS.map(s => (
                   <button key={s.key} onClick={() => openSettingsSection(s.key)}
-                    className={`shrink-0 h-9 px-3.5 rounded-xl text-[11px] font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer ${settingsSection === s.key ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/10 text-zinc-400 hover:text-zinc-200'}`}>
+                    aria-current={settingsSection === s.key ? 'true' : undefined}
+                    className={`min-w-0 h-9 px-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer truncate ${settingsSection === s.key ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/10 text-zinc-400 hover:text-zinc-200'}`}>
                     {s.label}
                   </button>
                 ))}
