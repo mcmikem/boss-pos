@@ -40,7 +40,10 @@ export interface Product {
   barcode?: string;
   expiryDate?: string; // YYYY-MM-DD of the nearest-expiring batch; drives expiry alerts
   variants?: ProductVariant[]; // sellable units/prices for one dish (e.g. samosa single/couple/big)
-  recipe?: Recipe; // ingredient cost breakdown for a dish; COGS is derived from this
+  recipe?: Recipe;
+  // Set by the kitchen's own batch save: this write carries ONLY the ingredient
+  // costs that were paid. The server refuses anything else from a non-manager.
+  recipeCostsOnly?: boolean; // ingredient cost breakdown for a dish; COGS is derived from this
   updatedAt?: string; // server conflict-detection timestamp
 }
 

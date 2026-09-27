@@ -269,7 +269,9 @@ export default function MorningProduction({
         });
         const changed = nextIngredients.some((n, idx) => n.unitCost !== prod.recipe!.ingredients[idx].unitCost);
         if (changed) {
-          const written = await onUpdateProduct({ ...prod, recipe: { ...prod.recipe, ingredients: nextIngredients } });
+          // Stated explicitly: without it the server refuses this write, which
+          // is what a price change must always do.
+          const written = await onUpdateProduct({ ...prod, recipeCostsOnly: true, recipe: { ...prod.recipe, ingredients: nextIngredients } } as Product);
           if (written !== false) triggerToast('Recipe costs updated from what you paid', 'info');
         }
       } catch {}

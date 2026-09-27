@@ -535,9 +535,17 @@ test('moving cash between drawers is till work, not a manager decision', () => {
 test('a seller\u2019s paid ingredient prices reach the recipe without opening the pricing door', () => {
   const server = read('api/index.js');
   const put = server.match(/app\.put\('\/api\/products\/:id', requireManager, asHandler[\s\S]*?\napp\.delete\('\/api\/products\/:id'/)?.[0] || '';
+  // The caller must SAY it is only carrying ingredient costs. Without that, a
+  // stale cached build sends a whole product, gets 200, and its price change is
+  // silently discarded — a refusal turned into a lie.
+  assert.match(put, /confirmed: body\.recipeCostsOnly === true/);
+  assert.match(put, /delete body\.recipeCostsOnly/);
+  for (const caller of [read('src/components/MorningProduction.tsx'), read('src/components/QuickExpenseModal.tsx')]) {
+    assert.match(caller, /recipeCostsOnly: true/);
+  }
   // The batch save writes back what the cook paid, so tomorrow's cost is honest.
   // For a non-manager ONLY those unit costs are read from the payload...
-  assert.match(put, /const pinned = recipeCostOnlyUpdate\(current, body\)/);
+  assert.match(put, /const pinned = recipeCostOnlyUpdate\(current, body, \{ confirmed:/);
   assert.match(put, /body = \{ \.\.\.body, \.\.\.pinned\.body \}/);
   // No recipe, or nothing priced in it, means there is nothing this may do.
   assert.match(put, /Only a manager can change this item/);

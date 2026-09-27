@@ -1995,7 +1995,8 @@ app.put('/api/products/:id', requireManager, asHandler(async (req, res) => {
     // change a selling price, a cost, stock or a product's identity. The
     // decision is a pure function (api/operationsRules.js) so its boundaries are
     // covered by tests.
-    const pinned = recipeCostOnlyUpdate(current, body);
+    const pinned = recipeCostOnlyUpdate(current, body, { confirmed: body.recipeCostsOnly === true });
+    delete body.recipeCostsOnly;
     if (!pinned.allowed) {
       return res.status(403).json({ error: 'Only a manager can change this item', code: MANAGER_REQUIRED_CODE });
     }

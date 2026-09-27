@@ -345,7 +345,12 @@ export function identitySnapshot(input = {}) {
 // recipe's ingredient unit costs from the payload and pin every other field to
 // the stored row. The returned body is what may be written; `allowed: false`
 // means there was nothing here a seller is permitted to do.
-export function recipeCostOnlyUpdate(current, incoming) {
+// `confirm` is the caller stating that this update is ONLY the ingredient costs
+// it paid. Without it the route refuses, exactly as it always did: accepting the
+// payload and silently discarding a price change would turn a refusal into a
+// lie, which is worse than the bug this allowance was added to fix.
+export function recipeCostOnlyUpdate(current, incoming, { confirmed = false } = {}) {
+  if (!confirmed) return { allowed: false, reason: 'NOT_CONFIRMED' };
   const storedRecipe = current && current.recipe
     ? (typeof current.recipe === 'string' ? JSON.parse(current.recipe) : current.recipe)
     : null;

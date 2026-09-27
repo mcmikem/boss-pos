@@ -226,7 +226,8 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
           );
           const changed = nextIngredients.some((n, idx) => n.unitCost !== dishProduct.recipe!.ingredients[idx].unitCost);
           if (changed) {
-            const recipeWritten = await onUpdateProduct({ ...dishProduct, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } });
+            // Stated explicitly: this carries the prices paid, not a price change.
+            const recipeWritten = await onUpdateProduct({ ...dishProduct, recipeCostsOnly: true, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } } as Product);
             if (recipeWritten !== false) triggerToast('Recipe costs updated from what you paid', 'info');
           }
         }

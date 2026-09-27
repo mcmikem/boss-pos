@@ -82,7 +82,14 @@ test('a seller can carry paid ingredient prices into a recipe and nothing else',
       ],
     },
   };
-  const out = recipeCostOnlyUpdate(storedProduct, incoming);
+  // Unconfirmed — i.e. ANY caller that is not the kitchen stating what it is
+  // doing — is refused outright. Accepting it and silently dropping the price
+  // change would turn a refusal into a lie, and old cached builds do exactly
+  // this: they send a full product and get a cheerful 200 back.
+  assert.equal(recipeCostOnlyUpdate(storedProduct, incoming).allowed, false);
+  assert.equal(recipeCostOnlyUpdate(storedProduct, incoming).reason, 'NOT_CONFIRMED');
+
+  const out = recipeCostOnlyUpdate(storedProduct, incoming, { confirmed: true });
   assert.equal(out.allowed, true);
 
   // The one thing taken from the payload: what they paid.
@@ -112,18 +119,19 @@ test('a seller can carry paid ingredient prices into a recipe and nothing else',
 });
 
 test('recipe-cost carry-forward refuses when there is nothing a seller may do', () => {
+  const C = { confirmed: true };
   // No recipe at all.
-  assert.equal(recipeCostOnlyUpdate({ ...storedProduct, recipe: null }, { recipe: { ingredients: [{ id: 'x', unitCost: 1 }] } }).allowed, false);
+  assert.equal(recipeCostOnlyUpdate({ ...storedProduct, recipe: null }, { recipe: { ingredients: [{ id: 'x', unitCost: 1 }] } }, C).allowed, false);
   // No priced ingredient in the payload.
-  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', name: 'Flour' }] } }).allowed, false);
+  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', name: 'Flour' }] } }, C).allowed, false);
   // No recipe in the payload.
-  assert.equal(recipeCostOnlyUpdate(storedProduct, { price: 1 }).allowed, false);
+  assert.equal(recipeCostOnlyUpdate(storedProduct, { price: 1 }, C).allowed, false);
   // Negative or non-numeric prices are not costs.
-  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', unitCost: -5 }] } }).allowed, false);
-  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', unitCost: 'free' }] } }).allowed, false);
+  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', unitCost: -5 }] } }, C).allowed, false);
+  assert.equal(recipeCostOnlyUpdate(storedProduct, { recipe: { ingredients: [{ id: 'i1', unitCost: 'free' }] } }, C).allowed, false);
   // A recipe stored as a JSON string (the column is text) still works.
   const asText = { ...storedProduct, recipe: JSON.stringify(storedProduct.recipe) };
-  assert.equal(recipeCostOnlyUpdate(asText, { recipe: { ingredients: [{ id: 'i1', unitCost: 2999 }] } }).allowed, true);
+  assert.equal(recipeCostOnlyUpdate(asText, { recipe: { ingredients: [{ id: 'i1', unitCost: 2999 }] } }, C).allowed, true);
 });
 
 test('the till float setting is one key and one shape', () => {
