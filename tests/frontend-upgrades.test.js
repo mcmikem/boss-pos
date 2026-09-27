@@ -972,3 +972,28 @@ test('a delete never says it deleted something the server kept', () => {
   // "Repeated N batches" was printed before a single one was attempted.
   assert.match(prod, /Repeated \$\{okCount\} of \$\{yesterdayRegs\.length\} batches/);
 });
+
+test('nothing that costs money is one tap from gone', () => {
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const reg = read('src/components/CategoryRegister.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // The mobile sheet has no Clear cart, so a one-tap line removal WAS the
+  // destructive path on a phone. Every line now takes two taps, and the minus
+  // stepper counts as a removal at the last unit.
+  assert.match(sales, /const handleRemoveItem = \(productId: string, variantId: string \| undefined\) => \{\n    const key = `\$\{productId\}::\$\{variantId \|\| ''\}`;\n    const item = cart\.find/);
+  assert.equal(/item && item\.qty > 1 && removeConfirmId !== key/.test(sales), false);
+  assert.match(sales, /handleRemoveItem\(productId, variantId\);\n        return;/);
+  // Park threw the whole cart away with no question, while Clear asked.
+  assert.match(sales, /title: 'Park this\? sale\?'|title: 'Park this sale\?'/);
+  // Closing the books was one tap and reopening it needs a manager.
+  assert.match(reg, /title: 'Close the day\?'/);
+  // The role flip and blind close are shop-wide permission changes.
+  assert.match(app, /title: `\$\{s\.name\} becomes a \$\{becoming\}`/);
+  assert.match(app, /title: 'Hide all totals from cashiers\?'/);
+  // The add toast sat across the Cart button 150 times a day; the card carries
+  // the count under her finger instead.
+  assert.equal(/triggerToast\(`Added: \$\{product\.name\}`, 'success'\);\n  \};/.test(sales), false);
+  assert.match(read('src/components/Toast.tsx'), /fixed bottom-36/);
+  // The keyboard came up over the grid on every tap of Sell.
+  assert.match(sales, /window\.matchMedia\('\(pointer: coarse\)'\)\.matches/);
+});

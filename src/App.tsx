@@ -4233,7 +4233,21 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Close-out <SettingHelp label="Close-out" text="No manager at close? Cashiers do the evening close blind: they count, move and log, but never see totals. The manager gets it all on WhatsApp instead." /></label>
-                <button onClick={() => setSettings(prev => ({ ...prev, blindClose: !prev.blindClose }))}
+                <button onClick={async () => {
+                    // This one reaches every till in the shop and takes every
+                    // total off every cashier's screen, and it sat one row above
+                    // a near-identical-looking toggle, so a mis-tap produced
+                    // exactly the combination the help text warns about.
+                    if (!settings.blindClose) {
+                      const ok = await confirmDialog({
+                        title: 'Hide all totals from cashiers?',
+                        message: 'Cashiers will stop seeing every figure on Close day — on every till in the shop, not just this one. They can still count, move money and log. Turn it back off here whenever you like.',
+                        confirmLabel: 'Hide the totals',
+                      });
+                      if (!ok) return;
+                    }
+                    setSettings(prev => ({ ...prev, blindClose: !prev.blindClose }));
+                  }}
                   title="Cashiers close without seeing any totals"
                   className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border ${settings.blindClose ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
                   {settings.blindClose ? 'Blind close: On (cashiers never see totals)' : 'Blind close: Off'}
@@ -4271,8 +4285,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                             Set up twice
                           </span>
                         )}
-                        <button onClick={() => handleUpdateStaff(s.id, { role: s.role === 'manager' ? 'cashier' : 'manager' })}
-                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title="Toggle role">
+                        <button onClick={async () => {
+                            // Money out, voids, refunds and price edits are all
+                            // gated on this, and it was a 9-pixel tap in a row of
+                            // five 9-pixel taps — so the permission change that
+                            // matters most in the app had the least friction.
+                            const becoming = s.role === 'manager' ? 'cashier' : 'manager';
+                            const ok = await confirmDialog({
+                              title: `${s.name} becomes a ${becoming}`,
+                              message: becoming === 'manager'
+                                ? `${s.name} will be able to take money out, void sales, refund, change prices and see every report.`
+                                : `${s.name} will lose money out, voids, refunds, price changes and reports. Selling and spending stay.`,
+                              confirmLabel: `Make ${becoming}`,
+                            });
+                            if (ok) handleUpdateStaff(s.id, { role: becoming });
+                          }}
+                          className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title={s.role === 'manager' ? `Make ${s.name} a cashier` : `Make ${s.name} a manager`}>
                           {s.role === 'manager' ? 'MGR' : 'CSH'}
                         </button>
                         <button onClick={async () => {

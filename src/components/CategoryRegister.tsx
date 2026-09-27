@@ -510,6 +510,24 @@ export default function CategoryRegister({
     }
   }, [summarySentKey]);
   const finishCloseDay = async () => {
+    // Closing the books was one unguarded tap, and undoing it needs a manager
+    // PIN — so a cashier could lock the day but not unlock it. The question
+    // names what is unfinished, because that is the whole risk: a
+    // variance nobody looked at, or money still unassigned.
+    const outstanding: string[] = [];
+    if (countedSelected == null) outstanding.push('the drawer has not been counted');
+    if (shopCash.unassigned > 0.5) outstanding.push(`${fmt(shopCash.unassigned)} has not been assigned to float, owner or a manager`);
+    if (smartCash.variance && Math.abs(smartCash.variance) > 0.5) {
+      outstanding.push(`the drawer is ${smartCash.variance > 0 ? 'over' : 'short'} by ${fmt(Math.abs(smartCash.variance))}`);
+    }
+    if (!(await confirmDialog({
+      title: 'Close the day?',
+      message: outstanding.length
+        ? `${outstanding.join('. ')}. Closing stops the day being changed — a manager has to reopen it.`
+        : 'Closing stops the day being changed. A manager has to reopen it.',
+      confirmLabel: 'Close the day',
+      danger: outstanding.length > 0,
+    }))) return;
     const rec = { at: new Date().toISOString(), by: staffName || '', collected: collectedToday, moved: sentToday };
     try { localStorage.setItem(closedStoreKey, JSON.stringify(rec)); } catch {}
     setDayClosedAt(rec.at);

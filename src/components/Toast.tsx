@@ -46,7 +46,9 @@ export default function Toast({ message, type, action, onClose }: ToastProps) {
       role={type === 'error' ? 'alert' : 'status'}
       aria-live={type === 'error' ? 'assertive' : 'polite'}
       aria-atomic="true"
-      className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up max-w-[calc(100vw-2rem)] ${bgStyles[type]}`}
+      // Clear of the gold Cart FAB. It is a 52px button sitting at bottom 80px,
+      // so a toast at bottom 96px landed right across it.
+      className={`fixed bottom-36 left-1/2 -translate-x-1/2 z-[3000] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl animate-slide-up max-w-[calc(100vw-2rem)] ${bgStyles[type]}`}
     >
       {icons[type]}
       <span className="text-sm font-medium tracking-wide">{message}</span>

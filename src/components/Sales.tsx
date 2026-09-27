@@ -274,6 +274,14 @@ export default function Sales({
   };
   const parkCurrent = async () => {
     if (cart.length === 0) return;
+    // Clear asks before it throws the cart away. Park threw it away too, behind
+    // a typed name and no question — so the button that looked safer was the
+    // one that did more.
+    if (!(await confirmDialog({
+      title: 'Park this sale?',
+      message: `${cart.length} line${cart.length !== 1 ? 's' : ''} will be taken off the screen and kept under a name. Nothing is charged.`,
+      confirmLabel: 'Park it',
+    }))) return;
     const name = await promptDialog({ title: 'Park sale', message: 'Park this sale under which name?', defaultValue: customerName || '', placeholder: 'Customer name' });
     if (name === null) return;
     setParked(parkCart({ name: name.trim() || `Customer ${parked.length + 1}`, items: cart, paymentMethod, customerName }, parkedScope));
@@ -673,7 +681,14 @@ export default function Sales({
   const variantRef = useRef<HTMLDivElement>(null);
   const clearCartRef = useRef<HTMLDivElement>(null);
 
+  // Every tap on Sell remounted this screen and the search box took focus, so
+  // the keyboard came up over the grid and the first thing she saw was a search
+  // box and one row of products. A grid is what she came for. Touch devices
+  // never get the keyboard unless she asks for it.
   useEffect(() => {
+    let coarsePointer = false;
+    try { coarsePointer = window.matchMedia('(pointer: coarse)').matches; } catch {}
+    if (coarsePointer) return;
     searchRef.current?.focus();
   }, []);
 
@@ -846,10 +861,14 @@ export default function Sales({
       return;
     }
     addCartLine(product.id, undefined, undefined, product.name, 1, product.price, product.cost, product.stockQty, !!product.isService, product.saleUnit);
-    // Plain taps had zero feedback: on phones the cart lives behind the gold
-    // FAB, so without this toast an add looked like nothing happened.
+    // Plain taps used to have zero feedback, and the fix was a toast — which
+    // then sat on top of the gold Cart button for four seconds after every
+    // single tap, on the one screen where she does 150 of them a day. The card
+    // is the better feedback and it is under her finger: it takes a gold border
+    // and reads "N in cart". The tick stays, because that is felt rather than
+    // read. (The fast-seller strip still toasts: those are plain buttons with
+    // no count of their own.)
     playTick();
-    triggerToast(`Added: ${product.name}`, 'success');
   };
 
   const addCartLine = (productId: string, variantId: string | undefined, variantLabel: string | undefined, productName: string, qty: number, unitPrice: number, unitCost: number, stockQty: number, isService: boolean, saleUnit?: string) => {
@@ -930,6 +949,17 @@ export default function Sales({
   const handleAdjustQty = (productId: string, variantId: string | undefined, delta: number) => {
     const product = products.find(p => p.id === productId);
     const key = `${productId}::${variantId || ''}`;
+    // A minus on the LAST unit is a delete, and it happened with no question
+    // asked: the card is also the add target, so the finger aimed at the middle
+    // of the product lands here and the line is gone. Deletions get the same
+    // two-tap confirm the x button uses.
+    if (delta < 0) {
+      const line = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
+      if (line && line.qty + delta <= 0) {
+        handleRemoveItem(productId, variantId);
+        return;
+      }
+    }
     setCart(prev => prev.map(item => {
       if (`${item.productId}::${item.variantId || ''}` === key) {
         const nextQty = Math.round((item.qty + delta) * 1000) / 1000;
@@ -1014,10 +1044,14 @@ export default function Sales({
     setEditingItemId(null);
   };
 
+  // Two taps for EVERY line, not only lines of two or more. The mobile sheet
+  // has no "Clear cart" at all, so removing one line with one tap WAS the
+  // destructive path on a phone — and the x sits at the far right edge, which is
+  // exactly where a thumb goes.
   const handleRemoveItem = (productId: string, variantId: string | undefined) => {
     const key = `${productId}::${variantId || ''}`;
     const item = cart.find(i => `${i.productId}::${i.variantId || ''}` === key);
-    if (item && item.qty > 1 && removeConfirmId !== key) {
+    if (item && removeConfirmId !== key) {
       setRemoveConfirmId(key);
       return;
     }
