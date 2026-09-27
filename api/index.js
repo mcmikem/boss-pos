@@ -6776,7 +6776,21 @@ function mapSupplierPrice(r) {
 
 function mapStaff(r) {
   // PIN hashes never leave the server — verification happens via /api/staff/verify.
-  return { id: r.id, name: r.name, role: r.role === 'manager' ? 'manager' : 'cashier', active: !!r.active };
+  // hasPin is the server's own answer, not a local guess: Settings used to show a
+  // person as "PIN set" from phone state alone, so a manager could look at a
+  // screen that said YAWE was ready while the server held a different PIN.
+  return {
+    id: r.id, name: r.name, role: r.role === 'manager' ? 'manager' : 'cashier',
+    active: !!r.active, hasPin: !!r.pin_hash,
+  };
+}
+
+// A person is identified by their name at this till: the sign-in screen is a
+// list of names. Two accounts called YAWE means two PINs, one hidden row, and
+// a seller who swears she is set up and cannot get in. Refuse the second one.
+function sameStaffName(a, b) {
+  const norm = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return !!norm(a) && norm(a) === norm(b);
 }
 
 // === STAFF (per-person logins with roles) ===
@@ -6794,6 +6808,13 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
   const name = text(b.name, 80);
   const role = b.role === 'manager' ? 'manager' : 'cashier';
   if (!name) return res.status(400).json({ error: 'Staff name is required' });
+  const clash = (await sql`SELECT id, active FROM staff`).find((row) => sameStaffName(row.name, name));
+  if (clash) {
+    return res.status(409).json({
+      error: `${text(name, 80)} is already on this till${clash.active ? '' : ' (disabled)'}. Open that account to change their PIN instead of adding the same person twice.`,
+      code: 'DUPLICATE_STAFF',
+    });
+  }
   if (!/^\d{4}$/.test(String(b.pin || ''))) return res.status(400).json({ error: 'A 4-digit PIN is required' });
   const salt = randomBytes(16).toString('hex');
   const hash = pinHashFormat(salt, hashPinStrong(String(b.pin), salt));
@@ -6801,7 +6822,7 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
   const at = new Date().toISOString();
   await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${hash}, true, ${at})`;
   await audit('staff.create', `${name} (${role})`);
-  res.json({ id, name, role, active: true });
+  res.json({ id, name, role, active: true, hasPin: true });
 }));
 
 app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
@@ -6812,13 +6833,23 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
   const role = b.role !== undefined ? (b.role === 'manager' ? 'manager' : 'cashier') : rows[0].role;
   const active = b.active !== undefined ? !!b.active : !!rows[0].active;
   if (!name) return res.status(400).json({ error: 'Staff name is required' });
+  if (!sameStaffName(rows[0].name, name)) {
+    const clash = (await sql`SELECT id, active FROM staff WHERE id <> ${req.params.id}`).find((row) => sameStaffName(row.name, name));
+    if (clash) {
+      return res.status(409).json({
+        error: `${text(name, 80)} is already on this till${clash.active ? '' : ' (disabled)'}. Two people cannot share a name here — the sign-in screen would not know which is which.`,
+        code: 'DUPLICATE_STAFF',
+      });
+    }
+  }
   await sql`UPDATE staff SET name=${name}, role=${role}, active=${active} WHERE id=${req.params.id}`;
   if (/^\d{4}$/.test(String(b.pin || ''))) {
     const salt = randomBytes(16).toString('hex');
     await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(String(b.pin), salt))} WHERE id=${req.params.id}`;
   }
   await audit('staff.update', `${name} (${role}, ${active ? 'active' : 'disabled'})`);
-  res.json({ id: req.params.id, name, role, active });
+  const after = await sql`SELECT * FROM staff WHERE id=${req.params.id}`;
+  res.json(after.length ? mapStaff(after[0]) : { id: req.params.id, name, role, active, hasPin: true });
 }));
 
 app.post('/api/staff/verify', asHandler(async (req, res) => {

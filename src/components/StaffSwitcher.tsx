@@ -9,18 +9,40 @@ interface StaffSwitcherProps {
   error: string | null;
   onVerify: (id: string, pin: string) => void;
   onClose: () => void;
+  today?: { id: string; name: string } | null;
 }
 
 // "Who is selling?" — PIN-checked identity switch. Shown mandatorily when
 // staff logins exist and nobody is clocked in, or on demand from the till.
-export default function StaffSwitcher({ staff, mandatory, verifying, error, onVerify, onClose }: StaffSwitcherProps) {
-  const [selectedId, setSelectedId] = useState<string>(staff[0]?.id || '');
+//
+// Two things this screen must never do again:
+//  1. Pre-select somebody. It used to highlight the oldest account (DIANAH),
+//     so a cashier who typed her own correct PIN under someone else's
+//     highlighted name was told "Wrong PIN" — correctly, about the wrong
+//     account. Nobody is highlighted until they tap themselves.
+//  2. Make anyone hunt for their own name in a scrolling grid. Whoever sold
+//     earlier today is offered first, in one tap. It is a shortcut to the
+//     name, not a way around the PIN: the PIN is still what proves it.
+export default function StaffSwitcher({ staff, mandatory, verifying, error, onVerify, onClose, today }: StaffSwitcherProps) {
+  const [selectedId, setSelectedId] = useState<string>('');
   const [pin, setPin] = useState('');
 
   const submit = () => {
     if (!selectedId || pin.length !== 4 || verifying) return;
     onVerify(selectedId, pin);
   };
+
+  const pick = (id: string) => {
+    setSelectedId(id);
+    setPin('');
+  };
+
+  // Alphabetical: the shop looks for a person by name, not by join date.
+  const others = staff
+    .filter((s) => s.id !== today?.id)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const todayPerson = today ? staff.find((s) => s.id === today.id) : null;
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[120] flex items-center justify-center p-4">
@@ -35,9 +57,23 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
             </button>
           )}
         </div>
+        {todayPerson && (
+          <>
+            <button onClick={() => pick(todayPerson.id)}
+              className={`w-full h-16 rounded-xl border text-sm font-black uppercase tracking-wider transition-all cursor-pointer mb-3 ${
+                selectedId === todayPerson.id
+                  ? 'border-gold-brand bg-gold-brand/10 text-white'
+                  : 'border-gold-brand/30 bg-gold-brand/5 text-gold-brand hover:bg-gold-brand/10'
+              }`}>
+              <div>{todayPerson.name} again</div>
+              <div className="text-[9px] mt-0.5 text-zinc-500">Sold earlier today — tap, then your PIN</div>
+            </button>
+            <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600 text-center mb-2">or someone else</p>
+          </>
+        )}
         <div className="grid grid-cols-2 gap-2 mb-4 max-h-[32vh] overflow-y-auto">
-          {staff.map((s) => (
-            <button key={s.id} onClick={() => { setSelectedId(s.id); setPin(''); }}
+          {others.map((s) => (
+            <button key={s.id} onClick={() => pick(s.id)}
               className={`h-14 rounded-xl border text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
                 selectedId === s.id
                   ? 'border-gold-brand bg-gold-brand/10 text-white'
@@ -51,17 +87,23 @@ export default function StaffSwitcher({ staff, mandatory, verifying, error, onVe
           ))}
         </div>
         <input
-          type="password" inputMode="numeric" maxLength={4} value={pin}
+          type="password" inputMode="numeric" maxLength={4} value={pin} disabled={!selectedId}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          placeholder="4-digit PIN"
-          className="w-full h-14 bg-[#0A0A0A] border border-white/10 rounded-xl text-center text-2xl font-black tracking-[0.5em] text-white outline-none focus:border-gold-brand mb-3"
+          placeholder={selectedId ? '4-digit PIN' : 'Tap your name first'}
+          aria-label={selectedId ? 'Your 4-digit PIN' : 'Choose your name above first'}
+          className="w-full h-14 bg-[#0A0A0A] border border-white/10 rounded-xl text-center text-2xl font-black tracking-[0.5em] text-white outline-none focus:border-gold-brand mb-3 disabled:opacity-40 disabled:text-base disabled:tracking-normal disabled:font-bold"
         />
         {error && <p className="text-xs text-rose-400 font-bold text-center mb-3">{error}</p>}
         <button onClick={submit} disabled={verifying || pin.length !== 4}
           className="w-full h-12 bg-gold-brand text-black font-black uppercase tracking-widest text-xs rounded-xl hover:opacity-90 transition-all disabled:opacity-40 cursor-pointer">
           {verifying ? 'Checking…' : 'Start selling'}
         </button>
+        {error && staff.length > 1 && (
+          <p className="text-[10px] text-zinc-500 text-center mt-3">
+            Not working? Use the till PIN at the lock screen and sell as the till — a manager can sort the PIN later.
+          </p>
+        )}
         {mandatory && (
           <p className="text-[10px] text-zinc-600 text-center mt-3">This till uses staff logins — pick who is selling to continue.</p>
         )}

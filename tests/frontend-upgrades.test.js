@@ -905,3 +905,23 @@ test('a product with one option does not cost a sheet and a second tap', () => {
   assert.match(card, /`\$\{formatCurrency\(minPrice\)\}–\$\{formatCurrency\(maxPrice\)\}`/);
   assert.equal(/\{hasVariants \? '\+' : ''\}/.test(card), false);
 });
+
+test('the sign-in screen never names a person the seller did not choose', () => {
+  const switcher = read('src/components/StaffSwitcher.tsx');
+  const server = read('api/index.js');
+  // A pre-highlighted name made a correct PIN fail: the server checked it
+  // against the highlighted account. DIANAH was pre-selected because she was
+  // the oldest row, so "it brings other names of others but not their names".
+  assert.equal(/useState<string>\(staff\[0\]\?\.id/.test(switcher), false);
+  assert.match(switcher, /useState<string>\(''\)/);
+  assert.match(switcher, /placeholder=\{selectedId \? '4-digit PIN' : 'Tap your name first'\}/);
+  // Two people cannot share a name here: the list is the identity.
+  assert.match(server, /function sameStaffName/);
+  assert.match(server, /code: 'DUPLICATE_STAFF'/);
+  // Settings must report the SERVER's PIN state, never a local guess.
+  assert.match(server, /hasPin: !!r\.pin_hash/);
+  assert.match(read('src/types.ts'), /hasPin\?: boolean;/);
+  // And the once-a-day shortcut must not skip the PIN.
+  assert.match(read('src/utils/staffMemory.ts'), /sale stamped with a guessed name is a lie in the ledger/);
+  assert.equal(/onVerify\(todayPerson\.id, '0000'\)/.test(switcher), false);
+});

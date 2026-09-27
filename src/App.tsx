@@ -42,6 +42,7 @@ import SettingHelp from './components/SettingHelp';
 import MorningBrief from './components/MorningBrief';
 import NotificationsBell from './components/NotificationsBell';
 import { pushNotice, dayKeyOf } from './utils/notifications';
+import { rememberSellerToday, sellerToday as sellerTodayOf, forgetSellerToday, type SellerToday } from './utils/staffMemory';
 import { AdminDashboard } from './components/AdminDashboard';
 import StaffSwitcher from './components/StaffSwitcher';
 import { canAccessTab, isManagerRole, activeStaffOf, type TillTab } from './utils/staff';
@@ -488,6 +489,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     });
   }, []);
   const activeStaff = activeStaffOf(staffList, activeStaffId);
+  // Sign-in list: active people, alphabetical, plus whoever sold earlier today.
+  // Sorted because the shop looks for a person by name, not by join date.
+  const switcherStaff = useMemo(
+    () => staffList.filter((s) => s.active).slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [staffList],
+  );
+  const [sellerToday, setSellerToday] = useState<SellerToday | null>(() => sellerTodayOf());
   const activeRole = activeStaff?.role || null;
   const [staffLoaded, setStaffLoaded] = useState(false);
   const isManager = staffLoaded ? isManagerRole(activeRole, staffConfigured) : activeRole === 'manager';
@@ -1494,13 +1502,21 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setStaffToken(null);
     try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
     setStaffName('');
+    // Kept, deliberately: a re-lock at noon should still offer this morning's
+    // seller in one tap. Forgetting happens at hand-over (signInAsSeller
+    // overwrites it) and at sign-out, where the shift has genuinely ended.
   };
 
   // The one place a person becomes signed in: their PIN opened the device, it
   // says who they are, and the drawer is counted if the shift changed hands.
   // Both the lock screen and the seller switcher come through here, so a
   // handover can never behave differently depending on which door was used.
-  const signInAsSeller = async (s: { id: string; name: string; role: 'manager' | 'cashier'; token?: string }) => {
+  // "Ask once a day." Whoever sold earlier today is offered back in one tap on
+  // the sign-in screen. Remembering the name never skips the PIN — see
+  // utils/staffMemory for why that would be a lie in the ledger.
+  const signInAsSeller = async (s: { id: string, name: string; role: 'manager' | 'cashier'; token?: string }) => {
+    rememberSellerToday({ id: s.id, name: s.name, role: s.role });
+    setSellerToday({ id: s.id, name: s.name, role: s.role, day: dayKeyOf() });
     if (s.token) setStaffToken(s.token);
     markUnlocked();
     const prevName = activeStaff?.name || staffName || '';
@@ -2547,6 +2563,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
 
   const handleUpdateStaff = async (id: string, patch: { name?: string; role?: 'manager' | 'cashier'; active?: boolean; pin?: string }) => {
+    // Somebody taken off the till must not still be offered on the sign-in
+    // screen as "sold earlier today".
+    if (patch.active === false && sellerToday?.id === id) {
+      forgetSellerToday();
+      setSellerToday(null);
+    }
     const prev = staffList;
     setStaffList(list => list.map(s => s.id === id ? { ...s, ...patch, pin: undefined } as StaffMember : s));
     try {
@@ -3640,7 +3662,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
       {showStaffSwitcher && staffConfigured && (
         <StaffSwitcher
-          staff={staffList.filter(s => s.active)}
+          staff={switcherStaff}
+          today={sellerToday}
           mandatory={false}
           verifying={staffVerifying}
           error={staffVerifyError}
@@ -3650,7 +3673,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       )}
       {staffConfigured && !activeStaff && (
         <StaffSwitcher
-          staff={staffList.filter(s => s.active)}
+          staff={switcherStaff}
+          today={sellerToday}
           mandatory={true}
           verifying={staffVerifying}
           error={staffVerifyError}
@@ -4147,10 +4171,21 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </>
                 ) : isManager ? (
                   <>
-                    {staffList.map(s => (
+                    {staffList.map(s => {
+                      // Two rows with one name is how a seller ends up "set up in
+                      // Settings" and unable to sign in: one of the two PINs is
+                      // not the one she knows. Say so instead of showing two
+                      // identical rows and a PIN button on each.
+                      const twin = staffList.find(o => o.id !== s.id && o.name.trim().toLowerCase() === s.name.trim().toLowerCase());
+                      return (
                       <div key={s.id} className="flex items-center gap-2 bg-[#0A0A0A] border border-white/5 rounded-xl px-3 py-2">
                         <span className={`w-1.5 h-1.5 rounded-full ${s.active ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
                         <span className="flex-1 min-w-0 text-xs font-bold text-zinc-200 truncate">{s.name}</span>
+                        {twin && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-1 rounded-lg border border-rose-500/50 text-rose-400" title={`There is more than one ${s.name} on this till. Only the active one can sign in. Turn the other one off or give it a different name.`}>
+                            Set up twice
+                          </span>
+                        )}
                         <button onClick={() => handleUpdateStaff(s.id, { role: s.role === 'manager' ? 'cashier' : 'manager' })}
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-gold-brand/40 text-gold-brand" title="Toggle role">
                           {s.role === 'manager' ? 'MGR' : 'CSH'}
@@ -4158,13 +4193,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                         <button onClick={async () => {
                           const pin = await promptDialog({ title: 'Reset staff PIN', message: `New 4-digit PIN for ${s.name}:`, secure: true, inputMode: 'numeric', placeholder: '4-digit PIN', validate: value => /^\d{4}$/.test(value) ? null : 'PIN must be 4 digits.' });
                           if (pin) handleUpdateStaff(s.id, { pin });
-                        }} className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title="Reset PIN">PIN</button>
+                        }} className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400"
+                          title={s.hasPin ? `${s.name} has a PIN. Tap to set a new one.` : `${s.name} has no PIN yet — she cannot sign in until you set one.`}>
+                          {s.hasPin ? 'PIN' : 'NO PIN'}
+                        </button>
                         <button onClick={() => handleUpdateStaff(s.id, { active: !s.active })}
                           className="text-[9px] font-black uppercase px-2 py-1 rounded-lg border border-zinc-700 text-zinc-400" title={s.active ? 'Disable' : 'Enable'}>
                           {s.active ? 'On' : 'Off'}
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                     <StaffFirstSetup onAdd={handleAddStaff} />
                     <p className="text-[10px] text-zinc-600 leading-relaxed">Cashiers see Sell + Spend only — no stock, reports, close-out, or settings. Voids and refunds ask for a manager.</p>
                   </>

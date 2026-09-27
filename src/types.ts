@@ -417,6 +417,8 @@ export interface StaffMember {
   name: string;
   role: StaffRole;
   active: boolean;
+  /** The server's own answer. Never inferred from phone state. */
+  hasPin?: boolean;
 }
 
 export interface TailoringMaterial {
