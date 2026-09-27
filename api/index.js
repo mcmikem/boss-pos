@@ -159,6 +159,10 @@ function sanitizeClientError(raw) {
     ua: scrubSecrets(src.ua, 200),
     at: scrubSecrets(src.at, 40),
     traceId: scrubSecrets(src.traceId, 40),
+    // How many times this failure happened since it was last reported. One
+    // device failing the same way every minute should be ONE row that says how
+    // loud it is, not hundreds of identical ones to group by.
+    count: Number.isFinite(Number(src.count)) ? Math.min(100000, Math.max(1, Math.round(Number(src.count)))) : 1,
   };
 }
 
@@ -178,6 +182,7 @@ app.post('/api/client-errors', asHandler(async (req, res) => {
     await audit('client.error', entry.msg, actor, {
       kind: entry.kind, src: entry.src, line: entry.line, col: entry.col, url: entry.url,
       stack: entry.stack, ua: entry.ua, reportedAt: entry.at, clientTraceId: entry.traceId || null,
+      ...(entry.count > 1 ? { count: entry.count } : {}),
     }, req.id);
   }
   res.status(202).json({ accepted: errors.length, build: BUILD_ID, traceId: req.id || null });

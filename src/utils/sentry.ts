@@ -20,6 +20,10 @@ export interface ClientErrorRecord {
   traceId?: string;
   context?: string;
   sent?: boolean;
+  // How many times this exact failure has happened since it was last reported.
+  // One bug must not become hundreds of rows: that is what buried the first
+  // real signal in the production audit log.
+  count?: number;
 }
 
 export interface ClientErrorInput {
@@ -129,6 +133,7 @@ export function toWireError(record: ClientErrorRecord): Record<string, unknown> 
   return {
     kind: record.kind,
     msg: record.msg,
+    ...(record.count && record.count > 1 ? { count: record.count } : {}),
     stack: record.stack,
     src: record.src,
     line: record.line,
@@ -254,17 +259,73 @@ function scheduleFlush(): void {
   }
 }
 
+// Repeats are collapsed, not re-sent. One phone failing the same way every
+// minute produced 688 near-identical audit rows, which is why the outbox bug
+// needed a GROUP BY to find. A repeat now bumps a counter and waits out a
+// cooldown, so a persistent failure is one row that says how loud it is.
+const REPEAT_COOLDOWN_MS = 15 * 60 * 1000;
+const REPEAT_STATE_KEY = 'boss_pos_error_repeats';
+
+function fingerprint(record: ClientErrorRecord): string {
+  const firstFrame = String(record.stack || '').split('\n').slice(0, 2).join('|').slice(0, 160);
+  return `${record.kind}|${record.msg}|${firstFrame}`;
+}
+
+interface RepeatState {
+  count: number;
+  lastReportedAt: number;
+}
+
+function readRepeatState(): Record<string, RepeatState> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REPEAT_STATE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, RepeatState> : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRepeatState(state: Record<string, RepeatState>): void {
+  try {
+    // Keep only the recent handful; this is a throttle, not a history.
+    const entries = Object.entries(state).sort((a, b) => b[1].lastReportedAt - a[1].lastReportedAt).slice(0, 40);
+    localStorage.setItem(REPEAT_STATE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {}
+}
+
 export function reportClientError(input: ClientErrorInput): ClientErrorRecord {
   const record = buildClientError(input);
+  const key = fingerprint(record);
+  const now = Date.now();
+  const state = readRepeatState();
+  const seen = state[key];
+  const withinCooldown = !!seen && (now - (seen.lastReportedAt || 0)) < REPEAT_COOLDOWN_MS;
+  if (withinCooldown && seen) {
+    seen.count = (seen.count || 1) + 1;
+    // Carry the running count into the row already waiting to be sent.
+    try {
+      const queued = readClientErrorQueue().map((row) => (fingerprint(row) === key
+        ? { ...row, count: seen.count }
+        : row));
+      writeList(QUEUE_KEY, queued);
+      rememberInLog({ ...record, id: queued[0]?.id || record.id, count: seen.count, sent: true });
+    } catch {}
+    writeRepeatState(state);
+    return { ...record, count: seen.count };
+  }
+  const occurrences = seen ? (seen.count || 1) + 1 : 1;
+  state[key] = { count: 0, lastReportedAt: now };
+  writeRepeatState(state);
+  const counted = occurrences > 1 ? { ...record, count: occurrences } : record;
   try {
-    console.error('[sentry]', record.kind, record.msg, record.traceId ? `trace ${record.traceId}` : '');
+    console.error('[sentry]', counted.kind, counted.msg, counted.traceId ? `trace ${counted.traceId}` : '', counted.count ? `x${counted.count}` : '');
   } catch {}
   try {
-    rememberInLog(record);
-    enqueue(record);
+    rememberInLog(counted);
+    enqueue(counted);
   } catch {}
   scheduleFlush();
-  return record;
+  return counted;
 }
 
 export function supportSummary(extra?: Record<string, unknown>): string {

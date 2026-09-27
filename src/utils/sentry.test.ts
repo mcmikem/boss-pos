@@ -174,3 +174,65 @@ describe('global handlers', () => {
     expect(summary).toContain('trace tr-42');
   });
 });
+
+// One phone failing the same way every minute produced 688 near-identical audit
+// rows, which is why the outbox bug needed a GROUP BY to find at all. A repeat
+// now bumps a counter and waits out a cooldown instead of being re-sent.
+describe('repeat errors are collapsed', () => {
+  const REPEAT = { kind: 'unhandledrejection', msg: 'outbox put failed', stack: 'DataError: put\n    at eu (index.js:1)' };
+
+  function atClock(value: number) {
+    vi.spyOn(Date, 'now').mockReturnValue(value);
+  }
+
+  it('sends one row for a failure that repeats, with a count', async () => {
+    const s = await loadSentry();
+    atClock(1_000_000);
+    s.reportClientError(REPEAT);
+    for (let i = 0; i < 20; i += 1) {
+      atClock(1_000_000 + i * 1000);
+      s.reportClientError(REPEAT);
+    }
+    const queued = s.readClientErrorQueue();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].count).toBe(21);
+    // The wire format carries it, so the row says how loud it is.
+    expect(s.toWireError(queued[0]).count).toBe(21);
+  });
+
+  it('still separates genuinely different failures', async () => {
+    const s = await loadSentry();
+    atClock(1_000_000);
+    s.reportClientError({ kind: 'unhandledrejection', msg: 'A', stack: 'at a' });
+    s.reportClientError({ kind: 'unhandledrejection', msg: 'B', stack: 'at b' });
+    s.reportClientError({ kind: 'window.error', msg: 'A', stack: 'at a' });
+    expect(s.readClientErrorQueue()).toHaveLength(3);
+  });
+
+  it('reports again once the cooldown passes, so a worsening bug stays visible', async () => {
+    const s = await loadSentry();
+    atClock(1_000_000);
+    s.reportClientError(REPEAT);
+    atClock(1_000_000 + 20 * 60 * 1000);
+    s.reportClientError(REPEAT);
+    const queued = s.readClientErrorQueue();
+    expect(queued).toHaveLength(2);
+    // The second report says how many happened while it was suppressed.
+    expect(queued[1].count).toBe(2);
+  });
+
+  it('omits count from the wire when there was only ever one', async () => {
+    const s = await loadSentry();
+    atClock(1_000_000);
+    const once = s.reportClientError({ kind: 'error', msg: 'single' });
+    expect(s.toWireError(once).count).toBeUndefined();
+  });
+
+  it('survives unreadable repeat state rather than losing the report', async () => {
+    const s = await loadSentry();
+    atClock(1_000_000);
+    storage.setItem('boss_pos_error_repeats', 'not json at all');
+    s.reportClientError(REPEAT);
+    expect(s.readClientErrorQueue()).toHaveLength(1);
+  });
+});

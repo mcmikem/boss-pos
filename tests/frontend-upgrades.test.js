@@ -773,3 +773,18 @@ test('no hot path depends on flatMap, which the modern bundle does not polyfill'
     assert.equal(/\.flatMap\(/.test(src), false, `${file} still calls Array.prototype.flatMap`);
   }
 });
+
+test('a repeating client failure is one row that says how loud it is', () => {
+  const sentry = read('src/utils/sentry.ts');
+  const server = read('api/index.js');
+  // 688 near-identical rows is why the outbox bug needed a GROUP BY to find.
+  assert.match(sentry, /const REPEAT_COOLDOWN_MS = 15 \* 60 \* 1000/);
+  assert.match(sentry, /if \(withinCooldown && seen\) \{/);
+  assert.match(sentry, /count\?: number;/);
+  // The count survives to the server, and is bounded there.
+  assert.match(sentry, /\.\.\.\(record\.count && record\.count > 1 \? \{ count: record\.count \} : \{\}\)/);
+  assert.match(server, /Math\.min\(100000, Math\.max\(1, Math\.round\(Number\(src\.count\)\)\)\)/);
+  // And a suppressed repeat does not stop a worsening bug being reported later.
+  assert.match(sentry, /state\[key\] = \{ count: 0, lastReportedAt: now \}/);
+  assert.match(sentry, /const occurrences = seen \? \(seen\.count \|\| 1\) \+ 1 : 1;/);
+});
