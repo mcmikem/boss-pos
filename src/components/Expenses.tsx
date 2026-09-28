@@ -13,11 +13,11 @@ interface ExpensesProps {
   expenseCategories: string[];
   products: Product[];
   onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
-  onDeleteExpense: (expenseId: string) => void;
+  onDeleteExpense: (expenseId: string) => void | boolean | Promise<void | boolean>;
   onAddExpenseCategory: (name: string) => void | boolean | Promise<void | boolean>;
   onUpdateExpenseCategory: (oldName: string, newName: string) => void | boolean | Promise<void | boolean>;
   onDeleteExpenseCategory: (name: string) => void | boolean | Promise<void | boolean>;
-  onUpdateProduct?: (p: Product) => void;
+  onUpdateProduct?: (p: Product) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   lang?: unknown;
@@ -329,12 +329,16 @@ export default function Expenses({
                     role="button"
                     tabIndex={0}
                     aria-label={deleteConfirmId === exp.id ? 'Tap again to confirm delete' : 'Delete expense'}
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
                       if (deleteConfirmId !== exp.id) { armDelete(exp.id); return; }
                       if (deleteTimer.current) clearTimeout(deleteTimer.current);
                       setDeleteConfirmId(null);
-                      onDeleteExpense(exp.id); triggerToast('Deleted expense', 'info');
+                      // Wait for the server. "Deleted" used to be announced
+                      // before the ask, so a refusal showed the row snapping
+                      // back under a message saying it was gone.
+                      if ((await onDeleteExpense(exp.id)) === false) return;
+                      triggerToast('Deleted expense', 'info');
                     }}
                     onKeyDown={(e) => {
                       if (e.key !== 'Enter') return;
@@ -362,7 +366,7 @@ export default function Expenses({
         expense={selectedExpense}
         formatCurrency={formatCurrency}
         onClose={() => setSelectedExpense(null)}
-        onDelete={(id) => { onDeleteExpense(id); triggerToast('Deleted expense', 'info'); }}
+        onDelete={async (id) => { if ((await onDeleteExpense(id)) === false) return; triggerToast('Deleted expense', 'info'); }}
         lang={lang}
       />
 

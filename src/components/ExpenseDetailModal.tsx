@@ -7,7 +7,7 @@ interface Props {
   expense: Expense | null;
   formatCurrency: (v: number) => string;
   onClose: () => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (id: string) => void | boolean | Promise<void | boolean>;
   lang?: unknown;
 }
 

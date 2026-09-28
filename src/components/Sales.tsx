@@ -110,13 +110,13 @@ function playChargeFeedback() {
 interface SalesProps {
   products: Product[];
   onAddSale: (sale: Sale) => void | Promise<SaleSaveResult>;
-  onUpdateProduct: (p: Product) => void;
+  onUpdateProduct: (p: Product) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   cart: SaleItem[];
   setCart: Dispatch<SetStateAction<SaleItem[]>>;
   triggerToast: TriggerToast;
   settings?: StoreSettings;
-  onAddExpense?: (expense: Expense) => void;
+  onAddExpense?: (expense: Expense) => void | boolean | Promise<void | boolean>;
   expenseCategories?: string[];
   isQuickSale: boolean;
   setIsQuickSale: Dispatch<SetStateAction<boolean>>;
@@ -133,8 +133,8 @@ interface SalesProps {
   draftScope?: CheckoutDraftScope;
   cartDraftReady?: boolean;
   productionRegisters?: ProductionRegister[];
-  onAddProduction?: (p: ProductionRegister) => void;
-  onDeleteProduction?: (id: string) => void;
+  onAddProduction?: (p: ProductionRegister) => void | boolean | Promise<void | boolean>;
+  onDeleteProduction?: (id: string) => void | boolean | Promise<void | boolean>;
   salesHistory?: Sale[];
   wastageLogs?: WastageLog[];
   onGoToStock?: () => void;
@@ -156,8 +156,8 @@ interface SalesProps {
   canEditPrices?: boolean;
   onRequestManagerSignIn?: () => void;
   customers?: CustomerProfile[];
-  onSaveCustomer?: (c: CustomerProfile) => void;
-  onDeleteCustomer?: (id: string) => void;
+  onSaveCustomer?: (c: CustomerProfile) => void | boolean | Promise<void | boolean>;
+  onDeleteCustomer?: (id: string) => void | boolean | Promise<void | boolean>;
 }
 
 const localOrderNumber = () => {

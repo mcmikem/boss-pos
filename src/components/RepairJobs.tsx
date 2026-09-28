@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Wrench, Plus, X, Search, ChevronRight, RotateCcw } from 'lucide-react';
 import SettleSheet from './SettleSheet';
-import type { RepairJob, Sale } from '../types';
+import type { RepairJob, Sale, SaleSaveResult } from '../types';
 import { repairJobApi } from '../api';
 import { ringServiceSale, customerWhatsAppUrl } from '../utils/serviceSale';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
@@ -18,7 +18,7 @@ const STATUS_ORDER = ['received', 'in_progress', 'ready', 'collected'];
 
 interface RepairJobsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
-  onAddSale?: (sale: Sale) => void;
+  onAddSale?: (sale: Sale) => void | SaleSaveResult | Promise<void | SaleSaveResult>;
   staffName?: string;
   tillBranch?: string;
   formatCurrency?: (val: number) => string;
@@ -133,14 +133,19 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
         setJobs(prev => prev.map(j => j.id === editId ? updated : j));
         const topUp = Math.round((job.deposit || 0) - (existing?.deposit || 0));
         if (topUp > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'repair-service',
-            label: `Repair: ${updated.itemLabel}`,
-            amount: topUp, method: 'Cash',
-            customerName: updated.customerName,
-            unitCost: updated.partsCost || 0,
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'repair-service',
+              label: `Repair: ${updated.itemLabel}`,
+              amount: topUp, method: 'Cash',
+              customerName: updated.customerName,
+              unitCost: updated.partsCost || 0,
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Top-up ${fmt(topUp)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Job updated', 'success');
@@ -149,14 +154,19 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
         const created = await repairJobApi.create(job);
         setJobs(prev => [created, ...prev]);
         if (created.deposit > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'repair-service',
-            label: `Repair: ${created.itemLabel}${created.issue ? ` (${created.issue})` : ''}`,
-            amount: created.deposit, method: 'Cash',
-            customerName: created.customerName,
-            unitCost: created.partsCost || 0,
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'repair-service',
+              label: `Repair: ${created.itemLabel}${created.issue ? ` (${created.issue})` : ''}`,
+              amount: created.deposit, method: 'Cash',
+              customerName: created.customerName,
+              unitCost: created.partsCost || 0,
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Deposit ${fmt(created.deposit)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Job booked in', 'success');
@@ -189,14 +199,19 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
     const balance = Math.round(j.price - (j.deposit || 0));
     setSettleId(null);
     if (balance > 0 && onAddSale) {
-      await ringServiceSale({
-        onAddSale, staffName, tillBranch,
-        productId: 'repair-service',
-        label: `Repair: ${j.itemLabel}${j.issue ? ` (${j.issue})` : ''}`,
-        amount: balance, method,
-        customerName: j.customerName,
-        unitCost: Math.max(0, (j.partsCost || 0) - (j.deposit || 0)),
-      });
+      try {
+        await ringServiceSale({
+          onAddSale, staffName, tillBranch,
+          productId: 'repair-service',
+          label: `Repair: ${j.itemLabel}${j.issue ? ` (${j.issue})` : ''}`,
+          amount: balance, method,
+          customerName: j.customerName,
+          unitCost: Math.max(0, (j.partsCost || 0) - (j.deposit || 0)),
+        });
+      } catch {
+        triggerToast('The balance was not recorded, so the job is still open', 'error');
+        return;
+      }
       triggerToast(
         method === 'Credit / Book'
           ? `${fmt(balance)} booked as credit — collect from ${j.customerName}`

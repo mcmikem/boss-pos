@@ -30,10 +30,10 @@ interface InventoryProps {
   // it does not have.
   onAddProduct: (product: Product) => void | boolean | Promise<void | boolean>;
   onUpdateProduct: (product: Product) => void | boolean | Promise<void | boolean>;
-  onDeleteProduct: (productId: string) => void;
-  onUpsertQuote: (supplierId: string, productId: string, price: number) => void;
-  onDeleteQuote: (quoteId: string) => void;
-  onAddExpense?: (expense: Expense) => void;
+  onDeleteProduct: (productId: string) => void | boolean | Promise<void | boolean>;
+  onUpsertQuote: (supplierId: string, productId: string, price: number) => void | boolean | Promise<void | boolean>;
+  onDeleteQuote: (quoteId: string) => void | boolean | Promise<void | boolean>;
+  onAddExpense?: (expense: Expense) => void | boolean | Promise<void | boolean>;
   onAddCategory: (name: string) => void | boolean | Promise<void | boolean>;
   onUpdateCategory: (oldName: string, newName: string) => void | boolean | Promise<void | boolean>;
   onDeleteCategory: (name: string) => void | boolean | Promise<void | boolean>;
@@ -375,24 +375,17 @@ export default function Inventory({
       if (adjustmentType === 'set') {
         finalStock = Math.max(0, stockAdjustment);
         movedQty = stockAdjustment;
-        triggerToast(`Set stock to ${finalStock}`, 'success');
       } else if (adjustmentType === 'add') {
         finalStock = Math.round((finalStock + stockAdjustment) * 1000) / 1000;
         receivedQty = stockAdjustment;
         movedQty = stockAdjustment;
-        triggerToast(`Added ${stockAdjustment} units!`, 'success');
       } else {
         finalStock = Math.max(0, Math.round((finalStock - stockAdjustment) * 1000) / 1000);
         movedQty = stockAdjustment;
-        triggerToast(`Removed ${stockAdjustment} units`, 'info');
       }
-      // Journal the why (default reason per button so it is never blank).
-      const reason = adjustReason || (ADJUST_REASONS[adjustmentType]?.[0] || 'Adjusted');
-      logAdjustment({
-        ts: new Date().toISOString(), productId: editingProduct.id, name: nameTrimmed,
-        type: adjustmentType, qty: movedQty, reason,
-      });
     }
+    // Journal the why (default reason per button so it is never blank).
+    const reason = adjustReason || (ADJUST_REASONS[adjustmentType]?.[0] || 'Adjusted');
 
     const cleanVariants = editVariants
       .filter(v => v.label.trim() !== '')
@@ -422,17 +415,26 @@ export default function Inventory({
       recipe: sanitizeRecipe(editRecipe),
     };
 
-    // Wait for the server's answer. This fires on every restock and every price
-    // change, and it used to close the editor and say "Updated Rice" before the
-    // write had even been attempted — so a refusal snapped the number back with
-    // a green tick already shown.
+    // The stock toast and the "why did stock move" journal used to fire here,
+    // BEFORE the write: a green "Added 50 units!" plus a permanent journal entry
+    // for a movement the server then refused.
     const saved = await onUpdateProduct(updated);
     if (saved === false) return;
+        triggerToast(`Set stock to ${finalStock}`, 'success');
+        triggerToast(`Added ${stockAdjustment} units!`, 'success');
+        triggerToast(`Removed ${stockAdjustment} units`, 'info');
+      logAdjustment({
+        ts: new Date().toISOString(), productId: editingProduct.id, name: nameTrimmed,
+        type: adjustmentType, qty: movedQty, reason,
+      });
+
     // Close the loop: arriving stock cost money, so log it as a Stock
     // Purchase in the same save. Empty = free transfer, no expense.
     const paidNum = parseFloat(stockPaid) || 0;
     if (receivedQty > 0 && paidNum > 0 && onAddExpense) {
-      onAddExpense({
+      // Awaited. The stock lands either way; if the expense is refused the
+      // money is NOT in Spend, and saying it is makes profit read too high.
+      const purchaseWritten = onAddExpense({
         id: `exp-${Date.now()}`,
         timestamp: new Date().toISOString(),
         description: `Restock: ${nameTrimmed} ×${receivedQty}`,
@@ -443,10 +445,18 @@ export default function Inventory({
         linkedProductId: editingProduct.id,
         linkedProductName: nameTrimmed,
       });
-      triggerToast(`Stock + ${formatCurrency(paidNum)} purchase logged`, 'success');
+      // One toast, and it is true either way: the stock is saved, and either
+      // the purchase is in Spend or she is told it is not.
+      const purchaseOk = (await purchaseWritten) !== false;
+      if (purchaseOk) {
+        triggerToast(`Updated ${nameTrimmed} · stock + ${formatCurrency(paidNum)} purchase logged`, 'success');
+      } else {
+        triggerToast(`Stock saved, but the ${formatCurrency(paidNum)} purchase was refused — log it in Spend`, 'error');
+      }
+    } else {
+      triggerToast(`Updated ${nameTrimmed}`, 'success');
     }
     setEditingProduct(null);
-    triggerToast(`Updated ${nameTrimmed}`, 'success');
   };
 
   const addNewVariant = () => {
@@ -695,22 +705,30 @@ export default function Inventory({
     triggerToast(ok ? 'Template downloaded — fill it in Excel, save as CSV' : 'Download failed on this device', ok ? 'success' : 'error');
   };
 
-  const confirmImport = () => {
+  // Awaited, and the preview is kept when anything is refused. The toast used to
+  // say "check prices before selling" — so they would sell against a shelf the
+  // server had never been told about.
+  const confirmImport = async () => {
     if (freshImportRows.length === 0) { triggerToast('Nothing new to import', 'info'); return; }
     const now = Date.now();
     const seenCats = new Set(categories);
-    freshImportRows.forEach((r, idx) => {
-      if (r.category && !seenCats.has(r.category)) { seenCats.add(r.category); onAddCategory(r.category); }
-      onAddProduct({
-        id: `p-${now}-${idx}`, name: r.name, category: r.category,
-        cost: r.cost, price: r.price,
-        // Kitchen snacks start at zero — the batch arrives via Morning Production.
-        stockQty: r.category === 'Eatery' ? 0 : r.stockQty,
-        lowStockThreshold: r.lowStockThreshold,
-        barcode: r.barcode || undefined,
-        expiryDate: r.expiryDate,
-      });
-    });
+    for (const r of freshImportRows) {
+      if (r.category && !seenCats.has(r.category)) { seenCats.add(r.category); await onAddCategory(r.category); }
+    }
+    const answers = await Promise.all(freshImportRows.map((r, idx) => onAddProduct({
+      id: `p-${now}-${idx}`, name: r.name, category: r.category,
+      cost: r.cost, price: r.price,
+      // Kitchen snacks start at zero — the batch arrives via Morning Production.
+      stockQty: r.category === 'Eatery' ? 0 : r.stockQty,
+      lowStockThreshold: r.lowStockThreshold,
+      barcode: r.barcode || undefined,
+      expiryDate: r.expiryDate,
+    })));
+    const refused = answers.filter(a => a === false).length;
+    if (refused > 0) {
+      triggerToast(`${refused} of ${freshImportRows.length} were not saved — the list is still here`, 'error');
+      return;
+    }
     setShowImport(false);
     setImportResult(null);
     setImportFileName('');
@@ -979,17 +997,26 @@ export default function Inventory({
                 </div>
               ))}
             </div>
-            <button onClick={() => {
+            <button onClick={async () => {
               const rows = bulkRows.filter(r => r.name.trim() && (parseFloat(r.price) || 0) > 0);
               if (rows.length === 0) { triggerToast('Add at least one name + price', 'error'); return; }
               const now = Date.now();
-              rows.forEach((r, idx) => onAddProduct({
+              // Awaited, and the typed list SURVIVES a refusal. This used to
+              // slam the panel shut and say "12 products added" while the server
+              // had taken none of them — so a bale-day list had to be retyped
+              // from memory.
+              const answers = await Promise.all(rows.map((r, idx) => onAddProduct({
                 id: `p-${now}-${idx}`, name: r.name.trim(),
                 category: bulkCategory || categories[0] || 'General',
                 cost: 0, price: parseFloat(r.price) || 0,
                 // Kitchen snacks start at zero — the batch arrives via Morning Production.
                 stockQty: (bulkCategory || categories[0] || '') === 'Eatery' ? 0 : 1, lowStockThreshold: 1,
-              }));
+              })));
+              const refused = answers.filter(a => a === false).length;
+              if (refused > 0) {
+                triggerToast(`${refused} of ${rows.length} were not saved — your list is still here`, 'error');
+                return;
+              }
               setShowBulk(false);
               triggerToast(`${rows.length} products added — open each later for details`, 'success');
             }} className="w-full h-12 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl">

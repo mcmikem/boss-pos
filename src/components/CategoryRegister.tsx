@@ -418,7 +418,10 @@ export default function CategoryRegister({
         return;
       }
     }
-    await onAddWastage({
+    // Awaited: the "→ tomorrow's opening" claim used to be printed for a write
+    // the server refused, and carryAll then computed tomorrow's opening stock
+    // from a number the books never had.
+    const added = await onAddWastage({
       id: `wl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date: balanceDate,
       item: row.product.name,
@@ -429,7 +432,12 @@ export default function CategoryRegister({
       lossAmount: Math.round(qty * (row.product.cost || 0)),
       reason: 'remaining',
     });
+    if (added === false) {
+      triggerToast(`${qty} × ${row.product.name} was not carried over`, 'error');
+      return false;
+    }
     triggerToast(`${qty} × ${row.product.name} → tomorrow's opening`, 'success');
+    return true;
   };
   const carryAll = async () => {
     const rows = balanceRows.filter(r => r.recon > 0);
@@ -437,7 +445,13 @@ export default function CategoryRegister({
     if (!(await confirmDialog({ title: 'Carry tray', message: `Confirm tray counts for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? They auto-carry anyway.`, confirmLabel: 'Carry' }))) return;
     setCarrying(true);
     try {
-      for (const row of rows) await carryRow(row);
+      let carried = 0;
+      for (const row of rows) { if (await carryRow(row)) carried += 1; }
+      // "Carried 9" when 12 were confirmed is how tomorrow's stock goes wrong
+      // without anyone noticing.
+      if (carried < rows.length) {
+        triggerToast(`Carried ${carried} of ${rows.length} tray counts — the rest were refused`, 'error');
+      }
     } finally {
       setCarrying(false);
     }

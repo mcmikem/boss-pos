@@ -1,4 +1,4 @@
-import type { Sale } from '../types';
+import type { Sale, SaleSaveResult } from '../types';
 import { nextOrderNumber } from '../api';
 
 // ---- Split-tender legs ----
@@ -32,7 +32,7 @@ export function customerWhatsAppUrl(phone: string, message: string): string | nu
 }
 
 export interface ServiceSaleInput {
-  onAddSale: (sale: Sale) => void;
+  onAddSale: (sale: Sale) => void | SaleSaveResult | Promise<void | SaleSaveResult>;
   staffName?: string;
   tillBranch?: string;
   /** Synthetic catalog id, e.g. 'tailor-service' — lands in Reports as Other. */
@@ -50,12 +50,17 @@ export interface ServiceSaleInput {
 // One service money movement = one real sale row (deposit at intake, balance
 // at handover). Unpaid handovers ring as Credit/Book so collection survives
 // in Outstanding Credits. Items persist as JSON, so no server change needed.
-export async function ringServiceSale(input: ServiceSaleInput): Promise<void> {
+export async function ringServiceSale(input: ServiceSaleInput): Promise<SaleSaveResult | void> {
   const amount = Math.round(input.amount);
   if (amount <= 0) return;
   let orderNumber = await nextOrderNumber();
   if (!orderNumber) orderNumber = `Service #${Date.now().toString().slice(-6)}`;
-  input.onAddSale({
+  // Awaited, checked, and it THROWS on a refusal. A deposit that was refused
+  // used to be announced as "rung" and the order still marked done — the
+  // customer's money handed over, the goods gone, and the books never had it.
+  // Throwing means every caller already inside a try/catch is protected without
+  // touching it, and the sale handler has already said why it was refused.
+  const written = await input.onAddSale({
     id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     orderNumber,
     timestamp: new Date().toISOString(),
@@ -76,4 +81,8 @@ export async function ringServiceSale(input: ServiceSaleInput): Promise<void> {
     staffName: input.staffName?.trim() || undefined,
     branch: input.tillBranch || undefined,
   });
+  if (written && typeof written === 'object' && written.status === 'failed') {
+    throw new Error(written.error || 'That payment was not recorded');
+  }
+  return written;
 }

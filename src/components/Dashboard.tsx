@@ -34,7 +34,7 @@ interface DashboardProps {
   onRefundSale: (saleId: string) => void;
   onReturnItems?: (saleId: string, returns: { productId: string; variantId?: string; qty: number }[]) => void;
   settings: StoreSettings;
-  onAddExpense: (expense: Expense) => void;
+  onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
   expenseCategories: string[];
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   momoTransfers?: MomoTransfer[];
@@ -166,18 +166,21 @@ export default function Dashboard({
       .slice(0, 5);
   }, [todaySales, products]);
 
-  const handleQuickExpense = (e: FormEvent) => {
+  // Only clear the box once the server has it. It used to empty on the same
+  // tick it was submitted, so a refusal left her retyping a number from memory.
+  const handleQuickExpense = async (e: FormEvent) => {
     e.preventDefault();
     if (!quickExpenseDesc.trim()) { return; }
     const amt = parseFloat(quickExpenseAmt) || 0;
     if (amt <= 0) { return; }
-    onAddExpense({
+    const written = await onAddExpense({
       id: `exp-${Date.now()}`,
       timestamp: new Date().toISOString(),
       description: quickExpenseDesc,
       amount: amt,
       category: quickExpenseCat,
     });
+    if (written === false) return;
     setQuickExpenseDesc('');
     setQuickExpenseAmt('');
     setShowQuickExpense(false);

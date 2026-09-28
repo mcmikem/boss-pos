@@ -32,8 +32,8 @@ interface AnalyticsProps {
   supplierPrices?: SupplierPrice[];
   creditPayments: CreditPayment[];
   expenseCategories: string[];
-  onAddExpense: (expense: Expense) => void;
-  onDeleteExpense: (expenseId: string) => void;
+  onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
+  onDeleteExpense: (expenseId: string) => void | boolean | Promise<void | boolean>;
   onAddExpenseCategory: (name: string) => void;
   onUpdateExpenseCategory: (oldName: string, newName: string) => void;
   onDeleteExpenseCategory: (name: string) => void;
@@ -41,15 +41,15 @@ interface AnalyticsProps {
   // as saved behind a closing modal.
   onAddSupplier: (supplier: Supplier) => void | boolean | Promise<void | boolean>;
   onUpdateSupplier: (supplier: Supplier) => void | boolean | Promise<void | boolean>;
-  onUpdateProduct: (product: Product) => void;
-  onDeleteSupplier: (supplierId: string) => void;
+  onUpdateProduct: (product: Product) => void | boolean | Promise<void | boolean>;
+  onDeleteSupplier: (supplierId: string) => void | boolean | Promise<void | boolean>;
   onPayCredit: (saleId: string, amount: number) => void;
   creditEats?: CreditEat[];
-  onPayCreditEat?: (id: string, amount: number) => void;
+  onPayCreditEat?: (id: string, amount: number) => void | boolean | Promise<void | boolean>;
   momoTransfers?: MomoTransfer[];
   customers?: CustomerProfile[];
-  onSaveCustomer?: (c: CustomerProfile) => void;
-  onDeleteCustomer?: (id: string) => void;
+  onSaveCustomer?: (c: CustomerProfile) => void | boolean | Promise<void | boolean>;
+  onDeleteCustomer?: (id: string) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   showSuppliers: boolean;
@@ -153,13 +153,22 @@ export default function Analytics({
     return Array.from(new Set([...fromSettings, ...fromSales]));
   }, [settings.branches, sales]);
   const supplierRecipeSync = useMemo(() => applySupplierPricesToRecipes(products, supplierPrices), [products, supplierPrices]);
-  const applySupplierPrices = () => {
-    if (supplierRecipeSync.changedProducts.length === 0) {
+  const applySupplierPrices = async () => {
+    const changed = supplierRecipeSync.changedProducts;
+    if (changed.length === 0) {
       triggerToast('Supplier prices are already in sync with recipes', 'info');
       return;
     }
-    supplierRecipeSync.changedProducts.forEach(product => onUpdateProduct(product));
+    // Awaited, and the count is of what landed. The twin of this in Inventory
+    // was fixed; this one still floated every write and then claimed success,
+    // which left tomorrow's recipe costs quietly wrong.
+    const answers = await Promise.all(changed.map(product => onUpdateProduct(product)));
+    const refused = answers.filter(a => a === false).length;
     const recipeCount = supplierRecipeSync.changedRecipes;
+    if (refused > 0) {
+      triggerToast(`${refused} of ${changed.length} price changes were not saved`, 'error');
+      return;
+    }
     triggerToast(`Supplier prices applied to ${recipeCount} recipe${recipeCount === 1 ? '' : 's'}`, 'success');
   };
   useEffect(() => {
@@ -751,7 +760,15 @@ const colorsMap: { [key: string]: string } = {
                     <p className="text-[10px] font-bold text-rose-400 text-center uppercase">Delete "{sup.name}"?</p>
                     <div className="flex gap-2">
                       <button onClick={() => setConfirmDeleteSupplier(null)} className="flex-1 h-8 border border-zinc-800 text-zinc-400 font-bold text-[10px] rounded-lg">Cancel</button>
-                      <button onClick={() => { onDeleteSupplier(sup.id); setConfirmDeleteSupplier(null); triggerToast(`Deleted "${sup.name}"`, 'info'); }}
+                      <button onClick={async () => {
+                        // Removing a supplier also clears their price from every
+                        // product, so "Deleted" used to be announced before the
+                        // server agreed — and the next restock order would be
+                        // built from prices the till had already forgotten.
+                        if ((await onDeleteSupplier(sup.id)) === false) return;
+                        setConfirmDeleteSupplier(null);
+                        triggerToast(`Deleted "${sup.name}"`, 'info');
+                      }}
                         className="flex-1 h-8 bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] rounded-lg uppercase">Delete</button>
                     </div>
                   </div>
@@ -1343,11 +1360,14 @@ const colorsMap: { [key: string]: string } = {
                     <p className="text-sm font-black text-rose-400 font-display">-{formatCurrency(exp.amount)}</p>
                     <span
                       role="button" tabIndex={0} aria-label={deleteExpConfirm === exp.id ? 'Tap again to confirm delete' : 'Delete expense'}
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
                         if (deleteExpConfirm !== exp.id) { setDeleteExpConfirm(exp.id); return; }
                         setDeleteExpConfirm(null);
-                        onDeleteExpense(exp.id); triggerToast(`Deleted expense`, 'info');
+                        // Wait for the server: the money row in the manager's
+                        // own report said "Deleted" before the ask.
+                        if ((await onDeleteExpense(exp.id)) === false) return;
+                        triggerToast('Deleted expense', 'info');
                       }}
                       onKeyDown={(e) => {
                         if (e.key !== 'Enter') return;

@@ -3,13 +3,14 @@ import { copyText } from '../utils/copy';
 import { Users, Plus, X, Star, Bell, BellOff, MessageCircle, Trash2, Check, UserPlus, Copy } from 'lucide-react';
 import type { Sale, Product } from '../types';
 import { statsFor, customerWhatsAppUrl, type CustomerProfile } from '../utils/customers';
+import { confirmDialog } from './Dialog';
 
 interface CustomersProps {
   sales: Sale[];
   products: Product[];
   customers: CustomerProfile[];
   onSaveCustomer: (c: CustomerProfile) => void | boolean | Promise<void | boolean>;
-  onDeleteCustomer: (id: string) => void;
+  onDeleteCustomer: (id: string) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   onClose: () => void;
@@ -88,8 +89,19 @@ export default function Customers({ sales, products, customers, onSaveCustomer, 
     }
   };
 
-  const removeProfile = (id: string) => {
-    onDeleteCustomer(id);
+  // One tap on a trash icon used to delete a regular's name, phone, tags and
+  // standing discount. It is not undoable, so it asks first, and it waits for
+  // the server before closing the editor.
+  const removeProfile = async (id: string) => {
+    const person = list.find(c => c.id === id);
+    const ok = await confirmDialog({
+      title: `Remove ${person?.name || 'this regular'}?`,
+      message: 'Their name, phone, notes and any discount stop applying. Their past sales keep the name, so reports do not change. This cannot be undone.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    if ((await onDeleteCustomer(id)) === false) return;
     setEditing(null);
     triggerToast('Profile removed — past sales keep the name', 'info');
   };

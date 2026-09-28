@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Scissors, Plus, Calendar, X, Search, User, Ruler, DollarSign, ChevronRight, RotateCcw } from 'lucide-react';
 import Sheet from './Sheet';
 import SettleSheet from './SettleSheet';
-import type { TailoringOrder, TailoringMaterial, Sale } from '../types';
+import type { TailoringOrder, TailoringMaterial, Sale, SaleSaveResult } from '../types';
 import { tailoringOrderApi } from '../api';
 import { ringServiceSale, customerWhatsAppUrl } from '../utils/serviceSale';
 import { pushNotice, dayKeyOf } from '../utils/notifications';
@@ -35,7 +35,7 @@ interface TailoringOrdersProps {
   // Money trail: deposits ring as cash sales at creation, the handover
   // balance rings (cash/MoMo) or books (credit) at delivery. Without these,
   // tailoring cash never reaches Reports or the drawer.
-  onAddSale?: (sale: Sale) => void;
+  onAddSale?: (sale: Sale) => void | SaleSaveResult | Promise<void | SaleSaveResult>;
   staffName?: string;
   tillBranch?: string;
   formatCurrency?: (val: number) => string;
@@ -212,8 +212,11 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
 
   // One tailoring money movement = one real sale row (deposit at creation,
   // balance at handover). Unpaid handover = Credit/Book so collection survives.
-  async function ringTailoringSale(order: TailoringOrder, amount: number, method: Sale['paymentMethod']) {
-    if (!onAddSale) return;
+  /** True when the money was actually recorded. ringServiceSale throws on a
+   *  refusal, so a false here is only the "no sale handler" case — but either
+   *  way the caller must not mark a kaftan delivered. */
+  async function ringTailoringSale(order: TailoringOrder, amount: number, method: Sale['paymentMethod']): Promise<boolean> {
+    if (!onAddSale) return false;
     await ringServiceSale({
       onAddSale, staffName, tillBranch,
       productId: 'tailor-service',
@@ -222,6 +225,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       customerName: order.customerName,
       unitCost: tailorMaterialsCost(order),
     });
+    return true;
   }
 
   async function advanceStatus(order: TailoringOrder) {
@@ -252,7 +256,18 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
     const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
     setSettleId(null);
     if (balance > 0) {
-      await ringTailoringSale(order, balance, method);
+      // A refused handover must not mark the kaftan delivered: the work is gone
+      // and the books never saw the money.
+      try {
+        const rung = await ringTailoringSale(order, balance, method);
+        if (!rung) {
+          triggerToast('The balance was not recorded, so the order stays open', 'error');
+          return;
+        }
+      } catch {
+        triggerToast('The balance was not recorded, so the order stays open', 'error');
+        return;
+      }
       triggerToast(
         method === 'Credit / Book'
           ? `${fmt(balance)} booked as credit — collect from ${order.customerName}`

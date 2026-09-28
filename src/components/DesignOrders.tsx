@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Palette, Plus, Calendar, X, Search, User, Layers, Ruler, Calculator, ChevronRight, RotateCcw, Printer, MessageCircle, FileText } from 'lucide-react';
 import SettleSheet from './SettleSheet';
-import type { DesignOrder, Sale } from '../types';
+import type { DesignOrder, Sale, SaleSaveResult } from '../types';
 import { designOrderApi } from '../api';
 import { ringServiceSale } from '../utils/serviceSale';
 import { localDayKey, todayLocalKey } from '../utils/dates';
@@ -46,7 +46,7 @@ const RATE_PRESETS = [13000, 25000, 45000];
 interface DesignOrdersProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
   shopName?: string;
-  onAddSale?: (sale: Sale) => void;
+  onAddSale?: (sale: Sale) => void | SaleSaveResult | Promise<void | SaleSaveResult>;
   staffName?: string;
   tillBranch?: string;
   formatCurrency?: (val: number) => string;
@@ -253,15 +253,20 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
         setOrders(prev => prev.map(o => o.id === editId ? updated : o));
         const topUp = Math.round((order.depositPaid || 0) - (existing?.depositPaid || 0));
         if (topUp > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'design-service',
-            label: `Design: ${updated.designBrief}`,
-            amount: topUp, method: 'Cash',
-            customerName: updated.customerName,
-            unitCost: (updated.materialCost || 0) + (updated.laborCost || 0) + (updated.transportCost || 0),
-            note: DESIGN_SALE_TAG(updated.id),
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'design-service',
+              label: `Design: ${updated.designBrief}`,
+              amount: topUp, method: 'Cash',
+              customerName: updated.customerName,
+              unitCost: (updated.materialCost || 0) + (updated.laborCost || 0) + (updated.transportCost || 0),
+              note: DESIGN_SALE_TAG(updated.id),
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Top-up ${fmtMoney(topUp)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Order updated', 'success');
@@ -270,15 +275,20 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
         const created = await designOrderApi.create(order);
         setOrders(prev => [created, ...prev]);
         if (created.depositPaid > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'design-service',
-            label: `Design: ${created.designBrief}`,
-            amount: created.depositPaid, method: 'Cash',
-            customerName: created.customerName,
-            unitCost: (created.materialCost || 0) + (created.laborCost || 0) + (created.transportCost || 0),
-            note: DESIGN_SALE_TAG(created.id),
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'design-service',
+              label: `Design: ${created.designBrief}`,
+              amount: created.depositPaid, method: 'Cash',
+              customerName: created.customerName,
+              unitCost: (created.materialCost || 0) + (created.laborCost || 0) + (created.transportCost || 0),
+              note: DESIGN_SALE_TAG(created.id),
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Deposit ${fmtMoney(created.depositPaid)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Order created', 'success');
@@ -292,15 +302,20 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
     const balance = Math.round(order.totalAmount - (order.depositPaid || 0));
     setSettleId(null);
     if (balance > 0 && onAddSale) {
-      await ringServiceSale({
-        onAddSale, staffName, tillBranch,
-        productId: 'design-service',
-        label: `Design: ${order.designBrief}`,
-        amount: balance, method,
-        customerName: order.customerName,
-        unitCost: Math.max(0, (order.materialCost || 0) + (order.laborCost || 0) + (order.transportCost || 0) - (order.depositPaid || 0)),
-        note: DESIGN_SALE_TAG(order.id),
-      });
+      try {
+        await ringServiceSale({
+          onAddSale, staffName, tillBranch,
+          productId: 'design-service',
+          label: `Design: ${order.designBrief}`,
+          amount: balance, method,
+          customerName: order.customerName,
+          unitCost: Math.max(0, (order.materialCost || 0) + (order.laborCost || 0) + (order.transportCost || 0) - (order.depositPaid || 0)),
+          note: DESIGN_SALE_TAG(order.id),
+        });
+      } catch {
+        triggerToast('The balance was not recorded, so the job is still open', 'error');
+        return;
+      }
       triggerToast(
         method === 'Credit / Book'
           ? `${fmtMoney(balance)} booked as credit — collect from ${order.customerName}`

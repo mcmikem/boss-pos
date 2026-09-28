@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = file => readFileSync(resolve(root, file), 'utf8');
@@ -1150,4 +1151,86 @@ test('no write statement hides a multi-column CTE inside a scalar subquery', () 
   assert.match(api, /const afterApproval = await sql`SELECT \* FROM expenses WHERE id=\$\{req\.params\.id\}`;/);
   // And no statement may select a whole CTE where one column was meant.
   assert.equal(/\(SELECT \* FROM (ins|updated|payment|session|expense|paid|prod|event|target|state)\) AS/.test(api), false);
+});
+
+test('no sql template interpolates a name the file does not declare', () => {
+  // In sql`... ${x} ...` the interpolation is JAVASCRIPT. Writing SQL inside one
+  // — `${status === 'submitted' ? at : e.submitted_at}` — makes the engine
+  // evaluate `e.submitted_at` as an identifier, and every request through that
+  // handler dies with a ReferenceError that the global handler reports as a 500.
+  // Three endpoints were broken this way and no type check or unit test saw it.
+  const out = execFileSync(process.execPath, ['scripts/check-sql-interpolations.mjs', 'api/index.js'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.match(out, /PASS/);
+});
+
+test('no screen claims a save the server refused', () => {
+  // The recurring shape: a write prop called without await, then a success
+  // toast. It was true of 14 sites at once because the prop types were `void`,
+  // so TypeScript could not see the discarded promise at all.
+  const offenders = [];
+  const files = [
+    'src/components/Inventory.tsx', 'src/components/Analytics.tsx',
+    'src/components/Dashboard.tsx', 'src/components/Expenses.tsx',
+    'src/components/Customers.tsx', 'src/components/CategoryRegister.tsx',
+  ];
+  for (const f of files) {
+    const lines = read(f).split('\n');
+    lines.forEach((line, i) => {
+      if (!/triggerToast\(.*'success'\)/.test(line)) return;
+      // look back four lines for a write that was never awaited
+      const before = lines.slice(Math.max(0, i - 4), i + 1).join('\n');
+      const writes = before.match(/\b(on(Add|Update|Delete|Upsert|Save)\w*|onAddWastage|onDeleteWastage|onDeleteExpense|onDeleteCustomer|onDeleteProduct|onUpsertQuote)\s*\(/g) || [];
+      if (!writes.length) return;
+      if (before.includes('await ') || /=== false\)/.test(before)) return;
+      offenders.push(`${f}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(offenders, [], `success toast near an un-awaited write: ${offenders.join(', ')}`);
+
+  // And the write props that hide the promise must stay widened. A `void`
+  // return type is right for a navigation callback and wrong for a save: it
+  // makes TypeScript blind to the discarded promise, which is how fourteen
+  // un-awaited writes compiled in the first place.
+  const WRITE_PROPS = [
+    'onAddProduct', 'onUpdateProduct', 'onDeleteProduct', 'onAddExpense', 'onDeleteExpense',
+    'onUpsertQuote', 'onDeleteQuote', 'onDeleteSupplier', 'onDeleteCustomer', 'onSaveCustomer',
+    'onAddWastage', 'onDeleteWastage', 'onAddProduction', 'onDeleteProduction',
+    'onPayCreditEat', 'onAddSale',
+    // onDeleteCategory is deliberately absent: App's handleDeleteCategory makes
+    // no server call at all (it re-files products locally), so `void` is the
+    // honest type there. That local-only behaviour is a known limitation, not a
+    // swallowed refusal.
+  ];
+  const all = readdirSync(resolve(root, 'src/components'))
+    .filter(f => f.endsWith('.tsx'))
+    .map(f => `src/components/${f}`)
+    .concat(['src/App.tsx']);
+  for (const f of all) {
+    const src = read(f);
+    for (const m of src.matchAll(/\bon(?:Add|Update|Delete|Upsert|Save|Pay)[A-Za-z]*\??\s*:\s*\([^)]*\)\s*=>\s*void;/g)) {
+      const name = m[0].match(/on[A-Za-z]+/)[0];
+      if (!WRITE_PROPS.includes(name)) continue;
+      assert.fail(`${f} declares ${name} as returning void — widen it or the next save is invisible`);
+    }
+  }
+});
+
+test('a service deposit is never announced when the sale was refused', () => {
+  const service = read('src/utils/serviceSale.ts');
+  const bookings = read('src/components/Bookings.tsx');
+  const tailor = read('src/components/TailoringOrders.tsx');
+  // A deposit handed over, refused by the server, and then reported as "rung"
+  // with the order marked delivered. ringServiceSale now throws, and every
+  // handover path catches it and leaves the job open.
+  assert.match(service, /written && typeof written === 'object' && written\.status === 'failed'/);
+  assert.match(service, /throw new Error\(written\.error/);
+  assert.match(bookings, /The balance was not recorded, so the job is still open/);
+  assert.match(tailor, /The balance was not recorded, so the order stays open/);
+  assert.match(tailor, /const rung = await ringTailoringSale/);
+  // Refund-then-re-ring: a refused re-ring leaves the customer with the goods
+  // AND their money back.
+  assert.match(read('src/App.tsx'), /Returned \$\{label\}, but the balance sale was refused/);
 });

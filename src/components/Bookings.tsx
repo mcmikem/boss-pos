@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { CalendarCheck, Plus, X, Search, ChevronRight, RotateCcw } from 'lucide-react';
 import SettleSheet from './SettleSheet';
-import type { Booking, Sale } from '../types';
+import type { Booking, Sale, SaleSaveResult } from '../types';
 import { bookingApi } from '../api';
 import { ringServiceSale } from '../utils/serviceSale';
 import { todayLocalKey } from '../utils/dates';
@@ -15,7 +15,7 @@ const STATUS_CFG: Record<string, { label: string; color: string; bg: string; dot
 
 interface BookingsProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
-  onAddSale?: (sale: Sale) => void;
+  onAddSale?: (sale: Sale) => void | SaleSaveResult | Promise<void | SaleSaveResult>;
   staffName?: string;
   tillBranch?: string;
   formatCurrency?: (val: number) => string;
@@ -135,13 +135,18 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
         setBookings(prev => prev.map(b => b.id === editId ? updated : b));
         const topUp = Math.round((booking.deposit || 0) - (existing?.deposit || 0));
         if (topUp > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'booking-service',
-            label: `Booking: ${updated.service}`,
-            amount: topUp, method: 'Cash',
-            customerName: updated.customerName,
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'booking-service',
+              label: `Booking: ${updated.service}`,
+              amount: topUp, method: 'Cash',
+              customerName: updated.customerName,
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Top-up ${fmt(topUp)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Booking updated', 'success');
@@ -150,13 +155,18 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
         const created = await bookingApi.create(booking);
         setBookings(prev => [created, ...prev]);
         if (created.deposit > 0 && onAddSale) {
-          await ringServiceSale({
-            onAddSale, staffName, tillBranch,
-            productId: 'booking-service',
-            label: `Booking: ${created.service}`,
-            amount: created.deposit, method: 'Cash',
-            customerName: created.customerName,
-          });
+          try {
+            await ringServiceSale({
+              onAddSale, staffName, tillBranch,
+              productId: 'booking-service',
+              label: `Booking: ${created.service}`,
+              amount: created.deposit, method: 'Cash',
+              customerName: created.customerName,
+            });
+              } catch {
+            triggerToast('The balance was not recorded, so the job is still open', 'error');
+            return;
+          }
           triggerToast(`Deposit ${fmt(created.deposit)} rung as a cash sale`, 'success');
         } else {
           triggerToast('Booking added', 'success');
@@ -183,13 +193,18 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
     const balance = Math.max(0, Math.round(b.price - (b.deposit || 0)));
     setSettleId(null);
     if (balance > 0 && onAddSale) {
-      await ringServiceSale({
-        onAddSale, staffName, tillBranch,
-        productId: 'booking-service',
-        label: `Booking: ${b.service}`,
-        amount: balance, method,
-        customerName: b.customerName,
-      });
+      try {
+        await ringServiceSale({
+          onAddSale, staffName, tillBranch,
+          productId: 'booking-service',
+          label: `Booking: ${b.service}`,
+          amount: balance, method,
+          customerName: b.customerName,
+        });
+      } catch {
+        triggerToast('The balance was not recorded, so the job is still open', 'error');
+        return;
+      }
       triggerToast(
         method === 'Credit / Book'
           ? `${fmt(balance)} booked as credit — collect from ${b.customerName}`

@@ -2329,7 +2329,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       staffName: activeStaff?.name || staffName?.trim() || sale.staffName,
       branch: sale.branch,
     };
-    await handleAddSale(balance);
+    // The refund above already returned the money and restocked the items. If
+    // this re-ring is refused the customer keeps the goods AND their money, and
+    // the day is short the full sale — so say exactly that, and do not claim
+    // the balance was rung.
+    const reRinged = await handleAddSale(balance);
+    if (reRinged && reRinged.status === 'failed') {
+      triggerToast(`Returned ${label}, but the balance sale was refused — ring it again`, 'error');
+      return;
+    }
     triggerToast(`Returned ${label} — balance re-rung`, 'success');
   };
 
@@ -2608,18 +2616,19 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     }
   };
 
-  const handleDeleteSupplier = async (supplierId: string) => {
+  const handleDeleteSupplier = async (supplierId: string): Promise<boolean> => {
     const prev = suppliers.find(s => s.id === supplierId);
     const prevProducts = products;
     const prevQuotes = supplierPrices;
     setSuppliers(prev => prev.filter(s => s.id !== supplierId));
     setProducts(prev => prev.map(p => p.supplierId === supplierId ? { ...p, supplierId: undefined } : p));
     setSupplierPrices(prev => prev.filter(q => q.supplierId !== supplierId));
-    try { await supplierApi.remove(supplierId); } catch {
+    try { await supplierApi.remove(supplierId); return true; } catch {
       if (prev) setSuppliers(list => [...list, prev]);
       setProducts(prevProducts);
       setSupplierPrices(prevQuotes);
       triggerToast('Failed to delete supplier', 'error');
+      return false;
     }
   };
 

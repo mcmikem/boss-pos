@@ -3107,7 +3107,15 @@ async function handleExpenseApproval(req, res) {
     WITH target AS (
       SELECT * FROM expenses WHERE id=${req.params.id} FOR UPDATE
     ), updated AS (
-      UPDATE expenses e SET approval_status=${status}, submitted_at=${status === 'submitted' ? at : e.submitted_at}, submitted_by=${status === 'submitted' ? actor.id : e.submitted_by}, submitted_by_name=${status === 'submitted' ? actor.name : e.submitted_by_name}, approved_by=${status === 'approved' || status === 'rejected' ? actor.id : NULL}, approved_by_name=${status === 'approved' || status === 'rejected' ? actor.name : NULL}, approved_at=${status === 'approved' || status === 'rejected' ? at : NULL}, rejection_reason=${status === 'rejected' ? reason : NULL}, note=${reason || e.note}, updated_at=${at}
+      UPDATE expenses e SET approval_status=${status},
+        submitted_at=CASE WHEN ${status} = 'submitted' THEN ${at} ELSE e.submitted_at END,
+        submitted_by=CASE WHEN ${status} = 'submitted' THEN ${actor.id} ELSE e.submitted_by END,
+        submitted_by_name=CASE WHEN ${status} = 'submitted' THEN ${actor.name} ELSE e.submitted_by_name END,
+        approved_by=CASE WHEN ${status} IN ('approved','rejected') THEN ${actor.id} ELSE NULL END,
+        approved_by_name=CASE WHEN ${status} IN ('approved','rejected') THEN ${actor.name} ELSE NULL END,
+        approved_at=CASE WHEN ${status} IN ('approved','rejected') THEN ${at} ELSE NULL END,
+        rejection_reason=CASE WHEN ${status} = 'rejected' THEN ${reason} ELSE NULL END,
+        note=COALESCE(NULLIF(${reason}, ''), e.note), updated_at=${at}
       FROM target t WHERE e.id=t.id AND COALESCE(NULLIF(e.approval_status,''),'submitted')=${currentStatus} RETURNING e.*
     ), event AS (
       INSERT INTO expense_approval_events (id,expense_id,from_status,to_status,idempotency_key,actor_id,actor_name,actor_role,reason,created_at)
@@ -4246,7 +4254,15 @@ async function transitionSettlement(req, res, nextStatus) {
   if (transition.error) return res.status(409).json({ error: transition.error, code: transition.code, currentStatus: transition.currentStatus });
   if (transition.duplicate) return res.json({ ...mapSettlement(current), duplicate: true });
   const at = new Date().toISOString();
-  const result = await sql`UPDATE settlement_movements SET status=${nextStatus}, settled_at=${nextStatus === 'settled' ? at : settlement_movements.settled_at}, settled_by=${nextStatus === 'settled' ? actor.id : settlement_movements.settled_by}, settled_by_name=${nextStatus === 'settled' ? actor.name : settlement_movements.settled_by_name}, reconciled_at=${nextStatus === 'reconciled' ? at : settlement_movements.reconciled_at}, reconciled_by=${nextStatus === 'reconciled' ? actor.id : settlement_movements.reconciled_by}, reconciled_by_name=${nextStatus === 'reconciled' ? actor.name : settlement_movements.reconciled_by_name}, voided_at=${nextStatus === 'voided' ? at : settlement_movements.voided_at}, voided_by=${nextStatus === 'voided' ? actor.id : settlement_movements.voided_by}, voided_by_name=${nextStatus === 'voided' ? actor.name : settlement_movements.voided_by_name}, updated_at=${at}, metadata=${structuredMetadata({ requestId: req.id, actor, nextStatus })}
+  const result = await sql`UPDATE settlement_movements SET status=${nextStatus}, settled_at=CASE WHEN ${nextStatus} = 'settled' THEN ${at} ELSE settlement_movements.settled_at END,
+    settled_by=CASE WHEN ${nextStatus} = 'settled' THEN ${actor.id} ELSE settlement_movements.settled_by END,
+    settled_by_name=CASE WHEN ${nextStatus} = 'settled' THEN ${actor.name} ELSE settlement_movements.settled_by_name END,
+    reconciled_at=CASE WHEN ${nextStatus} = 'reconciled' THEN ${at} ELSE settlement_movements.reconciled_at END,
+    reconciled_by=CASE WHEN ${nextStatus} = 'reconciled' THEN ${actor.id} ELSE settlement_movements.reconciled_by END,
+    reconciled_by_name=CASE WHEN ${nextStatus} = 'reconciled' THEN ${actor.name} ELSE settlement_movements.reconciled_by_name END,
+    voided_at=CASE WHEN ${nextStatus} = 'voided' THEN ${at} ELSE settlement_movements.voided_at END,
+    voided_by=CASE WHEN ${nextStatus} = 'voided' THEN ${actor.id} ELSE settlement_movements.voided_by END,
+    voided_by_name=CASE WHEN ${nextStatus} = 'voided' THEN ${actor.name} ELSE settlement_movements.voided_by_name END, updated_at=${at}, metadata=${structuredMetadata({ requestId: req.id, actor, nextStatus })}
     WHERE id=${req.params.id} AND status=${current.status} RETURNING *`;
   if (!result.length) {
     const latest = await sql`SELECT * FROM settlement_movements WHERE id=${req.params.id}`;
@@ -4677,11 +4693,15 @@ async function handleCreditEatPayment(req, res) {
       RETURNING ce.*
     )
     SELECT (SELECT count(*)::int FROM payment) AS inserted, upd.*, payment.id AS payment_id, payment.saleid AS payment_saleid, payment.amount AS applied, payment.payment_method, payment.reference, payment.note, payment.collected_at, payment.collector_id, payment.collector_name, payment.collector_role, payment.client_write_id AS payment_cwid, payment.createdat AS payment_createdat FROM upd JOIN payment ON payment.id IS NOT NULL`;
-  const currentAfter = result.length && result[0].id ? result[0] : await sql`SELECT * FROM credit_eats WHERE id=${req.params.id}`;
+  // Always an ARRAY. This was `cond ? result[0] : await sql...`, so on the
+  // success path it was a bare row and `currentAfter[0]` was undefined — the
+  // collection had already been committed and the seller was told it had not
+  // been, which is the one answer this app must never get backwards.
+  const currentAfter = await sql`SELECT * FROM credit_eats WHERE id=${req.params.id}`;
   if (!currentAfter.length) return res.status(404).json({ error: 'Credit record not found', code: 'CREDIT_RECORD_NOT_FOUND' });
   if (result.length && Number(result[0].inserted) > 0) {
     await audit('credit.payment', `book:${req.params.id} ${amount}`, actor, { creditEatId: req.params.id, amount, branch: branch || target.branch, paymentMethod, reference: text(b.reference, 120), collectorId: manager ? requestedCollector || actor.id : actor.id }, req.id);
-    return res.json({ ...mapCreditEat(currentAfter[0]), payment: mapCreditPayment({ ...result[0], id: result[0].payment_id, saleid: result[0].payment_saleid || `book:${req.params.id}`, client_write_id: result[0].payment_cwid, createdat: result[0].payment_createdat }) });
+    return res.json({ ...mapCreditEat(currentAfter[0]), payment: mapCreditPayment({ ...result[0], id: result[0].payment_id, saleid: result[0].payment_saleid || `book:${req.params.id}`, amount: Number(result[0].applied || 0), client_write_id: result[0].payment_cwid, createdat: result[0].payment_createdat }) });
   }
   const existing = clientWriteId ? await sql`SELECT * FROM credit_payments WHERE client_write_id=${clientWriteId}` : [];
   if (existing.length) return res.json({ ...mapCreditEat(currentAfter[0]), duplicate: true, payment: mapCreditPayment(existing[0]) });
@@ -5213,7 +5233,10 @@ async function transitionMomoTransfer(req, res, nextStatus) {
   if (transition.error) return res.status(409).json({ error: transition.error, code: transition.code, currentStatus: transition.currentStatus });
   if (transition.duplicate) return res.json({ ...mapMomoTransfer(current), duplicate: true });
   const at = new Date().toISOString();
-  const updated = await sql`UPDATE momo_transfers SET status=${nextStatus}, settled_at=${nextStatus === 'settled' ? at : settled_at}, reconciled_at=${nextStatus === 'reconciled' ? at : reconciled_at}, reconciled_by=${nextStatus === 'reconciled' ? actor.id : reconciled_by}, reconciled_by_name=${nextStatus === 'reconciled' ? actor.name : reconciled_by_name}, updated_at=${at}, metadata=${structuredMetadata({ requestId: req.id, actor, nextStatus })} WHERE id=${req.params.id} AND status=${current.status || 'pending'} RETURNING *`;
+  const updated = await sql`UPDATE momo_transfers SET status=${nextStatus}, settled_at=CASE WHEN ${nextStatus} = 'settled' THEN ${at} ELSE settled_at END,
+    reconciled_at=CASE WHEN ${nextStatus} = 'reconciled' THEN ${at} ELSE reconciled_at END,
+    reconciled_by=CASE WHEN ${nextStatus} = 'reconciled' THEN ${actor.id} ELSE reconciled_by END,
+    reconciled_by_name=CASE WHEN ${nextStatus} = 'reconciled' THEN ${actor.name} ELSE reconciled_by_name END, updated_at=${at}, metadata=${structuredMetadata({ requestId: req.id, actor, nextStatus })} WHERE id=${req.params.id} AND status=${current.status || 'pending'} RETURNING *`;
   if (!updated.length) {
     const latest = await sql`SELECT * FROM momo_transfers WHERE id=${req.params.id}`;
     return res.json({ ...mapMomoTransfer(latest[0]), duplicate: true });
