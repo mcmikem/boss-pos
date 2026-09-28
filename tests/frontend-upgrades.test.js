@@ -263,22 +263,20 @@ test('one PIN per person: the lock screen asks whose PIN it is', () => {
   assert.match(app, /const handleVerifyStaff = [\s\S]{0,400}signInAsSeller\(/);
 });
 
-test('the rescue PIN never leaves a manager credential behind', () => {
-  const app = read('src/App.tsx');
-  // A till unlocked with the shop PIN says TILL on the chip, so the wire must
-  // not keep carrying the previous seller's manager token.
+test('the rescue PIN never leaves a usable credential behind', () => {
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // A till unlocked with the shop PIN keeps today's NAME (she proved it this
+  // morning) but never a token: money out, voids, refunds, prices, reports and
+  // settings all refuse a till token server-side.
   const tillOnly = app.match(/const unlockAsTillOnly = \(\)[\s\S]*?\n  \};/)?.[0] || '';
   assert.match(tillOnly, /setStaffToken\(null\)/);
-  assert.match(tillOnly, /setActiveStaffId\(null\)/);
-  assert.match(tillOnly, /localStorage\.removeItem\('boss_pos_staff_id'\)/);
+  assert.match(tillOnly, /sellerTodayOf\(\)/);
+  assert.equal(/setSellAsTillSession/.test(tillOnly), false);
   // Both rescue paths (offline fast path and server check) go through it.
   const unlock = app.match(/const handleUnlock = async \(pin: string\)[\s\S]*?\n  \};/)?.[0] || '';
-  // Both rescue paths go through it — and so does the new one: a phone that
-  // unlocks offline with no usable token left must NOT end up open.
   assert.ok((unlock.match(/unlockAsTillOnly\(\)/g) || []).length >= 2);
   assert.match(unlock, /if \(!minted\) \{\s*\n\s*unlockAsTillOnly\(\);\s*\n\s*setAuthState\('locked'\);/);
-  assert.match(unlock, /No connection to sign you in/);
-});
+  assert.match(unlock, /No connection to sign you in/);});
 
 test('no screen promises a PIN that cannot approve anything', () => {
   const app = read('src/App.tsx');
@@ -1109,14 +1107,47 @@ test('the till writes each PIN, and a dead credential never says "Unauthorized"'
   assert.match(main, /Nothing you sold today has been lost/);
 });
 
-test('the rescue door still asks who you are; only the choice skips it', () => {
+test('the PIN is asked once a day; the till PIN never carries authority', () => {
   const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
-  // unlockAsTillOnly is the rescue door. Setting the suppression flag inside
-  // it made a till-PIN unlock silently skip the name screen, landing the seller
-  // in the app with no name and no prompt. The flag belongs on the explicit
-  // choice only.
-  const tillOnly = app.match(/const unlockAsTillOnly = \(\) \{[\s\S]*?\n  \};/)?.[0] || '';
+  const gate = read('src/components/PinGate.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // The rescue door keeps today's NAME (she proved it this morning, and the
+  // sales after that are hers) but drops the CREDENTIAL — for everyone, not
+  // just managers. Money out, voids, refunds, prices, reports and settings all
+  // refuse a till token server-side; the manager-PIN challenge hands them back.
+  const tillOnly = app.match(/const unlockAsTillOnly = \(\)[\s\S]*?\n  \};/)?.[0] || '';
+  assert.match(tillOnly, /setStaffToken\(null\)/);
+  assert.match(tillOnly, /sellerTodayOf\(\)/);
+  assert.match(tillOnly, /setActiveStaffId\(todaysSeller\.id\)/);
+  assert.match(tillOnly, /localStorage\.setItem\('boss_pos_staff_id', todaysSeller\.id\)/);
   assert.equal(/setSellAsTillSession/.test(tillOnly), false);
-  assert.match(app, /onSellAsTill=\{\(\) => \{ unlockAsTillOnly\(\); setSellAsTillSession\(true\)/);
-  assert.match(app, /\{staffConfigured && !activeStaff && !sellAsTillSession && \(/);
+  // ...unless nobody signed in today, in which case there is no name to keep.
+  assert.match(tillOnly, /setActiveStaffId\(null\)/);
+  // Booting into yesterday's person is the same thing, so the day stamp rules.
+  assert.match(app, /today\?\.id === id \? id : null/);
+  // The explicit "sell as the till" choice is the only thing that clears all.
+  assert.match(app, /forgetSellerToday\(\);\s*\n\s*setSellerToday\(null\)/);
+  // And the lock screen says the model out loud.
+  assert.match(gate, /stickyName\?: string \| null/);
+  assert.match(gate, /Still \$\{stickyName\} — till PIN opens/);
+  assert.match(gate, /Manager powers need their own PIN, typed fresh/);
+});
+
+
+test('no write statement hides a multi-column CTE inside a scalar subquery', () => {
+  const api = read('api/index.js');
+  // Postgres reads (SELECT * FROM x) as a SCALAR subquery, so a CTE that
+  // returns more than one column rejects the whole statement with
+  // "subquery must return only one column". That silently killed five writes —
+  // production batches, credit payments, credit book lines, expense approvals,
+  // and closing the day — while their side effects (the ingredient expense, the
+  // audit row) still landed, so the shop saw the money and lost the work.
+  const offenders = api.match(/\(SELECT \* FROM [a-z_]+\) AS [a-z_]+/g) || [];
+  assert.deepEqual(offenders, [], `scalar subquery over a multi-column CTE: ${offenders.join(', ')}`);
+  // The five statements must still read their row back explicitly.
+  assert.match(api, /SELECT \(SELECT count\(\*\)::int FROM ins\) AS inserted, \(SELECT id FROM prod\) AS product_id/);
+  assert.match(api, /const savedPayment = await sql`SELECT \* FROM credit_payments WHERE id=\$\{id\}`;/);
+  assert.match(api, /const savedEat = await sql`SELECT \* FROM credit_eats WHERE id=\$\{id\}`;/);
+  assert.match(api, /const afterApproval = await sql`SELECT \* FROM expenses WHERE id=\$\{req\.params\.id\}`;/);
+  // And no statement may select a whole CTE where one column was meant.
+  assert.equal(/\(SELECT \* FROM (ins|updated|payment|session|expense|paid|prod|event|target|state)\) AS/.test(api), false);
 });

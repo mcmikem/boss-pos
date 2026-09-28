@@ -9,12 +9,15 @@ interface PinGateProps {
   // asks who instead of guessing, and no token is issued until they answer.
   candidates?: Array<{ id: string; name: string; role: 'manager' | 'cashier' }> | null;
   onPickPerson?: (id: string) => Promise<void>;
+  /** Who signed in with their own PIN today. The till PIN opens the device and
+   *  keeps selling under this name — it does not ask again. */
+  stickyName?: string | null;
 }
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30 * 1000;
 
-export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }: PinGateProps) {
+export default function PinGate({ onUnlock, shopName, candidates, onPickPerson, stickyName }: PinGateProps) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [attempts, setAttempts] = useState(0);
@@ -127,7 +130,9 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
         </>
       ) : (
         <>
-          <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2">Enter your PIN</p>
+          <p className="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2">
+            {stickyName ? `Still ${stickyName} — till PIN opens` : 'Enter your PIN'}
+          </p>
           {lockInfo.rapid && lockInfo.last ? (
             <p className="text-[11px] text-amber-300 font-bold mb-1 max-w-[260px] text-center">
               Till keeps locking (last: {lockInfo.last.reason}) — after unlock, check Settings → Security for the full history.
@@ -177,7 +182,9 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson }
       <input ref={inputRef} type="text" className="absolute opacity-0 pointer-events-none" readOnly tabIndex={-1} />
 
       <p className="text-[11px] text-zinc-600 font-bold mt-6 max-w-[260px] text-center leading-relaxed">
-        Your own PIN opens the till and signs you in at once. Forgot it? Ask your manager — PINs can be reset in Settings.
+        {stickyName
+          ? 'The till PIN opens and keeps selling under this name. Manager powers need their own PIN, typed fresh.'
+          : 'Your own PIN opens the till and signs you in at once. Forgot it? Ask your manager — PINs can be reset in Settings.'}
       </p>
     </div>
   );

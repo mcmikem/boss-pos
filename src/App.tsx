@@ -497,8 +497,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   useEffect(() => {
     try { localStorage.setItem('boss_pos_branch', tillBranch || ''); } catch {}
   }, [tillBranch]);
+  // The device remembers who signed in — but only for TODAY. A proven sign-in
+  // writes both the id and the day stamp; anything older than today is Monday's
+  // news and the till asks fresh. This is what makes "PIN once a day" true
+  // without letting yesterday's person sell all week.
   const [activeStaffId, setActiveStaffId] = useState<string | null>(() => {
-    try { return localStorage.getItem('boss_pos_staff_id'); } catch { return null; }
+    try {
+      const id = localStorage.getItem('boss_pos_staff_id');
+      const today = sellerTodayOf();
+      return id && today?.id === id ? id : null;
+    } catch { return null; }
   });
   const [showStaffSwitcher, setShowStaffSwitcher] = useState(false);
   const [staffVerifying, setStaffVerifying] = useState(false);
@@ -1576,14 +1584,26 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // staff CREDENTIAL goes too, not just the name: the wire must not keep
   // carrying a manager token while the chip says TILL. The till token minted by
   // the rescue unlock is what remains, and the app then asks who is selling.
+  // The till PIN opens the device; it never says who opened it. So the NAME
+  // stays (she signed in with her own PIN this morning, and every sale after
+  // that is hers), but the CREDENTIAL goes — not just for managers, for
+  // everyone. What leaves with the token is authority: money out, voids,
+  // refunds, price changes, reports and settings all refuse a till token, and
+  // the existing manager-PIN challenge is what hands them back. A stolen phone
+  // plus a known till PIN can ring sales under her name — visible in Reports,
+  // reversible by a manager — but it cannot touch money, and that is the line.
   const unlockAsTillOnly = () => {
-    setActiveStaffId(null);
+    const todaysSeller = sellerTodayOf();
+    if (todaysSeller?.id) {
+      setActiveStaffId(todaysSeller.id);
+      setStaffName(todaysSeller.name);
+      try { localStorage.setItem('boss_pos_staff_id', todaysSeller.id); } catch {}
+    } else {
+      setActiveStaffId(null);
+      try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
+      setStaffName('');
+    }
     setStaffToken(null);
-    try { localStorage.removeItem('boss_pos_staff_id'); } catch {}
-    setStaffName('');
-    // Kept, deliberately: a re-lock at noon should still offer this morning's
-    // seller in one tap. Forgetting happens at hand-over (signInAsSeller
-    // overwrites it) and at sign-out, where the shift has genuinely ended.
   };
 
   // The one place a person becomes signed in: their PIN opened the device, it
@@ -3474,6 +3494,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 
   if (authState === 'locked') {
     return <PinGate onUnlock={handleUnlock} shopName={settings.shopName}
+      stickyName={activeStaff?.name || staffName || sellerToday?.name || null}
       candidates={unlockCandidates} onPickPerson={handleUnlockPickPerson} />;
   }
 
@@ -3886,7 +3907,22 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           verifying={staffVerifying}
           error={staffVerifyError}
           onVerify={handleVerifyStaff}
-          onSellAsTill={() => { unlockAsTillOnly(); setSellAsTillSession(true); markUnlocked(); setAuthState('ready'); fetchAllData().catch(() => {}); }}
+          onSellAsTill={() => {
+            // The explicit choice to be nobody: unlike the rescue door above,
+            // this clears the name too, so nothing is attributed afterwards.
+            setActiveStaffId(null);
+            setStaffToken(null);
+            setStaffName('');
+            forgetSellerToday();
+            setSellerToday(null);
+            try {
+              localStorage.removeItem('boss_pos_staff_id');
+            } catch {}
+            setSellAsTillSession(true);
+            markUnlocked();
+            setAuthState('ready');
+            fetchAllData().catch(() => {});
+          }}
           onClose={() => {}}
         />
       )}

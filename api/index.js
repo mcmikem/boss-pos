@@ -2865,7 +2865,7 @@ const closeSessionCloseHandler = asHandler(async (req, res) => {
       SELECT ${`cse-${randomUUID()}`},updated.id,'closed',${clientWriteId},${actor.id},${actor.name},${actor.role},${validated.note},${JSON.stringify(totals)},${at} FROM updated
       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id
     )
-    SELECT (SELECT count(*)::int FROM updated) AS updated, (SELECT * FROM updated) AS session, (SELECT id FROM event) AS event_id`;
+    SELECT (SELECT count(*)::int FROM updated) AS updated, (SELECT id FROM event) AS event_id`;
   if (!result.length || Number(result[0].updated) === 0) {
     const current = await sql`SELECT * FROM close_sessions WHERE id=${req.params.id}`;
     return res.json({ duplicate: true, session: current[0] ? mapCloseSession(current[0]) : null });
@@ -2901,7 +2901,7 @@ app.post('/api/close-sessions/:id/reopen', requireManager, asHandler(async (req,
       SELECT ${`cse-${randomUUID()}`},updated.id,'reopened',${clientWriteId},${actor.id},${actor.name},${actor.role},${reason},'{}',${at} FROM updated
       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id
     )
-    SELECT (SELECT count(*)::int FROM updated) AS updated, (SELECT * FROM updated) AS session`;
+    SELECT (SELECT count(*)::int FROM updated) AS updated`;
   if (!result.length || Number(result[0].updated) === 0) {
     const current = await sql`SELECT * FROM close_sessions WHERE id=${req.params.id}`;
     if (!current.length) return res.status(404).json({ error: 'Close session not found', code: 'CLOSE_SESSION_NOT_FOUND' });
@@ -3114,13 +3114,14 @@ async function handleExpenseApproval(req, res) {
       SELECT ${`eae-${randomUUID()}`},updated.id,${currentStatus},${status},${clientWriteId},${actor.id},${actor.name},${actor.role},${reason},${at} FROM updated
       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id
     )
-    SELECT (SELECT count(*)::int FROM updated) AS updated, (SELECT * FROM updated) AS expense`;
+    SELECT (SELECT count(*)::int FROM updated) AS updated`;
   if (!result.length || Number(result[0].updated) === 0) {
     const current = await sql`SELECT * FROM expenses WHERE id=${req.params.id}`;
     return res.json({ duplicate: true, expense: current[0] ? mapExpense(current[0]) : null });
   }
+  const afterApproval = await sql`SELECT * FROM expenses WHERE id=${req.params.id}`;
   await audit('expense.approval', `${req.params.id} ${status}`, actor, { expenseId: req.params.id, fromStatus: currentStatus, status, reason, clientWriteId }, req.id);
-  res.json(mapExpense(result[0].expense));
+  res.json(mapExpense(afterApproval[0] || currentRows[0]));
 }
 
 app.post('/api/expenses/:id/approval', requireManager, asHandler(handleExpenseApproval));
@@ -4019,7 +4020,7 @@ async function handleCreditPaymentCreate(req, res) {
       ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING
       RETURNING *
     )
-    SELECT (SELECT count(*)::int FROM payment) AS inserted, (SELECT * FROM payment) AS payment`;
+    SELECT (SELECT count(*)::int FROM payment) AS inserted`;
   if (!result.length) return res.status(500).json({ error: 'Credit payment was not saved', code: 'CREDIT_PAYMENT_NOT_SAVED' });
   if (Number(result[0].inserted) === 0) {
     const existing = await sql`SELECT * FROM credit_payments WHERE client_write_id=${clientWriteId}`;
@@ -4027,7 +4028,8 @@ async function handleCreditPaymentCreate(req, res) {
     const latest = await sql`SELECT COALESCE(SUM(amount),0)::float AS paid FROM credit_payments WHERE saleid=${saleId}`;
     return res.status(409).json({ error: 'Credit payment exceeds the outstanding balance or target is closed', code: 'OVERPAYMENT', outstanding: roundMoney(Number(saleRows[0].total || 0) - Number(latest[0]?.paid || 0)) });
   }
-  const payment = result[0].payment;
+  const savedPayment = await sql`SELECT * FROM credit_payments WHERE id=${id}`;
+  const payment = savedPayment[0];
   await audit('credit.payment', `${saleId} ${validated.amount}`, actor, { saleId, amount: validated.amount, branch, paymentMethod: validated.paymentMethod, reference: validated.reference, collectorId, collectorName }, req.id);
   res.json(mapCreditPayment(payment));
 }
@@ -4560,7 +4562,6 @@ app.post('/api/credit-eats', asHandler(async (req, res) => {
       RETURNING *
     )
     SELECT (SELECT count(*)::int FROM ins) AS inserted,
-           (SELECT * FROM ins) AS row,
            (SELECT cap FROM state) AS cap,
            (SELECT outstanding FROM state) AS outstanding,
            EXISTS (SELECT 1 FROM state WHERE outstanding + ${total} > cap) AS blocked`;
@@ -4577,8 +4578,9 @@ app.post('/api/credit-eats', asHandler(async (req, res) => {
     }
     return res.status(409).json({ error: 'Credit record was not saved', code: 'CREDIT_RECORD_NOT_SAVED' });
   }
+  const savedEat = await sql`SELECT * FROM credit_eats WHERE id=${id}`;
   await audit('credit.book.create', `${customerName} ${total}`, actor, { creditEatId: id, customerName, total, branch, override, clientWriteId }, req.id);
-  res.json(mapCreditEat(row.row));
+  res.json(mapCreditEat(savedEat[0]));
 }));
 
 // === CUSTOMERS (Regulars directory) API ===
@@ -4824,7 +4826,7 @@ app.post('/api/production-register', asHandler(async (req, res) => {
       FROM ins WHERE p.id=${p.productId || null} AND p.deleted=false AND COALESCE(p.isservice,false)=false
       RETURNING p.id,p.name,p.stockqty
     )
-    SELECT (SELECT count(*)::int FROM ins) AS inserted, (SELECT * FROM ins) AS row, (SELECT id FROM prod) AS product_id, (SELECT name FROM prod) AS product_name, (SELECT stockqty FROM prod) AS stockqty`;
+    SELECT (SELECT count(*)::int FROM ins) AS inserted, (SELECT id FROM prod) AS product_id, (SELECT name FROM prod) AS product_name, (SELECT stockqty FROM prod) AS stockqty`;
   if (!result.length || Number(result[0].inserted) === 0) {
     const existing = clientWriteId ? await sql`SELECT * FROM production_register WHERE client_write_id=${clientWriteId}` : [];
     return res.json(existing.length ? mapProductionRegister(existing[0]) : { success: false, error: 'Production entry was not saved' });
