@@ -546,6 +546,10 @@ export interface EfrisConfig {
 }
 
 export interface StoreSettings {
+  /** What this shop trades in, as shapes: sell | kitchen | orders | services.
+   *  Unset or empty means "not answered yet", which is NOT the same as
+   *  answering none — an unanswered shop keeps every department it has. */
+  trades?: string[];
   shopName: string;
   themeId: string;
   vibe: string;

@@ -49,9 +49,10 @@ const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
 const AreaHome = lazyRetry(() => import('./AreaHome'));
 import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';
-import { getDepartment, shelfStats, kitchenStats, partitionDrinks } from './departmentRegistry';
+import { getDepartment, shelfStats, kitchenStats, partitionDrinks, departmentsForShop } from './departmentRegistry';
 import DepartmentToday from './DepartmentToday';
-import DepartmentActions, { buildActionCards } from './DepartmentActions';const Bookings = lazyRetry(() => import('./Bookings'));
+import DepartmentActions, { buildActionCards } from './DepartmentActions';
+import ShopTrades from './ShopTrades';const Bookings = lazyRetry(() => import('./Bookings'));
 const RepairJobs = lazyRetry(() => import('./RepairJobs'));
 const Quotes = lazyRetry(() => import('./Quotes'));
 const subManagerFallback = (
@@ -150,6 +151,10 @@ interface SalesProps {
   simple?: boolean;
   hideGuide?: boolean;
   onRequirePin?: (message: string) => Promise<boolean>;
+  showTradeQuestion?: boolean;
+  onSaveTrades?: (trades: string[]) => void;
+  onDismissTradeQuestion?: () => void;
+  availableDepartments?: string[];
   // Changing prices and recipes is a manager decision. The screen still opens
   // for a seller, but says so and offers the sign-in instead of letting them
   // fill in a form whose every save is refused.
@@ -211,7 +216,7 @@ const DEMO_PRODUCTS: Product[] = [
 ];
 
 export default function Sales({
-  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, canEditPrices, onRequestManagerSignIn, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, creditEats = [], ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false,
+  products, onAddSale, onUpdateProduct, formatCurrency, cart, setCart, triggerToast, settings, onAddExpense, canEditPrices, onRequestManagerSignIn, expenseCategories = ['Stock Purchase', 'Utilities', 'Labor', 'Rent', 'Transport', 'Supplies'], isQuickSale, setIsQuickSale,   categories, staffName, onSaveCustomProduct, onUndoSale, tillBranch, draftScope, cartDraftReady = false,   productionRegisters = [], onAddProduction, onDeleteProduction, salesHistory = [], wastageLogs = [], onGoToStock, onGoClose, creditEats = [], ingredientBudgetToday, onRecordIngredientTopUp, hideMoney = false, simple = false, onRequirePin, hideGuide = false, showTradeQuestion = false, onSaveTrades, onDismissTradeQuestion, availableDepartments = [],
   customers = [], onSaveCustomer, onDeleteCustomer,
 }: SalesProps) {
   const effectiveDraftScope = useMemo<CheckoutDraftScope>(() => ({
@@ -445,8 +450,12 @@ export default function Sales({
     const real = categories.filter((c) => stocked.has(c));
     // Nothing stocked yet: keep the configured list so a new shop can still be
     // navigated (and so the empty state has somewhere to send them).
-    return real.length ? real : categories;
-  }, [catalog, categories, productionRegisters.length]);
+    const available = real.length ? real : categories;
+    // What the shop SAID it trades in, when it has answered. Unanswered is
+    // null, and a null answer returns the list untouched — so this changes
+    // nothing for a shop that has not been asked yet.
+    return departmentsForShop(available, settings?.trades);
+  }, [catalog, categories, productionRegisters.length, settings?.trades]);
 
   // A shop that trades in one department gets that department's own screen —
   // kitchen opens on making, a shelf opens on the grid — with no chips and no
@@ -2397,6 +2406,16 @@ export default function Sales({
         ) : (
         /* Products */
         <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
+          {/* The one question, asked once, as a card rather than a modal: she is
+              here to sell, and a shop that skips it loses nothing. */}
+          {showTradeQuestion && onSaveTrades && onDismissTradeQuestion && (
+            <ShopTrades
+              settings={settings}
+              availableDepartments={availableDepartments}
+              onSave={onSaveTrades}
+              onDismiss={onDismissTradeQuestion}
+            />
+          )}
           <section className="space-y-2">
             {(() => {
               const dept = getDepartment(selectedCategory);

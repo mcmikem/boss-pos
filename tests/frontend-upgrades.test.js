@@ -1255,3 +1255,27 @@ test('no department borrows another department\'s words or its name', () => {
   assert.match(today, /showTitle && <div className="flex items-center gap-2\.5">/);
   assert.match(sales, /showTitle=\{!\(liveDepartments\.length === 1 && selectedCategory !== 'All'\)\}/);
 });
+
+test('what a shop trades in is asked once, never guessed, and never blanks the till', () => {
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const card = read('src/components/ShopTrades.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // It used to be INFERRED on every screen from stock and production, which is
+  // why a tailor got kitchen numbers. Now it is asked and looked up.
+  assert.match(sales, /departmentsForShop\(available, settings\?\.trades\)/);
+  assert.equal(/real\.length \? real : categories;\s*\};/.test(sales), false);
+  // A shop that has not answered keeps today's behaviour, so this is safe to
+  // ship to a live till — the question is inert until she answers it.
+  assert.match(app, /showTradeQuestion=\{!tradesAsked\}/);
+  assert.match(app, /localStorage\.getItem\('boss_pos_trades_asked'\)/);
+  // No modal: she opens this app to sell.
+  assert.equal(/confirmDialog\({[^}]*title: 'What does this shop trade in/.test(card), false);
+  assert.equal(/promptDialog/.test(card), false);
+  // Save and skip both stop it asking on this phone.
+  assert.match(app, /boss_pos_trades_asked', '1'/);
+  // And it is revisable, with a way back to everything.
+  assert.match(app, /<ShopTrades[\s\S]*?compact/);
+  assert.match(card, /Show every department again/);
+  // Saving is a settings write, never a sale write: no money path is touched.
+  assert.equal(/onAddSale|handleAddSale/.test(card), false);
+});

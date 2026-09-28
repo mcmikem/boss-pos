@@ -34,6 +34,7 @@ import { formatUgx } from './utils/money';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
+import ShopTrades from './components/ShopTrades';
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
 import { confirmDialog, promptDialog } from './components/Dialog';
@@ -468,6 +469,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try { return readLockLog(); } catch { return []; }
   });
   // First-run setup checklist: hidden forever once dismissed or complete.
+  // "What does this shop trade in?" — asked once per phone, skippable, and it
+  // changes nothing about how a sale is recorded. The answer lives in settings
+  // so it follows the shop, not the phone.
+  const [tradesAsked, setTradesAsked] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_trades_asked') === '1'; } catch { return false; }
+  });
   const [setupDismissed, setSetupDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_setup_done') === '1'; } catch { return false; }
   });
@@ -475,6 +482,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [setupIdx, setSetupIdx] = useState(0);
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
+  // Every configured department — what the question is allowed to hide.
+  const departmentKeys = useMemo(() => {
+    const cats = Array.isArray(settings.categories) ? settings.categories.filter(Boolean) : [];
+    return Array.from(new Set(cats.filter(c => typeof c === 'string' && c.trim())));
+  }, [settings.categories]);
   useEffect(() => {
     try { document.documentElement.classList.toggle('large-text', !!settings.largeText); } catch {}
   }, [settings.largeText]);
@@ -3314,6 +3326,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             onRequirePin={(msg) => requirePin(msg, true)}
             canEditPrices={isManager}
             onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
+            showTradeQuestion={!tradesAsked}
+            availableDepartments={departmentKeys}
+            onSaveTrades={(trades) => {
+              setTradesAsked(true);
+              try { localStorage.setItem('boss_pos_trades_asked', '1'); } catch {}
+              setSettings(prev => ({ ...prev, trades }));
+              triggerToast('Till set up for your shop', 'success');
+            }}
+            onDismissTradeQuestion={() => {
+              setTradesAsked(true);
+              try { localStorage.setItem('boss_pos_trades_asked', '1'); } catch {}
+            }}
             customers={customers}
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
@@ -4508,6 +4532,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       </div>
                       );
                     })}
+                    <ShopTrades
+                      settings={settings}
+                      availableDepartments={departmentKeys}
+                      compact
+                      onSave={(trades) => {
+                        setTradesAsked(true);
+                        try { localStorage.setItem('boss_pos_trades_asked', '1'); } catch {}
+                        setSettings(prev => ({ ...prev, trades }));
+                        triggerToast(trades.length ? 'Till set up for your shop' : 'Showing every department', 'success');
+                      }}
+                      onDismiss={() => {}}
+                    />
                     <StaffFirstSetup onAdd={handleAddStaff} />
                     <p className="text-[10px] text-zinc-600 leading-relaxed">Cashiers see Sell + Spend only — no stock, reports, close-out, or settings. Voids and refunds ask for a manager.</p>
                   </>

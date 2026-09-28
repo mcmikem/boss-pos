@@ -143,6 +143,60 @@ export const DEPARTMENTS: Record<string, DepartmentConfig> = {
 
 // Custom categories a shop invents behave like buy-resell shelves: state
 // strip on top, grid below, nothing to configure.
+// WHAT DOES THIS SHOP TRADE IN?
+//
+// Until now the app guessed: it looked at which categories have stock and which
+// have production, on every screen, and inferred the business from that. Guessing
+// is why a tailor was shown kitchen numbers — the inference lives in several
+// places and they can disagree with each other.
+//
+// A shop answers once and the answer is stored. Until it does, nothing changes:
+// an unset profile means every configured department stays visible, which is
+// exactly today's behaviour. So this can be adopted without risking a live till.
+export interface TradeChoice {
+  key: string;
+  label: string;
+  /** In the shop's words, not ours. "On the tray" is a kitchen sentence. */
+  blurb: string;
+}
+
+export const TRADE_CHOICES: TradeChoice[] = [
+  { key: 'sell', label: 'Shelves', blurb: 'Phone, hardware, groceries — buy and sell from stock' },
+  { key: 'kitchen', label: 'Kitchen', blurb: 'Chapati, juice, food made fresh each morning' },
+  { key: 'orders', label: 'Made to order', blurb: 'Tailoring, printing — jobs with deposits and balances' },
+  { key: 'services', label: 'Bookings and repairs', blurb: 'Salon, barber, phone repair — appointments and jobs' },
+];
+
+/** Which department KEYS a shop trades in, from its saved answer. Null means
+ *  "has not answered", which is not the same as "answered none". */
+export function tradesFromProfile(profile?: string[] | null): DepartmentKind[] | null {
+  if (!Array.isArray(profile) || profile.length === 0) return null;
+  const wanted = new Set(profile);
+  const kinds: DepartmentKind[] = [];
+  for (const kind of ['sell', 'kitchen', 'orders'] as DepartmentKind[]) {
+    if (wanted.has(kind)) kinds.push(kind);
+  }
+  // An answer of only unknown keys is an answer we cannot use, so treat it as
+  // unanswered rather than blanking the till.
+  return kinds.length ? kinds : null;
+}
+
+/** The departments this shop shows. An unanswered shop shows what it has, which
+ *  is the behaviour that shipped for months. */
+export function departmentsForShop(
+  available: string[],
+  profile?: string[] | null,
+): string[] {
+  const kinds = tradesFromProfile(profile);
+  if (!kinds) return available;
+  const keep = new Set(kinds);
+  const chosen = available.filter(c => keep.has(getDepartment(c).kind));
+  // Never strand a department the shop actually has stock or production in: if
+  // the answer would hide one, show it rather than lose a morning's chapatis
+  // behind a filter set on a phone in a hurry.
+  return chosen.length ? chosen : available;
+}
+
 export function getDepartment(category: string): DepartmentConfig {
   const found = DEPARTMENTS[category];
   if (found) return found;
