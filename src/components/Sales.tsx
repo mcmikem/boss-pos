@@ -2405,9 +2405,12 @@ export default function Sales({
                 <>
                   <DepartmentToday
                     config={dept}
-                    stats={dept.kind === 'sell'
-                      ? shelfStats(selectedCategory, products, salesHistory, formatCurrency)
-                      : kitchenStats(selectedCategory, products, salesHistory, productionRegisters, wastageLogs, formatCurrency)}
+                    /* The shop header directly above already names the
+                       department. Both printing it read as two screens. */
+                    showTitle={!(liveDepartments.length === 1 && selectedCategory !== 'All')}
+                    stats={dept.kind === 'kitchen'
+                      ? kitchenStats(selectedCategory, products, salesHistory, productionRegisters, wastageLogs, formatCurrency)
+                      : shelfStats(selectedCategory, products, salesHistory, formatCurrency)}
                   />
                   <DepartmentActions
                     cards={buildActionCards({

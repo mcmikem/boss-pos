@@ -8,15 +8,19 @@ import { MoneyHero, MoneyStat } from './Design';
 export default function DepartmentToday({
   config,
   stats,
+  showTitle = true,
 }: {
   config: DepartmentConfig;
   stats: DepartmentStat[];
+  /** False when the shop header directly above already names the department.
+   *  Both printing it read as two screens stacked on one phone. */
+  showTitle?: boolean;
 }) {
   const Icon = config.icon;
   const [hero, ...rest] = stats;
   return (
     <section aria-label={config.title} className="space-y-2">
-      <div className="flex items-center gap-2.5">
+      {showTitle && <div className="flex items-center gap-2.5">
         <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
           <Icon className="w-5 h-5 text-gold-brand" />
         </div>
@@ -24,7 +28,7 @@ export default function DepartmentToday({
           <h2 className="text-sm font-black text-white uppercase tracking-wider font-display truncate">{config.title}</h2>
           <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">{config.subtitle}</p>
         </div>
-      </div>
+      </div>}
       {stats.length > 0 && (
         <div className="boss-card p-3 space-y-2">
           {hero && (

@@ -1234,3 +1234,24 @@ test('a service deposit is never announced when the sale was refused', () => {
   // AND their money back.
   assert.match(read('src/App.tsx'), /Returned \$\{label\}, but the balance sale was refused/);
 });
+
+test('no department borrows another department\'s words or its name', () => {
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const today = read('src/components/DepartmentToday.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const registry = read('src/components/departmentRegistry.ts');
+  // "On the tray" reached a TAILOR because the stats ternary sent every
+  // non-'sell' department to kitchenStats — and Tailoring is kind 'orders'.
+  assert.match(sales, /dept\.kind === 'kitchen'\s*\n\s*\? kitchenStats/);
+  assert.equal(/dept\.kind === 'sell'\s*\n\s*\? shelfStats\s*\n\s*: kitchenStats/.test(sales), false);
+  // Every kitchen-kind department really is a kitchen, and no orders department is.
+  const kinds = [...registry.matchAll(/key: '([A-Za-z]+)',[\s\S]{0,400}?kind: '(\w+)'/g)].map(m => [m[1], m[2]]);
+  for (const [name, kind] of kinds) {
+    if (['Tailoring', 'Graphics', 'Bookings', 'Repairs'].includes(name)) {
+      assert.notEqual(kind, 'kitchen', `${name} must not speak kitchen words`);
+    }
+  }
+  // And a department is not named twice on one screen.
+  assert.match(today, /showTitle = true/);
+  assert.match(today, /showTitle && <div className="flex items-center gap-2\.5">/);
+  assert.match(sales, /showTitle=\{!\(liveDepartments\.length === 1 && selectedCategory !== 'All'\)\}/);
+});
