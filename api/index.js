@@ -1327,6 +1327,16 @@ async function staffCount() {
   return rows.length ? rows[0].n : 0;
 }
 
+/** Is this request already a manager? The seller hand-over door needs to ask
+ *  the same question requireManager asks, without sending a response. */
+async function hasManagerRole(req) {
+  try {
+    return managerAllowed(req.auth, await staffCount());
+  } catch {
+    return false;
+  }
+}
+
 async function requireManager(req, res, next) {
   try {
     if (managerAllowed(req.auth, await staffCount())) return next();
@@ -4966,10 +4976,53 @@ app.get('/api/momo-transfers', requireManager, asHandler(async (req, res) => {
   res.json(rows.map(mapMomoTransfer));
 }));
 
+// ONE DOOR FOR CASHIERS, AND ONLY ONE.
+//
+// Not all shops have a manager in the building. A shop closing on its own still
+// has to say where every shilling went, and "I gave 200,000 to MCMIKE" is the
+// hardest one to record because it used to sit behind a manager-only endpoint —
+// so the closer was refused, and the day would not reconcile.
+//
+// So a seller may create ONE kind of row: a hand-over claim to a NAMED manager,
+// which lands as receipt_status='requested' and waits for that manager to confirm
+// it from their own phone. It is a claim, not a receipt. Everything else — float,
+// owner, bank — stays manager-only, and a seller can never delete or edit a
+// claim, so a movement cannot be made to vanish.
+async function sellerMayClaimHandover(req) {
+  try {
+    // Stored as JSON by the settings writer, so a boolean arrives as `true`; an
+    // older hand-written row may be the string '1'. Accept both, and nothing else.
+    const raw = await readSettingValue('cashierHandover');
+    const on = raw === true || raw === 1 || raw === '1' || raw === 'true';
+    if (!on) return false;
+    const actor = await requestActor(req);
+    return actor.id ? actor.role !== 'manager' : false;
+  } catch {
+    return false;
+  }
+}
+
 app.post('/api/momo-transfers', requireManager, asHandler(async (req, res) => {
   const t = req.body && typeof req.body === 'object' ? req.body : {};
   const amount = Number(t.amount);
   const to = ['float', 'cash', 'owner', 'manager', 'bank'].includes(t.to) ? t.to : null;
+  // The door: a seller, with the setting on, naming a real manager, claiming a
+  // hand-over. Anything else falls through to the manager gate below, which is
+  // unchanged and still refuses.
+  if (!(await hasManagerRole(req))) {
+    if (!(await sellerMayClaimHandover(req))) {
+      return res.status(403).json({
+        error: 'Only a manager can move money. If your manager is not here, ask them to turn on "Cashiers can record a hand-over" in Settings, then record it against their name.',
+        code: MANAGER_REQUIRED_CODE,
+      });
+    }
+    if (to !== 'manager') {
+      return res.status(403).json({
+        error: 'A seller can only record money handed to a manager, not to the owner, float or a bank.',
+        code: 'HANDOVER_CLAIM_ONLY',
+      });
+    }
+  }
   if (!Number.isFinite(amount) || amount <= 0 || !to) return res.status(400).json({ error: 'A positive amount and valid destination are required', code: 'INVALID_MOMO_TRANSFER' });
   // A MoMo reference only exists when the money actually moved over the phone.
   // Cash handed to the owner or a manager, cash left in the drawer and a bank

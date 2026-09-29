@@ -37,6 +37,9 @@ export interface DayCashInput {
   floatOut: number;
   cashOut: number;
   ownerOut: number;
+  /** Cash handed to a named manager. Its own bucket, because counting it as
+   *  float said the money went onto the phone line instead of to a person. */
+  managerOut?: number;
   bankOut?: number;
   // Phone-tender slice of `collected` (MTN/Airtel). Phone money never sits
   // in the physical drawer, so the drawer equation runs on cash only — an
@@ -71,9 +74,13 @@ export function computeDayCash(input: DayCashInput): DayCashResult {
   const floatOut = Math.max(0, Math.round(input.floatOut || 0));
   const cashOut = Math.max(0, Math.round(input.cashOut || 0));
   const ownerOut = Math.max(0, Math.round(input.ownerOut || 0));
+  const managerOut = Math.max(0, Math.round(input.managerOut || 0));
   const bankOut = Math.max(0, Math.round(input.bankOut || 0));
   const expectedInDrawer = openingCapital + cashSales - drawerExpenses;
-  const movedOut = floatOut + cashOut + ownerOut + bankOut;
+  // Money handed to a manager is money with a home, exactly like money handed to
+  // the owner. Without it here the day could never balance on a shop that has no
+  // manager in the building, which is the whole point of recording the claim.
+  const movedOut = floatOut + cashOut + ownerOut + managerOut + bankOut;
   const assigned = movedOut + closingCapital;
   const unassigned = expectedInDrawer - assigned;
   const rawCount = input.countedCash;
@@ -233,13 +240,17 @@ export function collectedByCategory(
 export function moneyOutByCategory(
   transfers: MomoTransfer[],
   dayKey: string,
-): Record<string, { float: number; cash: number; owner: number; bank: number }> {
-  const map: Record<string, { float: number; cash: number; owner: number; bank: number }> = {};
+): Record<string, { float: number; cash: number; owner: number; manager: number; bank: number }> {
+  const map: Record<string, { float: number; cash: number; owner: number; manager: number; bank: number }> = {};
   for (const t of transfers) {
     if (localDayKey(t.createdAt) !== dayKey) continue;
-    const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, bank: 0 });
+    const d = map[t.category] || (map[t.category] = { float: 0, cash: 0, owner: 0, manager: 0, bank: 0 });
     if (t.to === 'cash') d.cash += t.amount || 0;
     else if (t.to === 'owner') d.owner += t.amount || 0;
+    // 'manager' used to fall into the else below and be counted as PHONE FLOAT —
+    // so cash handed to a person was recorded as money put on the mobile-money
+    // line, which misstated float for the whole day.
+    else if (t.to === 'manager') d.manager += t.amount || 0;
     else if (t.to === 'bank') d.bank += t.amount || 0;
     else d.float += t.amount || 0;
   }

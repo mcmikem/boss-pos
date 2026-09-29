@@ -1317,3 +1317,39 @@ test('a card means "today, one tap from done" — and belongs to one trade only'
   assert.match(actions, /still \$\{words\.leftover\.toLowerCase\(\)\} from yesterday/);
   assert.equal(read('src/components/Sales.tsx').includes('kind: dept.kind,'), false);
 });
+
+test('a seller may CLAIM a hand-over to a manager, and nothing else', () => {
+  const server = read('api/index.js');
+  const reg = read('src/components/CategoryRegister.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const app = read('src/App.tsx');
+  // Not all shops have a manager in the building, so a closer must be able to
+  // say where the money went to a person. It is a claim that the named manager
+  // confirms — not a permission to move money.
+  assert.match(server, /async function sellerMayClaimHandover/);
+  assert.match(server, /readSettingValue\('cashierHandover'\)/);
+  assert.match(server, /code: 'HANDOVER_CLAIM_ONLY'/);
+  // The door is one destination wide. Float, owner and bank stay manager-only,
+  // and the manager gate is otherwise untouched.
+  assert.match(server, /if \(to !== 'manager'\) \{/);
+  assert.equal(/app\.post\('\/api\/momo-transfers', asHandler/.test(server), false);
+  // A seller sees ONE destination, not five buttons where one is permitted.
+  assert.match(reg, /MONEY_DEST_ALL\.filter\(d => d\.key === 'manager'\)/);
+  assert.match(reg, /MONEY_DEST\.length === 1 \? 'grid-cols-1' : 'grid-cols-5'/);
+  // The receipt is still the manager's to give: confirm stays manager-only.
+  assert.match(server, /app\.post\('\/api\/money-handover\/:id\/confirm', requireManager/);
+  // And it is a setting she can see and turn off.
+  assert.match(app, /Cashier can record a hand-over to a manager/);
+  assert.match(app, /not yet confirmed/);
+});
+
+test('money given to a manager is not money on the phone line', () => {
+  const cash = read('src/utils/cashflow.ts');
+  // 'manager' fell through to the float bucket, so cash handed to a person was
+  // recorded as money put on the mobile-money line — and it was not in
+  // movedOut either, so a shop that did the right thing could never balance.
+  assert.match(cash, /else if \(t\.to === 'manager'\) d\.manager \+= t\.amount \|\| 0;/);
+  assert.match(cash, /const movedOut = floatOut \+ cashOut \+ ownerOut \+ managerOut \+ bankOut;/);
+  assert.match(cash, /managerOut\?: number;/);
+  // float is still the phone line, so the two cannot be confused again.
+  assert.match(cash, /else d\.float \+= t\.amount \|\| 0;/);
+});

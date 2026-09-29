@@ -3414,6 +3414,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             creditBookName={settings.creditBookName || 'Credit book'}
             closeSummaryError={closeSummaryError}
             canManageMoneyOut={isManager}
+            cashierHandover={!!settings.cashierHandover}
             onRequestManagerSignIn={() => { setStaffVerifyError(null); setShowStaffSwitcher(true); }}
             moneyOutBlocked={moneyOutBlocked}
             onCloseDayFinished={handleCloseDayFinished}
@@ -4711,6 +4712,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 })}
                 <p className="text-[10px] text-zinc-600">Blind close (Shop hours section) hides every total on Close day.</p>
               </div>
+                <div className="space-y-1 pt-2 mt-1 border-t border-white/5">
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier hand-overs <SettingHelp label="Cashier hand-overs" text="For shops with no manager in the building. Lets a cashier record that cash was handed to a NAMED manager, who confirms receipt on their own phone. It is a claim, not a movement: the cashier cannot move money to the owner, float or a bank, and cannot delete a claim." /></label>
+                  <button onClick={() => setSettings(prev => ({ ...prev, cashierHandover: !prev.cashierHandover }))}
+                    className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center justify-between px-4 ${settings.cashierHandover ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+                    <span>Cashier can record a hand-over to a manager</span>
+                    <span>{settings.cashierHandover ? 'On' : 'Off'}</span>
+                  </button>
+                  <p className="text-[10px] text-zinc-500 leading-relaxed">
+                    Not permission to move money. Float, owner and bank stay manager-only, and the claim sits
+                    on the books as <span className="text-amber-300">not yet confirmed</span> until that manager accepts it.
+                  </p>
+                </div>
               </SettingsSection>
               <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Rescue PIN, auto-lock, manager sign-in, log out all"
                 open={settingsSection === 'security'} onToggle={() => toggleSettingsSection('security')}>

@@ -49,6 +49,9 @@ interface CategoryRegisterProps {
   // manager action. Without a manager session the form never opens, and a
   // refused save keeps the amounts instead of losing them.
   canManageMoneyOut?: boolean;
+  /** Settings: a seller may claim money was handed to a named manager, who
+   *  confirms it. Off by default, read by the server as well as this form. */
+  cashierHandover?: boolean;
   onRequestManagerSignIn?: () => void;
   // The money-out list itself is manager-only: when it could not be loaded the
   // screen says so rather than showing an empty day as if nothing moved.
@@ -206,7 +209,7 @@ export default function CategoryRegister({
   momoTransfers,
   onAddCreditEat, onPayCreditEat,
   onAddWastage, onDeleteWastage, onAddMomoTransfer, onDeleteMomoTransfer,
-  canManageMoneyOut = true, onRequestManagerSignIn, moneyOutBlocked = false, closeSummaryError = '',
+  canManageMoneyOut = true, cashierHandover = false, onRequestManagerSignIn, moneyOutBlocked = false, closeSummaryError = '',
   staffName, shopName, eodCapital, onSetEodCapital, formatCurrency, triggerToast, onBack, lang,
   onPrintClose, onSendClose, onReopenDay, onCloseDayFinished, onShareCloseSummary, onCommitProductionPlan,
   ownerPhone = '', branch = '', pastClose = true, blind = false, notifyOwner = true,
@@ -794,7 +797,7 @@ export default function CategoryRegister({
     let cashSales = 0, phoneSales = 0, opening = 0, expenses = 0;
     let expected = 0, assigned = 0, unassigned = 0, counted = 0, countedCount = 0;
     for (const cat of segments) {
-      const m = moves[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+      const m = moves[cat] || { float: 0, cash: 0, owner: 0, manager: 0, bank: 0 };
       const r = computeDayCash({
         category: cat,
         dayKey: todayKey,
@@ -803,7 +806,7 @@ export default function CategoryRegister({
         collected: todayCollectedByCategory[cat] || 0,
         phoneCollected: (tenderToday[cat] || { cash: 0, momo: 0 }).momo,
         drawerExpenses: drawerExpensesToday[cat] || 0,
-        floatOut: m.float, cashOut: m.cash, ownerOut: m.owner, bankOut: m.bank || 0,
+        floatOut: m.float, cashOut: m.cash, ownerOut: m.owner, managerOut: m.manager || 0, bankOut: m.bank || 0,
         countedCash: countedByCat[cat] ?? null,
       });
       cashSales += r.cashSales;
@@ -965,18 +968,28 @@ export default function CategoryRegister({
   // in total, and what sits banked. Totals, not today-flows.
   const ownerTotal = useMemo(() => momoTransfers.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
   const bankTotal = useMemo(() => momoTransfers.filter(t => t.to === 'bank').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
-  const MONEY_DEST = [
+  // A seller, with the setting on, sees ONE destination instead of five. Five
+  // buttons where one is permitted is how a form teaches someone to guess.
+  const MONEY_DEST_ALL = [
     { key: 'float' as const, label: 'Phone float', icon: '📲', hint: 'Put on the business mobile-money line (MTN/Airtel) — this is what pays expenses and utilities' },
     { key: 'cash' as const, label: 'Kept in drawer', icon: '💵', hint: 'Stays in the drawer as capital for tomorrow’s production — usually Eatery or Drinks' },
     { key: 'owner' as const, label: 'Cash to owner', icon: '👑', hint: `Cash handed to the business owner${ownerName ? ` (${ownerName})` : ''} — they confirm receipt on their phone` },
     { key: 'manager' as const, label: 'Cash to manager', icon: '🧑‍💼', hint: 'Cash handed to a named manager — they confirm receipt on their phone' },
     { key: 'bank' as const, label: 'Bank', icon: '🏦', hint: 'Deposited to the bank account — out of drawer and phone' },
   ];
+  const MONEY_DEST = (!canManageMoneyOut && cashierHandover)
+    ? MONEY_DEST_ALL.filter(d => d.key === 'manager')
+    : MONEY_DEST_ALL;
 
   const handleSubmitMomo = async () => {
     const amt = Math.round(parseFloat(momoAmount) || 0);
     if (amt <= 0) { triggerToast('Enter the amount you moved', 'error'); return; }
-    if (!canManageMoneyOut) {
+    // One door for a seller, and only one: claiming that the money went to a
+    // NAMED manager, who then confirms receipt from their own phone. That is a
+    // claim, not a movement, and it is what lets a shop close with no manager in
+    // the building. Float, owner and bank stay manager-only.
+    const isHandoverClaim = !canManageMoneyOut && cashierHandover && momoDest === 'manager';
+    if (!canManageMoneyOut && !isHandoverClaim) {
       triggerToast('Moving money out is a manager action — sign in with your manager PIN', 'error');
       onRequestManagerSignIn?.();
       return;
@@ -1772,7 +1785,7 @@ export default function CategoryRegister({
             </p>
             <div>
               <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Where did it go?</label>
-              <div className="grid grid-cols-5 gap-1.5">
+              <div className={`grid gap-1.5 ${MONEY_DEST.length === 1 ? 'grid-cols-1' : 'grid-cols-5'}`}>
                 {MONEY_DEST.map(d => (
                   <button key={d.key} onClick={() => { setMomoDest(d.key); setHandoffRecipient(null); }}
                     className={`h-16 rounded-xl border text-center px-1 cursor-pointer transition-all ${

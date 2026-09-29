@@ -546,6 +546,10 @@ export interface EfrisConfig {
 }
 
 export interface StoreSettings {
+  /** Cashiers may record that cash was handed to a NAMED manager, who confirms
+   *  receipt. Not a permission to move money: float, owner and bank stay
+   *  manager-only, and a claim can never be deleted by the person who made it. */
+  cashierHandover?: boolean;
   /** What this shop trades in, as shapes: sell | kitchen | orders | services.
    *  Unset or empty means "not answered yet", which is NOT the same as
    *  answering none — an unanswered shop keeps every department it has. */
