@@ -889,13 +889,16 @@ test('a Today screen leads with the number that changes a decision', () => {
   // is meaningless when the shelf is a tray of chapati.
   assert.match(registry, /export function kitchenStats\(/);
   assert.match(registry, /label: 'Profit so far'/);
-  assert.match(registry, /label: 'On the tray'/);
+  // The tray words now live in the kitchen's vocabulary rather than being
+  // written inline, which is what keeps them out of other trades' screens.
+  assert.match(registry, /kitchen: \{ leftover: 'On the tray'/);
+  assert.match(registry, /stats\.push\(\{ label: words\.leftover/);
   // Profit is revenue less the ingredients actually paid, on live sales only.
   assert.match(registry, /const costOfSold = sold\.reduce/);
   assert.match(registry, /const profit = Math\.round\(soldValue - costOfSold\)/);
   assert.match(registry, /isLiveSale\(s\)/);
   // Before the first batch, the only useful figure is what yesterday left.
-  assert.match(registry, /label: 'On the tray from yesterday'/);
+  assert.match(registry, /label: `\$\{words\.leftover\} from yesterday`/);
 });
 
 test('a product with one option does not cost a sheet and a second tap', () => {
@@ -1241,8 +1244,10 @@ test('no department borrows another department\'s words or its name', () => {
   const registry = read('src/components/departmentRegistry.ts');
   // "On the tray" reached a TAILOR because the stats ternary sent every
   // non-'sell' department to kitchenStats — and Tailoring is kind 'orders'.
-  assert.match(sales, /dept\.kind === 'kitchen'\s*\n\s*\? kitchenStats/);
-  assert.equal(/dept\.kind === 'sell'\s*\n\s*\? shelfStats\s*\n\s*: kitchenStats/.test(sales), false);
+  assert.match(sales, /shopProfile\.statsFor\(dept, \{/);
+  // The selector is GONE, not corrected: the screen no longer chooses, so there
+  // is no branch left to be wrong.
+  assert.equal(/dept\.kind ===/.test(sales), false);
   // Every kitchen-kind department really is a kitchen, and no orders department is.
   const kinds = [...registry.matchAll(/key: '([A-Za-z]+)',[\s\S]{0,400}?kind: '(\w+)'/g)].map(m => [m[1], m[2]]);
   for (const [name, kind] of kinds) {
@@ -1278,4 +1283,23 @@ test('what a shop trades in is asked once, never guessed, and never blanks the t
   assert.match(card, /Show every department again/);
   // Saving is a settings write, never a sale write: no money path is touched.
   assert.equal(/onAddSale|handleAddSale/.test(card), false);
+});
+
+test('a screen asks the shop profile instead of deciding for itself', () => {
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const registry = read('src/components/departmentRegistry.ts');
+  // The decision that handed a tailor the kitchen's numbers lived in a ternary
+  // in the screen. There is now no kind decision left in Sales.tsx at all.
+  assert.equal(/dept\.kind ===|dept\.kind !==/.test(sales), false, 'Sales.tsx must not branch on a department kind');
+  assert.match(sales, /const shopProfile = useMemo\(\(\) => resolveShopProfile\(settings\?\.trades\)/);
+  assert.match(sales, /shopProfile\.statsFor\(dept, \{/);
+  // productionFirst already implies "kitchen", so it decides on its own.
+  assert.match(sales, /if \(dept\.productionFirst\) \{/);
+  // And the words live with the shape.
+  assert.match(registry, /export const TRADE_VOCABULARY: Record<DepartmentKind, TradeVocabulary>/);
+  assert.match(registry, /kitchen: \{ leftover: 'On the tray'/);
+  assert.match(registry, /orders: \{ leftover: 'Ready for collection'/);
+  // "On the tray" survives only in the kitchen vocabulary and in prose about it.
+  const trayWords = (registry.match(/On the tray/g) || []).length;
+  assert.ok(trayWords <= 3, `the tray phrase appears ${trayWords} times in the registry`);
 });

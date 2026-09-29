@@ -49,7 +49,7 @@ const MorningProduction = lazyRetry(() => import('./MorningProduction'));
 const EateryHome = lazyRetry(() => import('./EateryHome'));
 const AreaHome = lazyRetry(() => import('./AreaHome'));
 import { tailorHomeConfig, printHomeConfig, repairHomeConfig, bookingHomeConfig } from './areaConfigs';
-import { getDepartment, shelfStats, kitchenStats, partitionDrinks, departmentsForShop } from './departmentRegistry';
+import { getDepartment, partitionDrinks, departmentsForShop, resolveShopProfile } from './departmentRegistry';
 import DepartmentToday from './DepartmentToday';
 import DepartmentActions, { buildActionCards } from './DepartmentActions';
 import ShopTrades from './ShopTrades';const Bookings = lazyRetry(() => import('./Bookings'));
@@ -396,7 +396,10 @@ export default function Sales({
     const dept = getDepartment(selectedCategory);
     if (dept.ordersHome === 'tailor') setShowTailorHome(true);
     if (dept.ordersHome === 'print') setShowPrintHome(true);
-    if (dept.kind === 'kitchen' && dept.productionFirst) {
+    // productionFirst is only ever set by a kitchen, so it says "open on
+    // production" on its own — no kind check to get wrong, and a future
+    // kitchen-shaped trade just works.
+    if (dept.productionFirst) {
       setShowProduction(true);
       setShowEateryHome(true);
     }
@@ -441,6 +444,11 @@ export default function Sales({
   // deciding who this shop is: a tailor who sells only tailoring was opening
   // onto nine chips, eight of them wrong. Stock (or a logged batch, for a
   // kitchen before its first product) is what makes a department real.
+  // Resolved ONCE per screen. A screen asks this what to show; it no longer
+  // decides for itself, which is exactly the decision that handed a tailor the
+  // kitchen's numbers.
+  const shopProfile = useMemo(() => resolveShopProfile(settings?.trades), [settings?.trades]);
+
   const liveDepartments = useMemo(() => {
     const stocked = new Set<string>();
     for (const p of catalog) if (p.category) stocked.add(p.category);
@@ -2427,9 +2435,14 @@ export default function Sales({
                     /* The shop header directly above already names the
                        department. Both printing it read as two screens. */
                     showTitle={!(liveDepartments.length === 1 && selectedCategory !== 'All')}
-                    stats={dept.kind === 'kitchen'
-                      ? kitchenStats(selectedCategory, products, salesHistory, productionRegisters, wastageLogs, formatCurrency)
-                      : shelfStats(selectedCategory, products, salesHistory, formatCurrency)}
+                    stats={shopProfile.statsFor(dept, {
+                      category: selectedCategory,
+                      products,
+                      salesHistory,
+                      productionRegisters,
+                      wastageLogs,
+                      formatCurrency,
+                    })}
                   />
                   <DepartmentActions
                     cards={buildActionCards({

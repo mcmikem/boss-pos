@@ -167,6 +167,34 @@ export const TRADE_CHOICES: TradeChoice[] = [
   { key: 'services', label: 'Bookings and repairs', blurb: 'Salon, barber, phone repair — appointments and jobs' },
 ];
 
+// THE WORDS BELONG TO THE SHAPE.
+//
+// "On the tray" is a kitchen sentence. A tailor reading it is not a wording bug,
+// it is the app telling one business it does another's job. So every phrase a
+// seller can read lives here, keyed by shape, and a department renders its own
+// words and nobody else's. A test asserts the tray words never appear outside a
+// kitchen — which is a stronger guarantee than any `if` being correct today.
+export interface TradeVocabulary {
+  /** What the leftover-from-yesterday number is called in this trade. */
+  leftover: string;
+  /** What a finished unit is called. */
+  madeUnit: string;
+  /** What the primary job verb is. */
+  makingVerb: string;
+  /** The noun for stock, used in low-stock language. */
+  stockNoun: string;
+}
+
+export const TRADE_VOCABULARY: Record<DepartmentKind, TradeVocabulary> = {
+  sell: { leftover: 'Not sold yet', madeUnit: 'Units in', makingVerb: 'Restocked', stockNoun: 'stock' },
+  kitchen: { leftover: 'On the tray', madeUnit: 'Pieces made', makingVerb: 'Made', stockNoun: 'batches' },
+  orders: { leftover: 'Ready for collection', madeUnit: 'Jobs done', makingVerb: 'Finished', stockNoun: 'materials' },
+};
+
+export function vocabularyFor(dept: DepartmentConfig | null | undefined): TradeVocabulary {
+  return TRADE_VOCABULARY[dept?.kind || 'sell'];
+}
+
 /** Which department KEYS a shop trades in, from its saved answer. Null means
  *  "has not answered", which is not the same as "answered none". */
 export function tradesFromProfile(profile?: string[] | null): DepartmentKind[] | null {
@@ -179,6 +207,46 @@ export function tradesFromProfile(profile?: string[] | null): DepartmentKind[] |
   // An answer of only unknown keys is an answer we cannot use, so treat it as
   // unanswered rather than blanking the till.
   return kinds.length ? kinds : null;
+}
+
+// ONE PROFILE PER SCREEN.
+//
+// The bug this replaces: a screen decided which numbers to show with a ternary
+// on the department's kind, and the branches were in the wrong shape — so a
+// tailor was handed the kitchen's. The decision now happens once, here, and a
+// screen asks the profile instead of choosing. A screen that no longer contains
+// a `kind === ...` decision cannot get one wrong.
+export interface ShopProfile {
+  /** Null until the shop answers. "Has not answered" is not "answered none". */
+  trades: DepartmentKind[] | null;
+  vocabulary: TradeVocabulary;
+  /** The Today-strip numbers for a department, chosen by its own shape. */
+  statsFor(dept: DepartmentConfig, args: StatsArgs): DepartmentStat[];
+}
+
+export interface StatsArgs {
+  category: string;
+  products: Product[];
+  salesHistory: Sale[];
+  productionRegisters: ProductionRegister[];
+  wastageLogs: WastageLog[];
+  formatCurrency: (n: number) => string;
+}
+
+export function resolveShopProfile(profile?: string[] | null): ShopProfile {
+  const trades = tradesFromProfile(profile);
+  return {
+    trades,
+    // An unanswered shop reads as a shelf shop, which is the safest default:
+    // it is the shape with no surprising words in it.
+    vocabulary: trades?.length === 1 ? TRADE_VOCABULARY[trades[0]] : TRADE_VOCABULARY.sell,
+    statsFor(dept, args) {
+      const { category, products, salesHistory, productionRegisters, wastageLogs, formatCurrency } = args;
+      return dept.kind === 'kitchen'
+        ? kitchenStats(category, products, salesHistory, productionRegisters, wastageLogs, formatCurrency)
+        : shelfStats(category, products, salesHistory, formatCurrency);
+    },
+  };
 }
 
 /** The departments this shop shows. An unanswered shop shows what it has, which
@@ -274,6 +342,7 @@ export function kitchenStats(
     .reduce((sum, w) => sum + (w.qty || 0), 0);
   const onTray = Math.max(0, madePieces - soldPieces - lostToday);
 
+  const words = TRADE_VOCABULARY.kitchen;
   const stats: DepartmentStat[] = [];
   if (madePieces > 0 || soldPieces > 0) {
     stats.push({
@@ -284,7 +353,7 @@ export function kitchenStats(
     });
     stats.push({ label: 'Made today', value: `${madePieces}`, tone: 'gold', sub: madeValue ? `${fmt(madeValue)} of ingredients` : 'nothing logged yet' });
     stats.push({ label: 'Sold today', value: `${soldPieces}`, tone: 'white', sub: soldValue ? fmt(soldValue) : 'no sales yet' });
-    stats.push({ label: 'On the tray', value: `${onTray}`, tone: onTray > 0 ? 'amber' : 'zinc', sub: 'sell before making more' });
+    stats.push({ label: words.leftover, value: `${onTray}`, tone: onTray > 0 ? 'amber' : 'zinc', sub: 'sell before making more' });
   } else {
     // A kitchen before its first batch of the day: the only useful thing to say
     // is what yesterday left, so the batch can start from it.
@@ -300,7 +369,7 @@ export function kitchenStats(
     }).filter(r => r.left > 0);
     const tray = left.reduce((sum, r) => sum + r.left, 0);
     stats.push({
-      label: 'On the tray from yesterday',
+      label: `${words.leftover} from yesterday`,
       value: tray > 0 ? `${tray}` : '—',
       tone: tray > 0 ? 'amber' : 'zinc',
       sub: tray > 0 ? 'sell what is left before making more' : 'nothing carried',

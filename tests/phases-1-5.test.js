@@ -81,7 +81,9 @@ test('reminder respects days off and overnight shifts', () => {
 
 test('morning production is the first eatery screen, via the registry', () => {
   const sales = read('src/components/Sales.tsx');
-  assert.match(sales, /dept\.kind === 'kitchen' && dept\.productionFirst/);
+  // productionFirst is only ever set by a kitchen, so it decides on its own —
+  // one less condition that can be wrong.
+  assert.match(sales, /if \(dept\.productionFirst\) \{/);
   assert.match(sales, /setShowProduction\(true\);/);
   assert.match(sales, /setShowEateryHome\(true\);/);
 });
