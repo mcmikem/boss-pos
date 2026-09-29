@@ -2446,7 +2446,7 @@ export default function Sales({
                   />
                   <DepartmentActions
                     cards={buildActionCards({
-                      kind: dept.kind,
+                      dept,
                       category: selectedCategory,
                       products,
                       sales: salesHistory,

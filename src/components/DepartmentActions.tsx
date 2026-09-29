@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ChevronRight, PackageMinus, CookingPot, HandCoins, AlertTriangle } from 'lucide-react';
 import type { CreditEat, Product, ProductionRegister, WastageLog } from '../types';
+import { TRADE_VOCABULARY, type DepartmentConfig } from './departmentRegistry';
 import { todayLocalKey } from '../utils/dates';
 import { prevDayKey } from '../utils/cashflow';
 import { isLiveSale } from '../utils/saleStatus';
@@ -31,7 +32,10 @@ export interface ActionCard {
 }
 
 export interface ActionInputs {
-  kind: 'sell' | 'kitchen' | 'orders';
+  /** The department, not a kind. Passing a kind meant a screen could hand a
+   *  tailor the kitchen's cards by passing the wrong value — the screen should
+   *  not be able to make that mistake at all. */
+  dept: DepartmentConfig;
   category: string;
   products: Product[];
   sales: Array<{ id: string; timestamp: string; refunded?: boolean; voided?: boolean; items: Array<{ productId: string; qty: number; lineTotal?: number }> }>;
@@ -44,7 +48,12 @@ export interface ActionInputs {
 const MAX_CARDS = 3;
 
 export function buildActionCards(input: ActionInputs): ActionCard[] {
-  const { kind, category, products, sales, productionRegisters = [], wastageLogs = [], creditEats = [], formatCurrency } = input;
+  const { dept, category, products, sales, productionRegisters = [], wastageLogs = [], creditEats = [], formatCurrency } = input;
+  const kind = dept.kind;
+  // The words come from the shape's own vocabulary. They used to be written
+  // again here, which meant a second copy of "tray" existed outside the place
+  // that owns it — so a guard could pass while the card still said it.
+  const words = TRADE_VOCABULARY[kind];
   const cards: ActionCard[] = [];
   const today = todayLocalKey();
   const yesterday = prevDayKey(today);
@@ -63,7 +72,7 @@ export function buildActionCards(input: ActionInputs): ActionCard[] {
       const total = leftovers.reduce((sum, r) => sum + r.leftover, 0);
       cards.push({
         id: 'carry-tray',
-        title: `${total} still on the tray from yesterday`,
+        title: `${total} still ${words.leftover.toLowerCase()} from yesterday`,
         detail: leftovers.length === 1
           ? `${leftovers[0].productName} — sell what's left before making more`
           : `Includes ${leftovers[0].productName} and ${leftovers.length - 1} more — make less today`,

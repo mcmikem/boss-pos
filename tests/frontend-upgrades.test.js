@@ -1303,3 +1303,17 @@ test('a screen asks the shop profile instead of deciding for itself', () => {
   const trayWords = (registry.match(/On the tray/g) || []).length;
   assert.ok(trayWords <= 3, `the tray phrase appears ${trayWords} times in the registry`);
 });
+
+test('a card means "today, one tap from done" — and belongs to one trade only', () => {
+  const actions = read('src/components/DepartmentActions.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // The last seam: a screen passed a KIND, so it could hand a tailor the
+  // kitchen's cards by passing the wrong value. It passes the department now.
+  assert.match(actions, /dept: DepartmentConfig;/);
+  assert.equal(/kind: 'sell' \| 'kitchen' \| 'orders';/.test(actions), false);
+  assert.match(actions, /const kind = dept\.kind;/);
+  // And the tray words exist in exactly one place: the kitchen vocabulary.
+  assert.match(actions, /const words = TRADE_VOCABULARY\[kind\];/);
+  assert.equal(/still on the tray/.test(actions), false, 'the tray phrase must not be retyped here');
+  assert.match(actions, /still \$\{words\.leftover\.toLowerCase\(\)\} from yesterday/);
+  assert.equal(read('src/components/Sales.tsx').includes('kind: dept.kind,'), false);
+});
