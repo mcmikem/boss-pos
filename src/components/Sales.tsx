@@ -8,7 +8,7 @@ import {
   CalendarCheck, Wrench, FileText, Star, Footprints, Ellipsis, Sunrise, Printer, Split, Flame,
   PauseCircle
 } from 'lucide-react';
-import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult, CreditEat } from '../types';
+import { Product, Sale, SaleItem, Expense, Quote, StoreSettings, ProductionRegister, WastageLog, SplitTender, Booking, RepairJob, SaleSaveResult, CreditEat, IngredientSource } from '../types';
 import { nextOrderNumber, quoteApi, bookingApi, repairJobApi, productionPlanApi } from '../api';
 import { reconcileCartPrices } from '../utils/cart';
 import { isLiveSale } from '../utils/saleStatus';
@@ -145,7 +145,7 @@ interface SalesProps {
   // Money set aside at close for tomorrow's ingredients. The kitchen spends it
   // as batches are logged, and asks for a top-up when a day needs more.
   ingredientBudgetToday?: number;
-  onRecordIngredientTopUp?: (amount: number, reason: string) => void;
+  onRecordIngredientTopUp?: (amount: number, source: IngredientSource) => void;
   // Blind cashier close: Eatery money figures render masked.
   hideMoney?: boolean;
   simple?: boolean;
@@ -587,23 +587,16 @@ export default function Sales({
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
   const [checkoutState, setCheckoutState] = useState<'idle' | 'saving' | 'queued' | 'saved' | 'error'>('idle');
   const [pendingRecovery, setPendingRecovery] = useState<Sale | null>(() => loadPendingSale());
-  // A batch that costs more than the set-aside ingredient money: ask where the
-  // extra came from and record it, rather than silently overspending the drawer.
-  const requestIngredientTopUp = async (shortfall: number) => {
+  // A batch that costs more than the set-aside ingredient money has to say
+  // WHERE the extra came from. That question is now asked inside the batch form
+  // itself, as three buttons, because the answer decides the source the expense
+  // is written with — "drawer" and the phone line are a label, owner money is a
+  // real hand-over. It used to be a free-text note here, which meant the answer
+  // could be a sentence and still never reach the books.
+  const requestIngredientTopUp = async (shortfall: number, source: IngredientSource) => {
     const missing = Math.max(0, Math.round(shortfall));
-    const raw = await promptDialog({
-      title: 'Need more ingredient money',
-      message: missing > 0
-        ? `This batch needs ${formatCurrency(missing)} more than is set aside. Where is the extra money coming from?`
-        : 'The ingredient money set aside is used up. Where is the extra money coming from?',
-      placeholder: 'e.g. 20,000 added from the owner, or topped up on float',
-      inputMode: 'text',
-      confirmLabel: 'Record it',
-    });
-    if (raw === null) return;
-    const note = raw.trim();
-    if (!note) { triggerToast('Say where the money came from', 'error'); return; }
-    if (onRecordIngredientTopUp) onRecordIngredientTopUp(missing, note);
+    if (missing <= 0) return;
+    await onRecordIngredientTopUp?.(missing, source);
   };
   useEffect(() => {
     let active = true;

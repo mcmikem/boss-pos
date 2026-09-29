@@ -6,7 +6,7 @@
 // Drinks lines with a recipe) are made here.
 import { useEffect, useMemo, useState } from 'react';
 import { ChefHat, Trash2, ArrowRight, Check } from 'lucide-react';
-import type { Expense, Product, ProductionRegister, RecipeIngredient, Sale, WastageLog } from '../types';
+import type { Expense, IngredientSource, Product, ProductionRegister, RecipeIngredient, Sale, WastageLog } from '../types';
 import { middayStamp, todayLocalKey } from '../utils/dates';
 import { leftoverFor, prevDayKey } from '../utils/cashflow';
 import { confirmDialog } from './Dialog';
@@ -36,7 +36,10 @@ interface MorningProductionProps {
   // Draft money set aside at close for tomorrow's ingredients. Logging today's
   // batch spends it, so the kitchen can see what is left to work with.
   availableBudget?: number;
-  onRequestTopUp?: (amount: number) => void;
+  /** The batch costs more than was set aside. The cook says where the extra
+   *  money came from, and that is the only way the day reconciles honestly:
+   *  the drawer, the phone line, or the owner putting money in. */
+  onRequestTopUp?: (shortfall: number, source: IngredientSource) => void;
   // What last evening's close committed the kitchen to make. Shown first so
   // the batch starts from the plan, not from memory.
   plannedLines?: Array<{ productId: string; productName: string; batchQty: number; totalCost: number }>;
@@ -45,6 +48,12 @@ interface MorningProductionProps {
 // Recipe line plus what was actually bought for this batch. `boughtQty` starts
 // at the recipe need and stays user-owned once touched; prices always flow.
 type DraftIngredient = RecipeIngredient & { boughtQty: number; boughtTouched?: boolean };
+
+/** Where overspend money came from. 'owner' is the only one that MOVES money:
+ *  the drawer and the phone line are already the shop's, so they are a label on
+ *  the expense. A claim of owner money is real money in, and the owner confirms
+ *  receipt of it like any other hand-over. */
+
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -68,6 +77,8 @@ export default function MorningProduction({
   // and stay editable. Editing a price here also writes back to the recipe, so
   // the next morning starts from what was actually paid.
   const [draftIngredients, setDraftIngredients] = useState<DraftIngredient[] | null>(null);
+  // Only asked when the batch is over the money set aside.
+  const [topUpSource, setTopUpSource] = useState<IngredientSource | null>(null);
   const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
   const [recordExpense, setRecordExpense] = useState(true);
   const [savingBatch, setSavingBatch] = useState(false);
@@ -262,7 +273,7 @@ export default function MorningProduction({
         description: `Ingredients · ${qty} × ${item}`,
         amount: spend,
         category: scopedCategory,
-        source: 'drawer',
+        source: topUpSource === 'momo' ? 'momo' : 'drawer',
         ...(items && items.length ? { items } : {}),
         ...(prod ? { linkedProductId: prod.id, linkedProductName: prod.name } : {}),
       });
@@ -300,8 +311,14 @@ export default function MorningProduction({
         'success',
       );
     }
-    if (spend > 0 && onRequestTopUp && availableBudget != null && spend > availableBudget) {
-      onRequestTopUp(spend - availableBudget);
+    if (spend > 0 && availableBudget != null && spend > availableBudget) {
+      // No source, no answer. Guessing "float" is how money ended up claimed as
+      // phone float that never touched the phone.
+      if (!topUpSource) {
+        triggerToast('This batch is over the money set aside — choose where the extra is coming from', 'error');
+        return;
+      }
+      onRequestTopUp?.(spend - availableBudget, topUpSource);
     }
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
@@ -467,16 +484,52 @@ export default function MorningProduction({
                 <span className="text-xs text-zinc-500 font-bold"> left of {formatCurrency(availableBudget)}</span>
               </p>
             </div>
-            {availableBudget - todayCost <= 0 && onRequestTopUp && (
-              <button onClick={() => onRequestTopUp(0)}
-                className="shrink-0 h-10 px-3 bg-rose-950/40 border border-rose-600/40 text-rose-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-rose-950/60 active:scale-95 transition-all cursor-pointer">
-                Need more
-              </button>
+            {availableBudget - todayCost <= 0 && (
+              <span className="shrink-0 h-10 px-3 flex items-center rounded-xl border border-rose-600/30 text-rose-300/80 text-[10px] font-black uppercase tracking-wider">
+                All used
+              </span>
             )}
           </div>
           <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1.5">
             This was set aside at close for tomorrow's production. Logging a batch spends it.
           </p>
+        </div>
+      )}
+
+      {/* Over the money set aside: the cook says where the extra is coming from,
+          here, while they can still see the numbers that made it overspend. A
+          drawer and a phone line are a label on the expense; owner money is real
+          money in, and the owner confirms receipt of it. */}
+      {availableBudget != null && formSpend > availableBudget && formSpend > 0 && (
+        <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-3 space-y-2">
+          <p className="text-[11px] font-black text-amber-200 uppercase tracking-widest">
+            This batch is {formatCurrency(formSpend - availableBudget)} over the money set aside
+          </p>
+          <p className="text-[10px] text-zinc-400 font-medium leading-snug">
+            Where is that extra money coming from? The batch will not save until this is answered.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {([
+              { key: 'drawer' as const, label: 'From the drawer', hint: 'Cash already in the till' },
+              { key: 'momo' as const, label: 'From the phone line', hint: 'Business MoMo float' },
+              { key: 'owner' as const, label: 'Owner gave it to me', hint: 'They confirm it on their phone' },
+            ]).map(o2 => (
+              <button key={o2.key} onClick={() => setTopUpSource(o2.key)} aria-pressed={topUpSource === o2.key}
+                className={`text-left rounded-xl border px-3 py-2 min-h-[44px] transition-all active:scale-[0.99] cursor-pointer ${
+                  topUpSource === o2.key ? 'border-amber-400 bg-amber-400/15' : 'border-white/10 bg-[#0A0A0A] hover:border-white/25'
+                }`}>
+                <span className={`block text-[11px] font-black uppercase tracking-wider ${topUpSource === o2.key ? 'text-amber-200' : 'text-zinc-300'}`}>
+                  {o2.label}
+                </span>
+                <span className="block text-[10px] text-zinc-500 font-medium leading-snug mt-0.5">{o2.hint}</span>
+              </button>
+            ))}
+          </div>
+          {topUpSource === 'owner' && (
+            <p className="text-[10px] text-amber-200/90 font-bold leading-snug">
+              The owner will be asked to confirm they handed this over. Until they do, it reads as not yet confirmed.
+            </p>
+          )}
         </div>
       )}
 

@@ -545,6 +545,11 @@ export interface EfrisConfig {
   providerBase: string;
 }
 
+/** Where overspend ingredient money came from. 'drawer' and 'momo' are a LABEL
+ *  on the expense — the money is already the shop's. 'owner' is real money in and
+ *  the owner confirms receipt, like any other hand-over. */
+export type IngredientSource = 'drawer' | 'momo' | 'owner';
+
 export interface StoreSettings {
   /** Cashiers may record that cash was handed to a NAMED manager, who confirms
    *  receipt. Not a permission to move money: float, owner and bank stay

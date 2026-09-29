@@ -507,18 +507,25 @@ test('a category the shop has never used is registered, and a typo is caught', (
   assert.match(server, /suggestions: \[nearMiss\]/);
 });
 
-test('an ingredient top-up that was refused cannot inflate tomorrow\u2019s float', () => {
+test('an ingredient top-up that was refused cannot inflate tomorrow\'s float', () => {
   const app = read('src/App.tsx');
-  const topUp = app.match(/const handleIngredientTopUp = [\s\S]*?\n  \};/)?.[0] || '';
-  // The refusal answer used to be discarded, so the till added money the server
-  // never recorded — and that inflated float drove every batch budget.
-  assert.match(topUp, /const recorded = await handleAddMomoTransfer\(\{/);
-  assert.match(topUp, /if \(recorded === false\) return;/);
-  assert.ok(topUp.indexOf('if (recorded === false) return;') < topUp.indexOf('eodCapital:'),
-    'the float may only grow once the movement is on the server');
-  // One success toast for one action, not two.
+  const topUp = app.match(/const handleIngredientTopUp[\s\S]*?\n  \};\n/)?.[0] || '';
+  // Only OWNER money moves. A drawer and the phone line are already the shop's,
+  // so they are a label on the expense and no movement is invented for them.
+  assert.match(topUp, /if \(source === 'owner'\) \{/);
+  assert.equal((topUp.match(/handleAddMomoTransfer/g) || []).length, 1);
+  assert.match(topUp, /direction: 'in'/);
+  // And a refused write must not inflate the set-aside either — which is what
+  // made every later ingredient budget on the screen too high.
+  assert.match(topUp, /if \(recorded === false\) \{/);
+  assert.ok(topUp.indexOf('if (recorded === false)') < topUp.indexOf('eodCapital:'),
+    'a refused hand-over must return before the float moves');
+  // The fabricated shilling is gone: no "|| 1", and a zero shortfall is a no-op.
+  assert.equal(/amt \|\| 1/.test(topUp), false);
+  assert.match(topUp, /if \(amt <= 0\) return;/);
   assert.equal(/triggerToast\('Ingredient top-up recorded'/.test(topUp), false);
 });
+
 
 test('renaming a spend category never rewrites history', () => {
   const app = read('src/App.tsx');
@@ -1352,4 +1359,25 @@ test('money given to a manager is not money on the phone line', () => {
   assert.match(cash, /managerOut\?: number;/);
   // float is still the phone line, so the two cannot be confused again.
   assert.match(cash, /else d\.float \+= t\.amount \|\| 0;/);
+});
+
+test('an over-budget batch cannot save without saying where the money came from', () => {
+  const mp = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // It used to ask as a free-text note, so the answer could be a sentence and
+  // still never reach the books — and it assumed phone float either way.
+  assert.match(mp, /choose where the extra is coming from/);
+  assert.match(mp, /if \(!topUpSource\) \{[\s\S]*?return;/);
+  assert.match(mp, /onRequestTopUp\?\.\(spend - availableBudget, topUpSource\)/);
+  // The expense is written with the answer, so float maths is right first time
+  // instead of being corrected after the fact.
+  assert.match(mp, /source: topUpSource === 'momo' \? 'momo' : 'drawer'/);
+  // And the old prose question is gone, so there is only one question.
+  assert.equal(/Where is the extra money coming from\?'/.test(sales), false);
+  assert.equal(/promptDialog\(\{[\s\S]{0,400}Need more ingredient money/.test(sales), false);
+  assert.match(sales, /onRecordIngredientTopUp\?\.\(missing, source\)/);
+  // The three answers are the shop's words.
+  assert.match(mp, /label: 'From the drawer'/);
+  assert.match(mp, /label: 'From the phone line'/);
+  assert.match(mp, /label: 'Owner gave it to me'/);
 });

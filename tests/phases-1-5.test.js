@@ -104,7 +104,14 @@ test('production budget is shown and shortfalls are recorded, not hidden', () =>
   const mp = read('src/components/MorningProduction.tsx');
   assert.match(mp, /Ingredient money set aside/);
   assert.match(mp, /onRequestTopUp/);
-  assert.match(mp, /Need more/);
+  // "Need more" used to fire with zero, which the server turned into a real
+  // UGX 1 money-out. The budget now simply reads All used, and an overspend is
+  // answered where the cook can see it.
+  assert.equal(/Need more/.test(mp), false);
+  assert.match(mp, /All used/);
+  assert.match(mp, /From the drawer/);
+  assert.match(mp, /From the phone line/);
+  assert.match(mp, /Owner gave it to me/);
   assert.match(app, /ingredientBudgetToday/);
   assert.match(app, /handleIngredientTopUp/);
 });

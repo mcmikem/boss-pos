@@ -2500,30 +2500,39 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // A batch that overspends the set-aside money still has to be funded. Record
   // the top-up as a real movement (to float / owner / manager) so the drawer
   // reconciliation stays honest instead of quietly going negative.
-  const handleIngredientTopUp = async (amount: number, reason: string) => {
+  // Over the money set aside, the cook said where it is coming from. Drawer and
+  // phone line are already the shop's, so they are a LABEL on the expense and
+  // nothing moves. Owner money is real money in, recorded as a hand-over the
+  // owner confirms — which is the one that used to be impossible and is why
+  // `reason` used to arrive as the word "undefined".
+  const handleIngredientTopUp = async (amount: number, source: 'drawer' | 'momo' | 'owner' = 'drawer') => {
     const amt = Math.max(0, Math.round(amount));
+    if (amt <= 0) return;
     const who = activeStaff?.name || staffName || 'Till';
-    // handleAddMomoTransfer resolves false when the server refused it, and that
-    // answer used to be thrown away: the till then added the money to tomorrow's
-    // float anyway and saved it, so the kitchen believed it had ingredient money
-    // the server never recorded — and that inflated float drove every batch
-    // budget on the screen.
-    const recorded = await handleAddMomoTransfer({
-      id: `mt-topup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      category: 'Eatery',
-      amount: amt || 1,
-      comment: `Ingredient top-up — ${reason}`.slice(0, 200),
-      createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
-      to: 'float',
-      sentBy: who,
-    });
-    if (recorded === false) return;
-    if (amt > 0) {
-      setSettings(prev => ({
-        ...prev,
-        eodCapital: { ...(prev.eodCapital || {}), Eatery: Math.max(0, Number(prev.eodCapital?.Eatery || 0) + amt) },
-      }));
+    if (source === 'owner') {
+      const recorded = await handleAddMomoTransfer({
+        id: `mt-ing-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        category: 'Eatery',
+        amount: amt,
+        comment: `Ingredients — owner handed this over`,
+        createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
+        to: 'float',
+        direction: 'in',
+        recipientName: settings.ownerName || 'Owner',
+        recipientRole: 'owner',
+        sentBy: who,
+      } as never);
+      if (recorded === false) {
+        triggerToast("The owner's money was refused — record the batch, then retry", 'error');
+        return;
+      }
     }
+    // Either way the kitchen now has this much more committed to ingredients, so
+    // tomorrow's budget is honest rather than quietly short.
+    setSettings(prev => ({
+      ...prev,
+      eodCapital: { ...(prev.eodCapital || {}), Eatery: Math.max(0, Number(prev.eodCapital?.Eatery || 0) + amt) },
+    }));
   };
 
   // Resolves false when the server refused it, so a caller that bundled this
