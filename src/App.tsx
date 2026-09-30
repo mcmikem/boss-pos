@@ -2923,7 +2923,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (/timeout|fetch failed|Failed to fetch|Load failed|NetworkError/i.test(String(e?.message || ''))) {
       return 'No connection — the payment is queued and will sync when you are back online';
     }
-    return `Payment not recorded${e?.message ? ` \u2014 ${String(e.message).slice(0, 80)}` : ''}`;
+    // A 500 used to arrive as "Something went wrong on the server" with nothing
+    // to act on and nowhere to look. The server sends a trace id with every
+    // unhandled error; carrying it on screen turns "something broke" into one
+    // line she can read down the phone.
+    const trace = (err as { traceId?: string })?.traceId;
+    return `Payment not recorded${e?.message ? ` \u2014 ${String(e.message).slice(0, 80)}` : ''}${trace ? ` \u00b7 ref ${trace}` : ''}`;
   };
 
   // Answers the same way the book-line path does: true only once the server
