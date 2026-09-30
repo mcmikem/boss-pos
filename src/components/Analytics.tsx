@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { Sale, Expense, Product, Supplier, SupplierPrice, CreditPayment, StoreSettings, DesignOrder, SaleItem, MomoTransfer, CreditEat } from '../types';
 import { t } from '../utils/i18n';
-import { supplierDrift } from '../utils/cashflow';
+import { supplierDrift, moneyOutByCategory, tenderByCategory, drawerExpensesByCategory, getOpeningCapital, computeDayCash, type DayCashInput } from '../utils/cashflow';
 import { applySupplierPricesToRecipes } from '../utils/recipe';
 import CreditsLedger from './CreditsLedger';
 import Customers from './Customers';
@@ -31,6 +31,9 @@ interface AnalyticsProps {
   suppliers: Supplier[];
   supplierPrices?: SupplierPrice[];
   creditPayments: CreditPayment[];
+  // Yesterday's closing per department is the float the day started with. It
+  // lives in settings, so the report takes it rather than guessing.
+  eodCapital?: Record<string, number>;
   expenseCategories: string[];
   onAddExpense: (expense: Expense) => void | boolean | Promise<void | boolean>;
   onDeleteExpense: (expenseId: string) => void | boolean | Promise<void | boolean>;
@@ -98,6 +101,7 @@ export default function Analytics({
   settings,
   isManager = false,
   onSalesChanged,
+  eodCapital = {},
 }: AnalyticsProps) {
   const [timeFilter, setTimeFilter] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
   const [chartMetric, setChartMetric] = useState<'revenue' | 'profit'>('revenue');
@@ -591,8 +595,52 @@ const colorsMap: { [key: string]: string } = {
       .sort((a, b) => b.total - a.total);
   }, [sales, timeRange, branchFilter]);
 
+  // Item 12: one sentence saying what actually changed today. The report was a
+  // wall of figures and she had to work out the day herself; the numbers are
+  // still all below, but the answer comes first.
+  const changedToday = useMemo(() => {
+    const key = todayLocalKey();
+    const live = (sales || []).filter(s => isLiveSale(s));
+    const onDay = (ts: string) => localDayKey(ts) === key;
+    const sold = live.filter(s => !s.refunded && onDay(s.timestamp));
+    const refunded = live.filter(s => s.refunded && onDay(s.refundedAt || s.timestamp));
+    const spend = (expenses || []).filter(e => onDay(e.timestamp));
+    const sum = (xs: Sale[]) => xs.reduce((a, s) => a + (s.total || 0), 0);
+    const spent = spend.reduce((a, e) => a + (e.amount || 0), 0);
+    // Money taken in that nobody has said where it went.
+    const cats = Array.from(new Set((products || []).map(p => p.category).filter(Boolean))) as string[];
+    let collected = 0; let unassigned = 0;
+    for (const cat of cats.length ? cats : ['General']) {
+      const tender = tenderByCategory(sales || [], products || [], key)[cat] || { cash: 0, momo: 0 };
+      const moved = moneyOutByCategory(momoTransfers || [], key)[cat] || { float: 0, cash: 0, owner: 0, bank: 0 };
+      const drawerSpend = drawerExpensesByCategory(expenses || [], key)[cat] || 0;
+      const opening = getOpeningCapital(key, cat, eodCapital || {});
+      const r = computeDayCash({
+        category: cat, dayKey: key,
+        openingCapital: opening, closingCapital: 0,
+        collected: (tender.cash || 0) + (tender.momo || 0),
+        phoneCollected: tender.momo || 0, drawerExpenses: drawerSpend,
+        floatOut: moved.float || 0, cashOut: moved.cash || 0, ownerOut: moved.owner || 0, bankOut: moved.bank || 0,
+      } as DayCashInput);
+      collected += r.collected || 0;
+      unassigned += Math.max(0, r.unassigned || 0);
+    }
+    const bits: string[] = [];
+    bits.push(sold.length ? `${sold.length} sale${sold.length === 1 ? '' : 's'}, ${formatCurrency(sum(sold))} in` : 'nothing sold yet');
+    if (refunded.length) bits.push(`${refunded.length} refund${refunded.length === 1 ? '' : 's'}, ${formatCurrency(sum(refunded))} back out`);
+    if (spend.length) bits.push(`${spend.length} expense${spend.length === 1 ? '' : 's'}, ${formatCurrency(spent)} out`);
+    if (unassigned > 0.5) bits.push(`${formatCurrency(unassigned)} not yet assigned`);
+    return bits.join(' · ');
+  }, [sales, expenses, products, momoTransfers, eodCapital, formatCurrency]);
+
   return (
     <div className="space-y-6 animate-fade-in pb-4" id="analytics-tab-content">
+      {!showSuppliers && (
+        <p data-testid="what-changed" className="text-[13px] sm:text-sm text-zinc-200 font-bold leading-snug bg-zinc-950/60 border border-white/5 rounded-xl px-3 py-2.5">
+          <span className="text-gold-brand uppercase tracking-widest text-[10px] font-black">Today</span>{' '}
+          <span className="text-zinc-300">{changedToday}</span>
+        </p>
+      )}
       <section className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 sm:gap-4">
         <div className="min-w-0">
           <h2 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight font-display truncate">

@@ -60,7 +60,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         onClick={handleClick}
         disabled={isOutOfStock && !onOutOfStock}
         aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${formatCurrency(product.price)}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
-        className={`w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 p-4 rounded-xl transition-all text-left cursor-pointer active:scale-[0.98] min-h-[64px] ${
+        className={`w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 hover:border-gold-brand/40 p-4 rounded-xl transition-all text-left cursor-pointer active:scale-[0.98] min-h-[76px] ${
           isOutOfStock ? (onOutOfStock ? 'opacity-70' : 'opacity-30') : ''
         } ${inCart ? 'border-gold-brand/40 bg-gold-brand/5' : ''}`}
       >
@@ -88,7 +88,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         onClick={handleClick}
         disabled={isOutOfStock && !onOutOfStock}
         aria-label={isOutOfStock ? `${product.name}, sold out${onOutOfStock ? ', open recovery options' : ''}` : `Add ${product.name} to cart, ${priceLabel}${inCart ? `, ${cartQtyLabel} already in cart` : ''}`}
-        className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col text-left focus-visible:outline-2 focus-visible:outline-gold-brand w-full min-h-[64px] ${
+        className={`bg-[#141414] border rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-all flex flex-col text-left focus-visible:outline-2 focus-visible:outline-gold-brand w-full min-h-[76px] ${
           isOutOfStock
             ? 'opacity-40 border-dashed border-rose-800/40'
             : inCart
@@ -96,7 +96,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             : 'border-white/5 hover:border-gold-brand/30'
         }`}
       >
-        <div className="relative w-full" style={{ paddingTop: '72%' }}>
+        <div className="relative w-full" style={{ paddingTop: '82%' }}>
           {product.imageUrl ? (
             <img referrerPolicy="no-referrer" src={product.imageUrl} alt=""
               className="absolute inset-0 w-full h-full object-cover"
@@ -162,7 +162,7 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
     >
       {/* 4:3 photo (not square): price already lives on the image, so a
           shorter card fits more items per screen and survives big keyboards. */}
-      <div className="relative w-full" style={{ paddingTop: '72%', backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
+      <div className="relative w-full" style={{ paddingTop: '82%', backgroundImage: `linear-gradient(to bottom right, ${catVis.gradient.replace(/from-|via-|to-|\/.*/g, '').trim()})` }}>
         {product.imageUrl ? (
           <img referrerPolicy="no-referrer" src={product.imageUrl} alt={product.name}
             className="absolute inset-0 w-full h-full object-cover"
@@ -195,13 +195,13 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
         )}
       </div>
 
-      <div className="p-2 flex flex-col gap-0.5 flex-1 min-h-0">
+      <div className="p-2.5 flex flex-col gap-0.5 flex-1 min-h-0">
         {/* Mistake 7 fix: title stands out without shouting — sentence case,
             semibold (not black/uppercase), tight leading for easy scanning. */}
         {/* Names first (scanning), price second: new users look for the item,
             not the number. */}
         <div className="flex items-start gap-1">
-          <h3 className="flex-1 min-w-0 text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
+          <h3 className="flex-1 min-w-0 text-[14px] sm:text-base font-semibold text-zinc-100 leading-snug line-clamp-2">
             {product.name}
           </h3>
           {/* Pin lives in the footer, not on the photo. On the photo it was a

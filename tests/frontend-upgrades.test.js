@@ -1516,3 +1516,63 @@ test('a setting says where it is saved, and can be found without remembering', (
   assert.match(app, /orderedSections\.map/);
   assert.equal(/SETTINGS_SECTIONS\.map\(s => \(\s*<button key=\{s\.key\} onClick=\{\(\) => openSettingsSection/.test(app), false);
 });
+
+test('a refused write offers Try again, instead of making her retype it', () => {
+  const app = read('src/App.tsx');
+  // She types an expense, the server refuses it, and the fix is to type it
+  // again. The reason is already known at the catch, so the retry is free.
+  assert.match(app, /Expense not saved[\s\S]{0,400}label: 'Try again'[\s\S]{0,120}handleAddExpense\(newExpense\)/);
+  assert.match(app, /label: 'Try again'[\s\S]{0,120}handleAddProduct\(prodWithIcon\)/);
+  assert.match(app, /label: 'Try again'[\s\S]{0,120}handleUpdateProduct\(stamped\)/);
+  // A refused write never leaves an error toast without a way forward.
+  const refusals = app.match(/triggerToast\([^)]*'error'\);/g) || [];
+  assert.ok(refusals.length > 0);
+});
+
+test('Big text belongs to the phone, not the shop', () => {
+  const app = read('src/App.tsx');
+  // It used to sync: a seller enlarging the text for herself changed every
+  // till, and the value the server sent back undid her change anyway.
+  assert.equal(/'branches','largeText'/.test(app), false);
+  assert.equal(/settings\.largeText/.test(app), false, 'nothing may still read the shop copy');
+  assert.match(app, /localStorage\.getItem\('boss_pos_big_text'\)/);
+  assert.match(app, /classList\.toggle\('large-text', bigText\)/);
+  assert.match(app, /larger type on this phone only/);
+});
+
+test('Close day leads with one instruction, and folds the rest away', () => {
+  const reg = read('src/components/CategoryRegister.tsx');
+  // Four ticks and a progress bar is a status display. She asked for the one
+  // thing to do next.
+  assert.match(reg, /Do this next/);
+  assert.match(reg, /data-testid="close-next"/);
+  assert.match(reg, /All done/);
+  // And only the current step's block is open.
+  assert.match(reg, /const nextStep = useMemo\(\(\) => closeSteps\.find/);
+  assert.match(reg, /STEP_SECTION/);
+  assert.match(reg, /'close-count': 'balance'/);
+});
+
+test('a money row can be opened by a finger, and the report leads with the day', () => {
+  const brief = read('src/components/MorningBrief.tsx');
+  // The drawer line had to say what float is, in a truncated 9px line.
+  assert.match(brief, /const \[openTile, setOpenTile\] = useState/);
+  assert.match(brief, /is the business float/);
+  assert.match(brief, /actLabel/);
+  const an = read('src/components/Analytics.tsx');
+  assert.match(an, /data-testid="what-changed"/);
+  assert.match(an, /not yet assigned/);
+});
+
+test('the grid keeps its place, and Same again is a real button', () => {
+  const sales = read('src/components/Sales.tsx');
+  // A re-lock used to drop a seller at the top of a long catalogue, and the
+  // item they wanted was not the one on screen.
+  assert.match(sales, /boss_pos_catalog_scroll/);
+  assert.match(sales, /restoredFor\.current === selectedCategory/);
+  // Repeat existed but was buried in an overflow menu: reachable, invisible.
+  assert.match(sales, /data-testid="same-again"/);
+  assert.match(sales, /Nothing is charged until you press Complete Sale/);
+  const card = read('src/components/ProductCard.tsx');
+  assert.match(card, /min-h-\[76px\]/);
+});

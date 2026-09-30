@@ -74,6 +74,8 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
   }, []);
   // Minimised by default: on small phones the tiles push "today in…" below
   // the fold, so the card opens as one greeting line. Choice sticks per device.
+  // Which money row is open. The drawer line is the one that has to be right.
+  const [openTile, setOpenTile] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem('boss_pos_brief_collapsed');
@@ -185,6 +187,10 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       label: 'Still owed',
       value: formatCurrency(brief.owed),
       sub: brief.owed > 0 ? 'tap to collect' : 'books clear',
+      detail: brief.owed > 0
+        ? `${formatCurrency(brief.owed)} is owed to the shop on the credit book. It is not money in the drawer until it is collected.`
+        : 'Nothing is outstanding on the credit book.',
+      actLabel: 'Open the credit book',
       tone: brief.owed > 0 ? 'text-amber-300' : 'text-zinc-500',
       icon: <Users className="w-3.5 h-3.5 text-amber-400" />,
       act: () => onNavigate('registers'),
@@ -193,6 +199,10 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       label: 'Low stock',
       value: String(brief.low),
       sub: brief.low > 0 ? 'tap to restock' : 'shelves ok',
+      detail: brief.low > 0
+        ? `${brief.low} item${brief.low === 1 ? ' is' : 's are'} at or below the reorder point. Buying more costs money, so it is a decision, not a warning to ignore.`
+        : 'Every item is above its reorder point.',
+      actLabel: 'Open stock',
       tone: brief.low > 0 ? 'text-rose-300' : 'text-zinc-500',
       icon: <PackageX className="w-3.5 h-3.5 text-rose-400" />,
       act: () => onNavigate('inventory'),
@@ -205,6 +215,12 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         : lastSyncedAt
           ? `all synced ${Math.max(0, Math.round((Date.now() - lastSyncedAt) / 60000))}m ago`
           : 'all synced',
+      detail: pendingCount > 0
+        ? `${pendingCount} change${pendingCount === 1 ? ' is' : 's are'} on this phone that the server has not taken yet. They are safe — they leave the phone as soon as there is a network.`
+        : lastSyncedAt
+          ? `Everything is saved. Last synced ${Math.max(0, Math.round((Date.now() - lastSyncedAt) / 60000))} minutes ago.`
+          : 'Everything is saved.',
+      actLabel: 'Sync now',
       tone: pendingCount > 0 ? 'text-amber-300' : 'text-zinc-500',
       icon: <RefreshCw className="w-3.5 h-3.5 text-amber-400" />,
       act: onSync,
@@ -215,6 +231,8 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         ? `${formatCurrency(Math.abs(Math.round(brief.inDrawers)))} short`
         : formatCurrency(Math.round(brief.inDrawers)),
       sub: `cash ${formatCurrency(Math.round(brief.drawerCash))} • phone ${formatCurrency(Math.round(brief.phoneCash))}${brief.phoneFloat > 0 ? ` (float ${formatCurrency(Math.round(brief.phoneFloat))})` : ''}${brief.inDrawers < 0 ? ' • over-moved' : ''}`,
+      detail: `Cash kept in the drawer: ${formatCurrency(Math.round(brief.drawerCash))}. Money on the phone: ${formatCurrency(Math.round(brief.phoneCash))}.${brief.phoneFloat > 0 ? ` Of that, ${formatCurrency(Math.round(brief.phoneFloat))} is the business float — the MTN/Airtel line, not your own hand. It stays in the business.` : ''}${brief.inDrawers < 0 ? ' This is more than you hold, so money has been moved out beyond what the drawer explains — check the hand-overs before you close.' : ''}`,
+      actLabel: 'Go to close day',
       tone: brief.inDrawers < 0 ? 'text-rose-300' : 'text-cyan-300',
       icon: <Wallet className="w-3.5 h-3.5 text-cyan-400" />,
       act: () => onNavigate('registers'),
@@ -356,14 +374,31 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {tiles.map(t => (
-          <button key={t.label} onClick={t.act}
-            className="bg-zinc-950/60 border border-white/5 hover:border-gold-brand/40 rounded-xl p-3 text-left transition-all active:scale-95 cursor-pointer min-h-[76px]">
-            <span className="flex items-center gap-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">
-              {t.icon}{t.label}
-            </span>
-            <span className={`block text-base font-black font-display mt-1 tabular-nums ${t.tone}`}>{t.value}</span>
-            <span className="block text-[9px] text-zinc-600 font-bold mt-0.5 truncate">{t.sub}</span>
-          </button>
+          <div key={t.label}
+            className={`bg-zinc-950/60 border rounded-xl transition-all ${openTile === t.label ? 'border-gold-brand/40' : 'border-white/5'}`}>
+            {/* Item 11: the meaning was in a truncated 9px line and a tooltip
+                no finger can reach. Tap once to see it; the row grows rather
+                than hiding it behind a long-press. */}
+            <button onClick={() => setOpenTile(openTile === t.label ? null : t.label)}
+              aria-expanded={openTile === t.label}
+              className="w-full p-3 text-left cursor-pointer active:scale-[0.98] transition-transform min-h-[76px]">
+              <span className="flex items-center gap-1.5 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">
+                {t.icon}{t.label}
+                <ChevronDown className={`w-3 h-3 ml-auto text-zinc-600 transition-transform shrink-0 ${openTile === t.label ? 'rotate-180' : ''}`} />
+              </span>
+              <span className={`block text-base font-black font-display mt-1 tabular-nums ${t.tone}`}>{t.value}</span>
+              <span className={`block text-[9px] text-zinc-600 font-bold mt-0.5 ${openTile === t.label ? '' : 'truncate'}`}>{t.sub}</span>
+            </button>
+            {openTile === t.label && (
+              <div className="px-3 pb-3 -mt-1">
+                <p className="text-[11px] text-zinc-300 font-semibold leading-relaxed">{t.detail || t.sub}</p>
+                <button onClick={t.act}
+                  className="mt-2 w-full h-9 rounded-lg border border-gold-brand/40 bg-gold-brand/10 text-gold-brand text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all cursor-pointer">
+                  {t.actLabel}
+                </button>
+              </div>
+            )}
+          </div>
         ))}
       </div>
       {brief.expiring > 0 && (

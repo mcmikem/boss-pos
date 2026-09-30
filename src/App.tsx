@@ -163,7 +163,7 @@ function removeDeletedExpense(id: string): void {
 // stops background boot-pulls from overwriting unsaved local taps.
 const SETTINGS_SYNC_KEYS = new Set([
   'shopName','themeId','vibe','defaultPaymentMethod','dailyGoalNum','dailyGoalRevenue','loyaltyEveryN','loyaltyPct','discountPinAbove','commissionPct','receiptFooter','shopType','language','usdRate','momoFeePct','ownerPhone','communityGroupUrl',
-  'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','largeText','lockMinutes','features','ownerName','closeReminderLeadMin','closeReminderSound','closeSummaryAuto',
+  'categories','expenseCategories','showTailoring','showDesign','showBookings','showRepairs','sheetsUrl','eodCapital','branches','lockMinutes','features','ownerName','closeReminderLeadMin','closeReminderSound','closeSummaryAuto',
   'openTime','closeTime','closedDays','blindClose','closeNotifyOwner','cashierTabs','creditBookName',
 ]);
 function serializeSettings(s: StoreSettings): string {
@@ -512,7 +512,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     { id: 'rescue', door: 'security', label: 'Rescue PIN', text: 'a backup way into the till', scope: 'shop' },
     { id: 'lockmins', door: 'security', label: 'Lock the till after', text: 'minutes of no tapping', scope: 'shop' },
     { id: 'pin', door: 'security', label: 'The till PIN', text: 'opens the device without naming a person', scope: 'shop' },
-    { id: 'bigtext', door: 'look', label: 'Big text', text: 'larger type across every till', scope: 'shop' },
+    { id: 'bigtext', door: 'look', label: 'Big text', text: 'larger type on this phone only', scope: 'phone' },
     { id: 'theme', door: 'look', label: 'Colours', text: 'the till\'s brand colour', scope: 'shop' },
     { id: 'sheets', door: 'data', label: 'Google Sheet backup', text: 'a copy of every sale, every day', scope: 'shop' },
     { id: 'export', door: 'data', label: 'Export or back up', text: 'take the shop\'s data with you', scope: 'shop' },
@@ -548,9 +548,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     const cats = Array.isArray(settings.categories) ? settings.categories.filter(Boolean) : [];
     return Array.from(new Set(cats.filter(c => typeof c === 'string' && c.trim())));
   }, [settings.categories]);
+  // Item 19, first half: "Big text" is about the eyes holding the phone, so it
+  // belongs to the phone. It used to sync, which meant a seller enlarging the
+  // text for herself silently changed every till in the shop — and the value
+  // the server sends back would undo her anyway. The phone's own copy wins.
+  const [bigText, setBigText] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_big_text') === '1'; } catch { return false; }
+  });
   useEffect(() => {
-    try { document.documentElement.classList.toggle('large-text', !!settings.largeText); } catch {}
-  }, [settings.largeText]);
+    try { localStorage.setItem('boss_pos_big_text', bigText ? '1' : '0'); } catch {}
+    try { document.documentElement.classList.toggle('large-text', bigText); } catch {}
+  }, [bigText]);
   const [staffName, setStaffName] = useState<string>(() => {
     try { return localStorage.getItem('boss_pos_staff') || ''; } catch { return ''; }
   });
@@ -2066,7 +2074,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         : e?.code === 'IDENTITY_AMBIGUOUS'
           ? 'that barcode or IMEI belongs to another item'
           : (e?.message ? String(e.message).slice(0, 70) : 'not added');
-      triggerToast(`Not saved \u2014 ${why}`, 'error');
+      triggerToast(`Not saved \u2014 ${why}`, 'error', {
+        label: 'Try again',
+        onClick: () => { void handleAddProduct(prodWithIcon); },
+      });
       return false;
     }
   };
@@ -2127,7 +2138,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       const why = e?.code === 'MANAGER_REQUIRED'
         ? 'only a manager can change prices and stock'
         : (e?.message ? String(e.message).slice(0, 70) : 'changes reverted');
-      triggerToast(`Not saved \u2014 ${why}`, 'error');
+      triggerToast(`Not saved \u2014 ${why}`, 'error', {
+        label: 'Try again',
+        onClick: () => { void handleUpdateProduct(stamped); },
+      });
       return false;
     }
     return true;
@@ -2631,7 +2645,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             : e?.code === 'MANAGER_REQUIRED'
               ? 'only a manager can approve an expense'
               : (e?.message ? String(e.message).slice(0, 70) : 'not saved');
-      triggerToast(`Expense not saved \u2014 ${why}`, 'error');
+      triggerToast(`Expense not saved \u2014 ${why}`, 'error', {
+        label: 'Try again',
+        onClick: () => { void handleAddExpense(newExpense); },
+      });
     }
     })();
     inflightExpenses.current.set(newExpense.id, run);
@@ -3516,6 +3533,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             sales={sales} expenses={expenses} products={products}
             suppliers={suppliers} supplierPrices={supplierPrices}
             creditPayments={creditPayments}
+            eodCapital={settings.eodCapital}
             creditEats={creditEats}
             onPayCreditEat={handlePayCreditEat}
             momoTransfers={momoTransfers}
@@ -4106,10 +4124,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${simpleTill ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
                       {simpleTill ? 'Simple: On' : 'Simple: Off'}
                     </button>
-                    <button onClick={() => setSettings(prev => ({ ...prev, largeText: !prev.largeText }))}
-                      title="Bigger text and buttons for sunlight and tired eyes"
-                      className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${settings.largeText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
-                      {settings.largeText ? 'Big text: On' : 'Big text: Off'}
+                    <button onClick={() => setBigText(v => !v)}
+                      title="Bigger text and buttons on this phone, for sunlight and tired eyes. Other tills keep their own size."
+                      className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${bigText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                      {bigText ? 'Big text: On' : 'Big text: Off'}
                     </button>
                   </div>
                 </div>
@@ -4953,9 +4971,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     {theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
                   </button>
                   <button onClick={() => setSettings(prev => ({ ...prev, largeText: !prev.largeText }))}
-                    title="Bigger text and buttons for sunlight and tired eyes"
-                    className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${settings.largeText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
-                    {settings.largeText ? 'Big text: On' : 'Big text: Off'}
+                    title="Bigger text and buttons on this phone, for sunlight and tired eyes. Other tills keep their own size."
+                    className={`flex-1 h-10 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer border ${bigText ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-gold-brand/40'}`}>
+                    {bigText ? 'Big text: On' : 'Big text: Off'}
                   </button>
                 </div>
                 <button onClick={toggleChargeSound}

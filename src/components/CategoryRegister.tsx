@@ -154,6 +154,15 @@ function FlagCard({ f }: { f: TheftFlag }) {
 // (summary, money map, balance, credit book, losses, money-out) as one
 // endless scroll. Glance + balance open by default; the rest open themselves
 // when the wizard jumps to them. Choice sticks per day + department.
+// Which block of Close day actually holds each step. 'close-count' and
+// 'close-balance' are both the stock balance section.
+const STEP_SECTION: Record<string, 'glance' | 'balance' | 'credit' | 'losses' | 'money' | 'plan' | undefined> = {
+  'close-count': 'balance',
+  'close-balance': 'balance',
+  'close-money': 'money',
+  'close-glance': 'glance',
+};
+
 function CloseSection({ id, icon: Icon, title, hint, open, onToggle, action, children }: {
   id?: string;
   icon: (props: { className?: string }) => React.ReactNode;
@@ -491,6 +500,7 @@ export default function CategoryRegister({
   // Close ticks: the genuine closing sequence — business, leftovers, money,
   // cash count. Persisted per day + department. Tapping a row jumps there.
   const [closeTicks, setCloseTicks] = useState<Record<string, boolean>>({});
+  const [showAllCloseSteps, setShowAllCloseSteps] = useState(false);
   useEffect(() => {
     try { setCloseTicks(JSON.parse(localStorage.getItem(`boss_pos_closeticks_${todayStr()}::${selected}`) || '{}')); } catch { setCloseTicks({}); }
   }, [selected]);
@@ -1093,6 +1103,50 @@ export default function CategoryRegister({
     }
   };
 
+  // The close is four things in order. Listing them as four ticks with a bar
+  // made her read a status display to find out what to do, so the steps are
+  // computed here and the screen leads with the one that is next.
+  const closeSteps = useMemo(() => {
+    const cashDone = countedSelected != null;
+    const moneyDone = shopCash.unassigned <= 0.5;
+    return [
+      { key: 'cash', label: 'Count the drawer', hint: cashDone
+        ? `Counted ${fmt(countedSelected as number)}${smartCash.variance ? ` · ${smartCash.variance > 0 ? '+' : '−'}${fmt(Math.abs(smartCash.variance))}` : ' · matches'}`
+        : `Expected ${fmt(smartCash.expectedInDrawer)}`, target: 'close-count', auto: cashDone },
+      { key: 'money', label: 'Decide tonight’s money', hint: moneyDone
+        ? 'All assigned'
+        : `${fmt(shopCash.unassigned)} not yet assigned`, target: 'close-money', auto: moneyDone },
+      ...(showProduction ? [{ key: 'leftovers', label: 'Check leftovers & losses', hint: `${balanceRows.length} lines • ${totalAutoCarry} auto-carry`, target: 'close-balance', auto: false }] : []),
+      { key: 'business', label: 'Check today’s business', hint: `${fmt(collectedToday)} sold • ${openCredits.length} debt${openCredits.length !== 1 ? 's' : ''} open`, target: 'close-glance', auto: false },
+    ] as Array<{ key: string; label: string; hint: string; target: string; auto: boolean }>;
+  }, [countedSelected, shopCash.unassigned, smartCash, showProduction, balanceRows.length, totalAutoCarry, collectedToday, openCredits.length, fmt]);
+  const stepDone = (k: string, auto?: boolean) => (auto ? true : !!closeTicks[k]);
+  const nextStep = useMemo(() => closeSteps.find(s => !stepDone(s.key, s.auto)) || null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [closeSteps, closeTicks]);
+
+  // Item 9: only the current step's block is open. Four full screens of close
+  // is four chances to lose your place; the rest stay one line each, tappable.
+  useEffect(() => {
+    const target = nextStep?.target;
+    if (!target) return;
+    const key = STEP_SECTION[target];
+    if (!key) return;
+    setSecOpen(prev => {
+      // Everything else folds away. She reads one thing at a time and cannot
+      // lose her place four screens down.
+      const next = { ...prev };
+      let changed = false;
+      (Object.keys(next) as Array<keyof typeof next>).forEach(k => {
+        if (k !== key && next[k]) { next[k] = false; changed = true; }
+      });
+      if (!next[key]) { next[key] = true; changed = true; }
+      if (!changed) return prev;
+      try { localStorage.setItem(secStoreKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [nextStep?.target, secStoreKey]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -1330,30 +1384,39 @@ export default function CategoryRegister({
           Count and money tick themselves from real state, so the counter
           rewards progress instead of nagging. */}
       {(() => {
-        const cashDone = countedSelected != null;
-        const moneyDone = shopCash.unassigned <= 0.5;
-        const steps = [
-          { key: 'cash', label: 'Count the drawer', hint: cashDone
-            ? `Counted ${fmt(countedSelected as number)}${smartCash.variance ? ` · ${smartCash.variance > 0 ? '+' : '−'}${fmt(Math.abs(smartCash.variance))}` : ' · matches'}`
-            : `Expected ${fmt(smartCash.expectedInDrawer)}`, target: 'close-count', auto: cashDone },
-          { key: 'money', label: 'Decide tonight’s money', hint: moneyDone
-            ? 'All assigned'
-            : `${fmt(shopCash.unassigned)} not yet assigned`, target: 'close-money', auto: moneyDone },
-          ...(showProduction ? [{ key: 'leftovers', label: 'Check leftovers & losses', hint: `${balanceRows.length} lines • ${totalAutoCarry} auto-carry`, target: 'close-balance', auto: false }] : []),
-          { key: 'business', label: 'Check today’s business', hint: `${fmt(collectedToday)} sold • ${openCredits.length} debt${openCredits.length !== 1 ? 's' : ''} open`, target: 'close-glance', auto: false },
-        ];
+        const steps = closeSteps;
         const isDone = (s: { key: string; auto?: boolean }) => (s.auto ? true : !!closeTicks[s.key]);
         const done = steps.filter(isDone).length;
         return (
           <section id="close-steps" className="boss-card p-4 rounded-2xl border border-gold-brand/20 scroll-mt-20">
-            <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-black text-white uppercase tracking-widest font-display">Close the day — {selected}</h3>
-              <span className="text-[11px] font-black text-gold-brand tabular-nums">{done}/{steps.length}</span>
+              <button onClick={() => setShowAllCloseSteps(v => !v)} aria-expanded={showAllCloseSteps}
+                className="text-[10px] font-black uppercase tracking-wider text-zinc-500 hover:text-gold-brand cursor-pointer shrink-0">
+                {showAllCloseSteps ? 'Just the next one' : `All ${steps.length} steps`}
+              </button>
             </div>
-            <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mb-3">
+            {/* One instruction, not four ticks and a bar. A status display does
+                not tell her what to do; this does. */}
+            {nextStep ? (
+              <button onClick={() => scrollToSection(nextStep.target)} data-testid="close-next"
+                className="w-full text-left bg-gold-brand/10 border border-gold-brand/40 rounded-xl px-3 py-2.5 active:scale-[0.99] transition-all cursor-pointer">
+                <span className="block text-[10px] font-black text-gold-brand uppercase tracking-widest">Do this next</span>
+                <span className="block text-sm font-black text-white uppercase tracking-wide mt-0.5">{nextStep.label}</span>
+                <span className="block text-[11px] text-zinc-400 font-semibold mt-0.5">{nextStep.hint}</span>
+              </button>
+            ) : (
+              <div className="rounded-xl border border-emerald-600/40 bg-emerald-950/25 px-3 py-2.5">
+                <span className="block text-[10px] font-black text-emerald-300 uppercase tracking-widest">All done</span>
+                <span className="block text-xs text-emerald-200/90 font-semibold mt-0.5">Every step is finished. Send the summary below.</span>
+              </div>
+            )}
+            {showAllCloseSteps && (
+            <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden mt-3 mb-3">
               <div className="h-full bg-gold-brand transition-all" style={{ width: `${Math.round((done / steps.length) * 100)}%` }} />
             </div>
-            <div className="space-y-1.5">
+            )}
+            {showAllCloseSteps && <div className="space-y-1.5 mt-3">
               {steps.map((s, i) => (
                 <div key={s.key} className="flex items-center gap-2">
                   {s.auto ? (
@@ -1376,7 +1439,7 @@ export default function CategoryRegister({
                   </button>
                 </div>
               ))}
-            </div>
+            </div>}
             <div className="mt-3">
               {dayClosedAt ? (
                 <div className="rounded-xl border border-emerald-600/40 bg-emerald-950/25 px-3 py-2.5">

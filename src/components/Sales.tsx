@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Suspense, type Dispatch, type SetStateAction } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, Suspense, type Dispatch, type SetStateAction } from 'react';
 import { flatMap } from '../utils/arrays';
 import { lazyRetry } from '../utils/lazyRetry';
 import { 
@@ -681,6 +681,28 @@ export default function Sales({
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
   const [lastSaleItems, setLastSaleItems] = useState<SaleItem[] | null>(null);
+
+  // Where the grid was left, per category. A re-lock mid-trade used to drop
+  // the seller at the top of a long catalogue, and the item they wanted was
+  // not the item on screen.
+  const catalogScrollRef = useRef<HTMLDivElement | null>(null);
+  const restoredFor = useRef<string | null>(null);
+  const rememberCatalogScroll = useCallback(() => {
+    const el = catalogScrollRef.current;
+    if (!el) return;
+    try { sessionStorage.setItem('boss_pos_catalog_scroll', JSON.stringify({ cat: selectedCategory, top: el.scrollTop })); } catch {}
+  }, [selectedCategory]);
+  useEffect(() => {
+    const el = catalogScrollRef.current;
+    if (!el || restoredFor.current === selectedCategory) return;
+    restoredFor.current = selectedCategory;
+    let top = 0;
+    try {
+      const raw = JSON.parse(sessionStorage.getItem('boss_pos_catalog_scroll') || 'null');
+      if (raw && raw.cat === selectedCategory && typeof raw.top === 'number') top = raw.top;
+    } catch {}
+    if (top > 0) el.scrollTop = top;
+  }, [selectedCategory]);
   const [reprintSale, setReprintSale] = useState<Sale | null>(null);
   // Fresh receipts (a sale just completed) close by themselves after 3s so
   // the next customer never waits on an extra tap. Manual reprints stay open.
@@ -2406,7 +2428,8 @@ export default function Sales({
           </div>
         ) : (
         /* Products */
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
+        <div ref={catalogScrollRef} onScroll={rememberCatalogScroll}
+          className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
           <section className="space-y-2">
             {(() => {
               const dept = getDepartment(selectedCategory);
@@ -2468,10 +2491,19 @@ export default function Sales({
                 </div>
               );
             })()}
-            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
-              {selectedCategory === 'All' ? 'All Products' : selectedCategory}
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
+                {selectedCategory === 'All' ? 'All Products' : selectedCategory}
+              </h2>
+              {lastSaleItems && lastSaleItems.length > 0 && !simple && (
+                <button onClick={() => { setShowMoreActions(false); repeatLastSale(); }} data-testid="same-again"
+                  title="Puts your last sale back in the cart. Nothing is charged until you press Complete Sale."
+                  className="h-9 px-3 rounded-lg border border-gold-brand/40 bg-gold-brand/10 text-gold-brand text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1.5">
+                  <RotateCcw className="w-3.5 h-3.5" /> Same again
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3">
               {(() => {
                 const groups = selectedCategory === 'Drinks'
                   ? (() => {
