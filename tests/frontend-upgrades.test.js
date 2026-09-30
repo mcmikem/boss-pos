@@ -1453,3 +1453,41 @@ test('the ingredient name can be TYPED, in words a cook would say', () => {
   // And the add button sits under the rows, where the next line goes.
   assert.match(mp, /\+ Add ingredient\n            <\/button>\n            <datalist/);
 });
+
+test('the till grid, the kitchen form and the header all stop hiding things', () => {
+  const card = read('src/components/ProductCard.tsx');
+  const sales = read('src/components/Sales.tsx');
+  const mp = read('src/components/MorningProduction.tsx');
+  const app = read('src/App.tsx');
+  // 1. The pin was a 32px target inside the card's add-to-cart area: a near-miss
+  //    rang the item up. It is out of the photo and 36px in the footer now.
+  assert.equal(/absolute top-2 left-2 w-8 h-8/.test(card), false);
+  assert.match(card, /Pin lives in the footer, not on the photo/);
+  // 2. The trade question sat above the grid, so the products were below the
+  //    fold on first open. It is at the bottom now.
+  assert.ok(sales.indexOf('<ShopTrades') > sales.indexOf('id="catalog-scroll-container"'),
+    'the question must come after the products, not before them');
+  // 3. Yesterday and earlier batches sat between her and the batch form.
+  assert.match(mp, /Earlier today: \{todayMade\.length\} batch/);
+  assert.match(mp, /aria-expanded=\{showContext\}/);
+  // 4. Unsynced work was an 8px digit with the word hidden on phones, next to
+  //    an offline banner driven by navigator.onLine — which this codebase's own
+  //    comment says lies on old devices. The queue is the truth.
+  assert.match(app, /\{pendingCount\} not saved/);
+  assert.equal(/\{pendingCount\}<span className="hidden sm:inline"> unsynced<\/span>/.test(app), false);
+});
+
+test('a seller can check the till without describing a symptom', () => {
+  const app = read('src/App.tsx');
+  const check = read('src/components/TillCheck.tsx');
+  assert.match(app, /setShowTillCheck\(true\)/);
+  assert.match(app, /<TillCheck onClose=/);
+  // READ-ONLY. A check that could write is not a check, and this one exists
+  // because every round started with a description instead of a measurement.
+  assert.equal(/onAddSale|onUpdateProduct|onAddExpense|\.post\(|method: 'POST'/.test(check), false);
+  assert.equal(/method: 'DELETE'/.test(check), false);
+  assert.match(check, /supportApi\.ready\(\)/);
+  assert.match(check, /outboxCountsAsync\(\)/);
+  assert.match(check, /Changes nothing\./);
+  assert.match(check, /not saved|waiting/);
+});

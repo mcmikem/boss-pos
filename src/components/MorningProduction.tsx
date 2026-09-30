@@ -79,6 +79,8 @@ export default function MorningProduction({
   const [draftIngredients, setDraftIngredients] = useState<DraftIngredient[] | null>(null);
   // Only asked when the batch is over the money set aside.
   const [topUpSource, setTopUpSource] = useState<IngredientSource | null>(null);
+  // Yesterday's numbers and earlier batches are one tap away, never in the way.
+  const [showContext, setShowContext] = useState(false);
   const [recipeProductId, setRecipeProductId] = useState<string | null>(null);
   const [recordExpense, setRecordExpense] = useState(true);
   const [savingBatch, setSavingBatch] = useState(false);
@@ -618,6 +620,46 @@ export default function MorningProduction({
             </p>
           )}
         </div>
+      )}
+
+      {plannedLines.length > 0 && (
+        <div className="bg-violet-950/25 border border-violet-800/40 rounded-xl p-3 space-y-2">
+          <p className="text-[10px] font-black text-violet-300 uppercase tracking-widest">
+            Planned last evening — make these first
+          </p>
+          {plannedLines.map(line => (
+            <div key={line.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-white truncate">{line.productName}</p>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                  {Math.round(line.batchQty)} planned · {formatCurrency(Math.round(line.totalCost))} ingredients
+                </p>
+              </div>
+              <button onClick={() => usePlannedLine(line)}
+                className="shrink-0 h-9 px-3 bg-violet-600/20 border border-violet-600/40 text-violet-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-violet-600/30 cursor-pointer flex items-center gap-1">
+                Use <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Yesterday and earlier today are context. They used to sit between her
+          and the batch form, so the form was below the fold on a small phone.
+          One line, and it opens when she wants it. */}
+      {(todayMade.length > 0 || carryable.length > 0 || plannedLines.length > 0) && (
+        <button onClick={() => setShowContext(v => !v)} aria-expanded={showContext}
+          className="w-full flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-zinc-950/60 px-3 py-3 min-h-[48px] cursor-pointer active:scale-[0.99] transition-all">
+          <span className="text-[10px] font-black text-zinc-300 uppercase tracking-widest text-left">
+            Earlier today: {todayMade.length} batch{todayMade.length !== 1 ? 'es' : ''}
+            {carryable.length > 0 ? ` · ${carryable.length} to carry` : ''}
+          </span>
+          <span className="text-[10px] font-black text-gold-brand uppercase shrink-0">{showContext ? 'Hide' : 'Show'}</span>
+        </button>
+      )}
+      {showContext && (
+      <>
+      </>
       )}
 
       {plannedLines.length > 0 && (

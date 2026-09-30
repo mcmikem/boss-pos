@@ -172,20 +172,6 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
                               <CatIcon className="w-12 h-12 sm:w-14 sm:h-14 opacity-80 drop-shadow-lg" />
                             </div>
         )}
-        {/* Pin fast sellers to the top strip (Sell screen). stopPropagation
-            so pinning never adds to cart. */}
-        {onTogglePin && (
-          <button onClick={(e) => { e.stopPropagation(); onTogglePin(product.id); }}
-            onKeyDown={(e) => e.stopPropagation()}
-            aria-label={pinned ? 'Unpin from fast sellers' : 'Pin as fast seller'}
-            aria-pressed={!!pinned}
-            title={pinned ? 'Unpin from fast sellers' : 'Pin as fast seller'}
-            className={`absolute top-2 left-2 w-8 h-8 rounded-lg border flex items-center justify-center shadow-md transition-all active:scale-90 cursor-pointer ${
-              pinned ? 'bg-gold-brand border-black/20 text-black' : 'bg-black/70 backdrop-blur-md border-white/15 text-zinc-400'
-            }`}>
-            <Star className={`w-4 h-4 ${pinned ? 'fill-black' : ''}`} />
-          </button>
-        )}
         {/* Mistake 1 fix: badges sit on ANY product photo (dark, bright, busy), so
             they get a solid container + outline + shadow — never bare text/icons
             on the image. See video "icons lost in the image". */}
@@ -214,9 +200,27 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
             semibold (not black/uppercase), tight leading for easy scanning. */}
         {/* Names first (scanning), price second: new users look for the item,
             not the number. */}
-        <h3 className="text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
-          {product.name}
-        </h3>
+        <div className="flex items-start gap-1">
+          <h3 className="flex-1 min-w-0 text-[13px] sm:text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
+            {product.name}
+          </h3>
+          {/* Pin lives in the footer, not on the photo. On the photo it was a
+              32px target inside the card's add-to-cart area: a near-miss rang
+              the item up, and a thumb reaching for the top-left corner of a
+              phone is exactly where it was. */}
+          {onTogglePin && (
+            <button onClick={(e) => { e.stopPropagation(); onTogglePin(product.id); }}
+              onKeyDown={(e) => e.stopPropagation()}
+              aria-label={pinned ? 'Unpin from fast sellers' : 'Pin as fast seller'}
+              aria-pressed={!!pinned}
+              title={pinned ? 'Unpin from fast sellers' : 'Pin as fast seller'}
+              className={`shrink-0 w-9 h-9 -mt-0.5 -mr-0.5 rounded-lg border flex items-center justify-center transition-all active:scale-90 cursor-pointer ${
+                pinned ? 'bg-gold-brand border-black/20 text-black' : 'bg-white/5 border-white/10 text-zinc-500 hover:text-gold-brand'
+              }`}>
+              <Star className={`w-4 h-4 ${pinned ? 'fill-black' : ''}`} />
+            </button>
+          )}
+        </div>
         {/* Price is on the photo now — this row keeps only the trust signal
             (stock / margin / cost) + the tap target, so nothing truncates. */}
         <div className="flex items-center justify-between mt-auto gap-1">

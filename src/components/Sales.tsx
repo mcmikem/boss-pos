@@ -2407,16 +2407,6 @@ export default function Sales({
         ) : (
         /* Products */
         <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 pb-28 scrollbar-thin" id="catalog-scroll-container">
-          {/* The one question, asked once, as a card rather than a modal: she is
-              here to sell, and a shop that skips it loses nothing. */}
-          {showTradeQuestion && onSaveTrades && onDismissTradeQuestion && (
-            <ShopTrades
-              settings={settings}
-              availableDepartments={availableDepartments}
-              onSave={onSaveTrades}
-              onDismiss={onDismissTradeQuestion}
-            />
-          )}
           <section className="space-y-2">
             {(() => {
               const dept = getDepartment(selectedCategory);
@@ -2835,6 +2825,20 @@ export default function Sales({
           </div>
         </div>
       </div>
+
+      {/* The one question, asked once, as a card and not a modal — and at the
+          BOTTOM, so the products are above the fold on first open. She opens
+          this app to sell; the question is not the reason she is here. */}
+      {showTradeQuestion && onSaveTrades && onDismissTradeQuestion && (
+        <div className="lg:hidden px-1">
+          <ShopTrades
+            settings={settings}
+            availableDepartments={availableDepartments}
+            onSave={onSaveTrades}
+            onDismiss={onDismissTradeQuestion}
+          />
+        </div>
+      )}
 
       {/* MOBILE CART SHEET */}
       <div className="lg:hidden">

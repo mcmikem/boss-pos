@@ -34,6 +34,7 @@ import { formatUgx } from './utils/money';
 import { logPriceChange } from './utils/priceHistory';
 import { logVoid as logVoidDay } from './utils/cashflow';
 
+import TillCheck from './components/TillCheck';
 import ShopTrades from './components/ShopTrades';
 import ErrorBoundary from './components/ErrorBoundary';
 import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
@@ -472,6 +473,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // "What does this shop trade in?" — asked once per phone, skippable, and it
   // changes nothing about how a sale is recorded. The answer lives in settings
   // so it follows the shop, not the phone.
+  // The one button that turns "it broke" into a screenshot with a timestamp in
+  // it. Read-only: it cannot refuse and it writes nothing.
+  const [showTillCheck, setShowTillCheck] = useState(false);
   const [tradesAsked, setTradesAsked] = useState<boolean>(() => {
     try { return localStorage.getItem('boss_pos_trades_asked') === '1'; } catch { return false; }
   });
@@ -3587,17 +3591,25 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               {SCREEN_TITLES[activeTab]}
             </span>
           )}
-          {!isOnline && (
-            <span className="text-[8px] bg-rose-950/40 text-rose-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-rose-500/30 animate-pulse">
-              Offline
-            </span>
-          )}
           <span className="hidden sm:inline-block text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans">
             {settings.vibe}
           </span>
+          {/* This was an 8px digit with the word hidden on phones, so on a
+              cheap Android the only sign that sales were still queued was a
+              smudge. And the offline banner beside it is driven by
+              navigator.onLine, which this app's own comment says "lies on old
+              devices" — so the one signal a seller needs was the one that
+              could not be trusted. The queue itself is the truth. */}
           {pendingCount > 0 ? (
-            <span className="text-[8px] bg-amber-950/40 text-amber-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-amber-500/30" title={`${pendingCount} unsynced change(s)`}>
-              {pendingCount}<span className="hidden sm:inline"> unsynced</span>
+            <span
+              className="bg-amber-950/50 text-amber-300 font-extrabold px-2 py-1 rounded-full uppercase tracking-widest font-sans border border-amber-500/40 text-[10px] leading-none cursor-help"
+              title={`${pendingCount} change(s) waiting for the server. They are saved on this phone and will go up on their own.`}
+            >
+              {pendingCount} not saved
+            </span>
+          ) : isOnline === false ? (
+            <span className="text-[10px] bg-rose-950/40 text-rose-300 font-extrabold px-2 py-1 rounded-full uppercase tracking-widest font-sans border border-rose-500/30">
+              Offline
             </span>
           ) : lastSyncedAt ? (
             <span className="hidden md:inline-block text-[8px] bg-emerald-950/40 text-emerald-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-emerald-500/30" title="Latest server sync time">
@@ -3619,6 +3631,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               Install<span className="hidden sm:inline"> app</span>
             </button>
           )}
+          <button onClick={() => setShowTillCheck(true)}
+            title="Check this till — connection, and anything still waiting to save"
+            aria-label="Check this till"
+            className="h-8 w-8 rounded-lg border border-white/10 text-zinc-400 hover:text-gold-brand hover:border-gold-brand/40 flex items-center justify-center shrink-0 cursor-pointer">
+            <Wrench className="w-4 h-4" />
+          </button>
           <button onClick={handleSwitchStaff}
             title={staffConfigured
               ? `Signed in as ${activeStaff?.name || 'nobody'} · ${isManager ? 'Manager — money out, voids, prices' : activeStaff ? 'Cashier — selling only' : 'Till PIN only — manager actions need a manager staff PIN'}`
@@ -3923,6 +3941,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           }} />
         </ErrorBoundary>
       )}
+
+      {showTillCheck && <TillCheck onClose={() => setShowTillCheck(false)} />}
 
       {/* Keyed by the message so each notice gets its own full four seconds —
           see Toast.tsx. An error also refuses to be overwritten by a routine
