@@ -1481,7 +1481,7 @@ test('a seller can check the till without describing a symptom', () => {
   const app = read('src/App.tsx');
   const check = read('src/components/TillCheck.tsx');
   assert.match(app, /setShowTillCheck\(true\)/);
-  assert.match(app, /<TillCheck onClose=/);
+  assert.match(app, /<TillCheck[\s\S]{0,60}onClose=/);
   // READ-ONLY. A check that could write is not a check, and this one exists
   // because every round started with a description instead of a measurement.
   assert.equal(/onAddSale|onUpdateProduct|onAddExpense|\.post\(|method: 'POST'/.test(check), false);
@@ -1575,4 +1575,28 @@ test('the grid keeps its place, and Same again is a real button', () => {
   assert.match(sales, /Nothing is charged until you press Complete Sale/);
   const card = read('src/components/ProductCard.tsx');
   assert.match(card, /min-h-\[76px\]/);
+});
+
+test('a credit collection is never mistaken for the one before it', () => {
+  const api = read('src/api.ts');
+  const server = read('api/index.js');
+  // The book payment was the one write in the app that sent no clientWriteId,
+  // so the server fell back to a key that was the SAME for every collection on
+  // a record. The first one saved; every later one matched it, was answered
+  // "duplicate" with a 200, and was never written. Cash taken, book unmoved.
+  assert.match(api, /credit-eats\/\$\{id\}\/pay[\s\S]{0,320}withWriteId\(\{ amount, paymentId/);
+  // And the server must never invent a constant key again.
+  assert.equal(/`\$\{req\.params\.id\}:collection`/.test(server), false);
+  assert.match(server, /collection:\$\{paymentId\}/);
+  // Every other write already carried an id; this one was the exception.
+  assert.match(api, /pay: \(id: string, amount: number\)/);
+});
+
+test('the till can prove the credit book balances, not just claim it', () => {
+  const check = read('src/components/TillCheck.tsx');
+  assert.match(check, /Credit book collections recorded/);
+  assert.match(check, /taken but not recorded/);
+  assert.match(check, /saleId\.startsWith\('book:'\)/);
+  const app = read('src/App.tsx');
+  assert.match(app, /<TillCheck[\s\S]{0,200}creditPayments=\{creditPayments\}/);
 });

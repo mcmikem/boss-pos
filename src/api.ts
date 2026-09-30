@@ -1549,7 +1549,12 @@ export type CreditEatInput = CreditEat & { override?: boolean; allowOverCap?: bo
 export const creditEatApi = {
   list: () => api<CreditEat[]>('/api/credit-eats'),
   create: (e: CreditEatInput) => api<CreditEat>('/api/credit-eats', { method: 'POST', body: JSON.stringify(withWriteId(e)) }),
-  pay: (id: string, amount: number) => api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify({ amount }) }),
+  // The write id is what makes this safe twice over: a queued offline replay
+  // must not double-count, and a SECOND real collection on the same record
+  // must not be mistaken for the first one repeated. Without it the server
+  // fell back to a fixed key per record and swallowed every payment after the
+  // first -- the money was taken and the book never moved.
+  pay: (id: string, amount: number) => api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify(withWriteId({ amount, paymentId: `cp-${newClientWriteId()}` })) }),
 };
 
 export const productionRegisterApi = {

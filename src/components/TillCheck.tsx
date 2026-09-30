@@ -18,7 +18,11 @@ import { outboxCountsAsync } from '../api';
  */
 interface Check { label: string; ok: boolean | null; detail?: string }
 
-export default function TillCheck({ onClose }: { onClose: () => void }) {
+export default function TillCheck({ onClose, creditEats = [], creditPayments = [] }: {
+  onClose: () => void;
+  creditEats?: Array<{ id: string; customerName: string; total: number; paidAmount: number; paid?: boolean }>;
+  creditPayments?: Array<{ saleId: string; amount: number }>;
+}) {
   const [running, setRunning] = useState(false);
   const [checks, setChecks] = useState<Check[]>([]);
   const [ranAt, setRanAt] = useState<string>('');
@@ -59,7 +63,33 @@ export default function TillCheck({ onClose }: { onClose: () => void }) {
       out.push({ label: 'Everything saved to the server', ok: null, detail: 'could not be read' });
     }
 
-    // 3. The build, so a report can name it.
+    // 3. Money taken against the credit book that the server has no record of.
+    //    A collection used to be swallowed as a "duplicate" and still answered
+    //    200, so the book said paid and nothing was recorded. This names the
+    //    gap in shillings instead of leaving her to describe a symptom.
+    try {
+      const serverBook = new Map<string, number>();
+      for (const p of creditPayments) {
+        if (typeof p?.saleId === 'string' && p.saleId.startsWith('book:')) {
+          serverBook.set(p.saleId, (serverBook.get(p.saleId) || 0) + (Number(p.amount) || 0));
+        }
+      }
+      const gaps = (creditEats || [])
+        .map(c => ({ c, missing: (Number(c.paidAmount) || 0) - (serverBook.get(`book:${c.id}`) || 0) }))
+        .filter(x => x.missing > 0.5);
+      const lost = gaps.reduce((a, x) => a + x.missing, 0);
+      out.push({
+        label: 'Credit book collections recorded',
+        ok: gaps.length === 0,
+        detail: gaps.length === 0
+          ? 'every payment taken is on the server'
+          : `${gaps.length} record(s) · ${Math.round(lost).toLocaleString()} UXG taken but not recorded — tap for who`,
+      });
+    } catch (e) {
+      out.push({ label: 'Credit book collections recorded', ok: null, detail: 'could not be read' });
+    }
+
+    // 4. The build, so a report can name it.
     out.push({ label: 'This till is up to date', ok: true, detail: when.slice(0, 16).replace('T', ' ') });
 
     setChecks(out);

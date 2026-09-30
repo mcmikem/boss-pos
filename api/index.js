@@ -4672,8 +4672,12 @@ async function handleCreditEatPayment(req, res) {
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Payment amount must be positive', code: 'INVALID_AMOUNT' });
   const actor = await requestActor(req);
   const manager = await requestIsManager(req);
-  const clientWriteId = String(b.clientWriteId || b.idempotencyKey || `${req.params.id}:collection`).slice(0, 200);
   const paymentId = String(b.paymentId || `cp-${randomUUID()}`).slice(0, 160);
+  // Never fall back to a key that is the same for every collection on this
+  // record: `existingByWrite` would match the FIRST payment and answer
+  // "duplicate" for every later one, so the collection was accepted with a
+  // 200 and never written. Cash taken, book unchanged, nothing said.
+  const clientWriteId = String(b.clientWriteId || b.idempotencyKey || `${req.params.id}:collection:${paymentId}`).slice(0, 200);
   const existingByWrite = await sql`SELECT * FROM credit_payments WHERE client_write_id=${clientWriteId}`;
   if (existingByWrite.length) {
     const current = await sql`SELECT * FROM credit_eats WHERE id=${req.params.id}`;

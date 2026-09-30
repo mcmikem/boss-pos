@@ -4017,7 +4017,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         </ErrorBoundary>
       )}
 
-      {showTillCheck && <TillCheck onClose={() => setShowTillCheck(false)} />}
+      {showTillCheck && <TillCheck
+        onClose={() => setShowTillCheck(false)}
+        creditEats={creditEats}
+        creditPayments={creditPayments}
+      />}
 
       {/* Keyed by the message so each notice gets its own full four seconds —
           see Toast.tsx. An error also refuses to be overwritten by a routine
