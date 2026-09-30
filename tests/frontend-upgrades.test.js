@@ -1600,3 +1600,19 @@ test('the till can prove the credit book balances, not just claim it', () => {
   const app = read('src/App.tsx');
   assert.match(app, /<TillCheck[\s\S]{0,200}creditPayments=\{creditPayments\}/);
 });
+
+test('the credit book collection endpoint is not a CTE typo again', () => {
+  const server = read('api/index.js');
+  // `${current.branch}` threw "current is not defined" on every collection, so
+  // the endpoint answered 500 and had never once worked. `current` is a CTE.
+  // Scoped to the handler: elsewhere in the file `current` IS a JS variable,
+  // so only the CTE's own query matters.
+  const from = server.indexOf('async function handleCreditEatPayment');
+  const handler = server.slice(from, server.indexOf('\napp.post', from));
+  assert.equal(/\$\{current\./.test(handler), false, 'a CTE name must never be interpolated as JS');
+  assert.match(server, /COALESCE\(NULLIF\(\$\{branch\}, ''\), current\.branch, ''\)/);
+  // The guard that catches the shape, verified against a real throwaway file.
+  const guard = read('scripts/check-sql-interpolations.mjs');
+  assert.match(guard, /CTE-NAME-AS-JS/);
+  assert.match(guard, /is a CTE in SQL, never a JS variable/);
+});

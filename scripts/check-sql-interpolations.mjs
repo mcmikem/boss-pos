@@ -120,6 +120,31 @@ for (const file of files) {
   }
 }
 
+  // A CTE name is SQL, not JavaScript. `${current.branch}` is a ReferenceError at
+  // request time: the credit book collection endpoint answered 500 on every
+  // attempt and had never once worked. Catch the shape, not the one instance.
+// A CTE name is SQL, not JavaScript. `${current.branch}` is a ReferenceError at
+// request time: the credit book collection endpoint answered 500 on every
+// attempt and had never once worked. The precise rule is a name that exists in
+// this file ONLY as a CTE -- `current` is never a JS variable here, so the
+// interpolation can only be a mistake.
+for (const file of files) {
+  const src = readFileSync(file, 'utf8');
+  const jsNames = new Set();
+  for (const m of src.matchAll(/\b(?:const|let|var|class|function)\s+([A-Za-z_$][\w$]*)/g)) jsNames.add(m[1]);
+  for (const m of src.matchAll(/\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)/g)) jsNames.add(m[1]);
+  const cteNames = new Set();
+  for (const m of src.matchAll(/\bWITH\s+([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) cteNames.add(m[1]);
+  for (const m of src.matchAll(/,\s*([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) cteNames.add(m[1]);
+  for (const name of cteNames) {
+    if (jsNames.has(name)) continue;
+    for (const m of src.matchAll(new RegExp('\\$\\{' + name + '\\.', 'g'))) {
+      const line = src.slice(0, m.index).split('\n').length;
+      problems.push({ file, line, id: 'CTE-NAME-AS-JS', expr: 'sql`... ${' + name + '. ...}` -- "' + name + '" is a CTE in SQL, never a JS variable' });
+    }
+  }
+}
+
 if (problems.length) {
   console.error(`\n${problems.length} undeclared identifier(s) inside sql interpolations — these throw ReferenceError at request time:\n`);
   for (const p of problems) {
@@ -129,3 +154,4 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(`  PASS — no sql interpolation references a name the file does not declare (${files.join(', ')})`);
+

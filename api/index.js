@@ -4704,7 +4704,7 @@ async function handleCreditEatPayment(req, res) {
       SELECT COALESCE(SUM(amount),0)::double precision AS amount FROM credit_payments WHERE saleid=${`book:${req.params.id}`}
     ), payment AS (
       INSERT INTO credit_payments (id,saleid,amount,createdat,client_write_id,staff_id,actor_id,actor_name,actor_role,branch,payment_method,reference,note,collected_at,collector_id,collector_name,collector_role,target_type)
-      SELECT ${paymentId},${`book:${req.params.id}`},${amount},${createdAt.toISOString()},${clientWriteId},${actor.id},${actor.id},${actor.name},${actor.role},${branch || current.branch || ''},${paymentMethod},${text(b.reference, 120) || null},${text(b.note, 500) || null},${createdAt.toISOString()},${manager ? requestedCollector || actor.id : actor.id},${manager && b.collectorName ? text(b.collectorName, 80) : actor.name},${actor.role},'book'
+      SELECT ${paymentId},${`book:${req.params.id}`},${amount},${createdAt.toISOString()},${clientWriteId},${actor.id},${actor.id},${actor.name},${actor.role},COALESCE(NULLIF(${branch}, ''), current.branch, ''),${paymentMethod},${text(b.reference, 120) || null},${text(b.note, 500) || null},${createdAt.toISOString()},${manager ? requestedCollector || actor.id : actor.id},${manager && b.collectorName ? text(b.collectorName, 80) : actor.name},${actor.role},'book'
       FROM current, paid
       WHERE ${amount} <= current.total - GREATEST(COALESCE(current.paidamount,0), paid.amount)
       ON CONFLICT (client_write_id) WHERE client_write_id IS NOT NULL DO NOTHING
