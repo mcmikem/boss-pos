@@ -430,40 +430,64 @@ export default function MorningProduction({
             </div>
             {(draftIngredients || []).map((ing, idx) => {
               const lineTotal = Math.round((Number(ing.boughtQty) || 0) * (Number(ing.unitCost) || 0));
+              // A row with no id is one the cook just added. The recipe's own
+              // lines have ids, and those show their name and only need the
+              // quantity and price changing.
+              const isNewLine = !ing.id;
               return (
                 <div key={ing.id || idx} className="bg-black/20 border border-white/5 rounded-lg p-2 space-y-1.5">
                   <div className="flex items-baseline justify-between gap-2">
-                    {ing.name ? (
-                      <p className="text-xs font-black text-white truncate">{ing.name}</p>
-                    ) : (
-                      <input value={ing.name || ''} placeholder="What is it?" aria-label="Ingredient name"
+                    {isNewLine ? (
+                      <input value={ing.name || ''} placeholder="What ingredient did you buy?" aria-label="What ingredient did you buy"
+                        autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false}
                         onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, name: e.target.value.slice(0, 60) } : x))}
-                        className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 h-8 text-xs font-bold focus:border-amber-500 outline-none" />
+                        className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-3 h-11 text-sm font-bold focus:border-amber-500 outline-none" />
+                    ) : (
+                      <p className="text-sm font-black text-white truncate flex-1 min-w-0">{ing.name}</p>
                     )}
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase shrink-0">
-                      {ing.name ? <>Recipe needs {ing.qty} {ing.unit}</> : 'new line'}
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase shrink-0 text-right">
+                      {isNewLine ? '' : <>recipe needs {ing.qty} {ing.unit || 'units'}</>}
                     </p>
                   </div>
-                  <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                  <div className="grid grid-cols-[1fr_auto_1fr_auto] items-end gap-2">
                     <label className="min-w-0">
-                      <span className="text-[9px] font-black text-zinc-500 uppercase block mb-0.5">Bought</span>
+                      <span className="text-[10px] font-black text-zinc-400 uppercase block mb-1">How much was bought?</span>
                       <input type="number" min="0" step="any" inputMode="decimal" value={ing.boughtQty}
-                        aria-label={`${ing.name} bought quantity`}
+                        aria-label={`How much ${ing.name || 'ingredient'} was bought`}
+                        placeholder="How much?"
                         onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, boughtQty: parseFloat(e.target.value) || 0, boughtTouched: true } : x))}
-                        className="w-full h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
+                        className="w-full h-11 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-3 text-sm font-bold tabular-nums focus:border-amber-500 outline-none" />
+                    </label>
+                    {/* Ingredients are weighed and measured. "2" of what? */}
+                    <label className="shrink-0">
+                      <span className="text-[10px] font-black text-zinc-400 uppercase block mb-1 invisible">Unit</span>
+                      <input value={ing.unit || ''} placeholder="unit" aria-label={`Unit for ${ing.name || 'ingredient'}`}
+                        list="ingredient-units" autoComplete="off" spellCheck={false}
+                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unit: e.target.value.slice(0, 12) } : x))}
+                        className="w-20 h-11 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-sm font-bold focus:border-amber-500 outline-none" />
                     </label>
                     <label className="min-w-0">
-                      <span className="text-[9px] font-black text-zinc-500 uppercase block mb-0.5">Price each</span>
+                      <span className="text-[10px] font-black text-zinc-400 uppercase block mb-1">What did it cost?</span>
                       <input type="number" min="0" step="any" inputMode="decimal" value={ing.unitCost}
-                        aria-label={`${ing.name} price each`}
-                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: parseFloat(e.target.value) || 0 } : x))}
-                        className="w-full h-10 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 text-right text-xs font-bold tabular-nums focus:border-amber-500 outline-none" />
+                        aria-label={`What did ${ing.name || 'ingredient'} cost`}
+                        placeholder="Cost?"
+                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: Number(e.target.value) || 0 } : x))}
+                        className="w-full h-11 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-3 text-sm font-bold tabular-nums focus:border-amber-500 outline-none" />
                     </label>
-                    <p className="text-xs font-black text-amber-400 font-display tabular-nums pb-2.5 w-20 text-right">{formatCurrency(lineTotal)}</p>
+                    <p className="text-sm font-black text-amber-400 font-display tabular-nums w-24 text-right pb-3 shrink-0">{formatCurrency(lineTotal)}</p>
                   </div>
                 </div>
               );
             })}
+            {/* Under the list, not above it: the next thing to type is another
+                line, and a button in the header reads as a label. */}
+            <button onClick={() => setDraftIngredients(prev => [...(prev || []), { id: '', name: '', qty: 1, unit: '', unitCost: 0 } as never])}
+              className="w-full min-h-[48px] rounded-lg border border-dashed border-amber-600/50 text-amber-300 text-xs font-black uppercase tracking-wider hover:bg-amber-950/20 active:scale-[0.99] transition-all cursor-pointer">
+              + Add ingredient
+            </button>
+            <datalist id="ingredient-units">
+              {['kg', 'g', 'L', 'ml', 'pcs', 'bunches', 'bags', 'boxes', 'crates', 'sacks', 'tins', 'bottles'].map(u => <option key={u} value={u} />)}
+            </datalist>
             <div className="grid grid-cols-3 gap-3 pt-2 border-t border-white/5">
               <div>
                 <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Ingredients</p>
@@ -489,15 +513,8 @@ export default function MorningProduction({
             here: empty, waiting, with somewhere to add a line. */}
         {!recipePath && prodProductId && (
           <div>
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <p className="text-[10px] text-zinc-400 font-bold uppercase">Ingredients</p>
-              <button onClick={() => setDraftIngredients([{ id: '', name: '', qty: 1, unit: '', unitCost: 0 } as never])}
-                className="shrink-0 text-[10px] font-black uppercase tracking-wider text-amber-300 hover:text-amber-200 cursor-pointer">
-                + Add ingredient
-              </button>
-            </div>
             <p className="text-[10px] font-bold text-zinc-500 uppercase">
-              This snack has no recipe yet. Add what you bought — next time it will open with these in it.
+              This snack has no recipe yet. Add what you bought below — next time it will open with these in it.
             </p>
           </div>
         )}

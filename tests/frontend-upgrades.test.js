@@ -1429,3 +1429,27 @@ test('the ingredient money says where it came from, on every batch', () => {
   assert.match(mp, /label: 'Owner gave it to me'/);
   assert.match(mp, /They will be asked to confirm|confirm they handed this over/);
 });
+
+test('the ingredient name can be TYPED, in words a cook would say', () => {
+  const mp = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // The name control was chosen by `ing.name ? text : input`, so the FIRST
+  // character made the input unmount itself mid-word: one letter stuck and the
+  // rest went nowhere. It is chosen by where the row came from instead.
+  assert.match(mp, /const isNewLine = !ing\.id;/);
+  assert.equal(/\{ing\.name \? \(\s*<p/.test(mp), false, 'a row must not swap its name input for text once it has a name');
+  assert.match(mp, /\{isNewLine \? \(/);
+  // The questions she asked for, as the labels, and the unit she needs: "2" of
+  // what? Ingredients are weighed and measured.
+  assert.match(mp, /How much was bought\?/);
+  assert.match(mp, /What did it cost\?/);
+  assert.match(mp, /What ingredient did you buy\?/);
+  assert.match(mp, /list="ingredient-units"/);
+  for (const u of ['kg', 'L', 'pcs', 'bunches', 'bags']) {
+    assert.match(mp, new RegExp(`'${u}'`));
+  }
+  // Big enough for a thumb on a cheap phone: the fields were h-8/h-10 at 9px.
+  assert.match(mp, /h-11 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-3 text-sm/);
+  assert.equal(/text-\[9px\] font-black text-zinc-500 uppercase/.test(mp), false);
+  // And the add button sits under the rows, where the next line goes.
+  assert.match(mp, /\+ Add ingredient\n            <\/button>\n            <datalist/);
+});
