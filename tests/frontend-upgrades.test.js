@@ -137,7 +137,13 @@ test('a seller can register their own custom item, but stock lines stay manager-
   assert.match(server, /!text\(p\.imei, 60\)/);
   assert.match(server, /!p\.recipe/);
   // Stock-bearing catalog writes keep the manager gate.
-  assert.match(server, /app\.put\('\/api\/products\/:id', requireManager/);
+  // The manager gate moved INSIDE the product update. It used to sit on the
+  // route, which sent a 403 before the handler ran — so the seller recipe logic
+  // below it was dead code and a chef could never save what she paid. A test
+  // asserting the string was green while the feature was broken.
+  assert.match(server, /app\.put\('\/api\/products\/:id', asHandler/);
+  assert.match(server, /if \(!\(await hasManagerRole\(req\)\)\) \{/);
+  assert.match(server, /confirmed: body\.recipeCostsOnly === true/);
   assert.match(server, /app\.delete\('\/api\/products\/:id', requireManager/);
 });
 
@@ -554,7 +560,7 @@ test('moving cash between drawers is till work, not a manager decision', () => {
 
 test('a seller\u2019s paid ingredient prices reach the recipe without opening the pricing door', () => {
   const server = read('api/index.js');
-  const put = server.match(/app\.put\('\/api\/products\/:id', requireManager, asHandler[\s\S]*?\napp\.delete\('\/api\/products\/:id'/)?.[0] || '';
+  const put = server.match(/app\.put\('\/api\/products\/:id', asHandler[\s\S]*?\napp\.delete\('\/api\/products\/:id'/)?.[0] || '';
   // The caller must SAY it is only carrying ingredient costs. Without that, a
   // stale cached build sends a whole product, gets 200, and its price change is
   // silently discarded — a refusal turned into a lie.
@@ -1366,9 +1372,9 @@ test('an over-budget batch cannot save without saying where the money came from'
   const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
   // It used to ask as a free-text note, so the answer could be a sentence and
   // still never reach the books — and it assumed phone float either way.
-  assert.match(mp, /choose where the extra is coming from/);
-  assert.match(mp, /if \(!topUpSource\) \{[\s\S]*?return;/);
-  assert.match(mp, /onRequestTopUp\?\.\(spend - availableBudget, topUpSource\)/);
+  assert.match(mp, /Choose where the ingredient money is coming from before saving/);
+  assert.match(mp, /if \(spend > 0 && !topUpSource\) \{[\s\S]*?return;/);
+  assert.match(mp, /onRequestTopUp\?\.\(spend - availableBudget, topUpSource \|\| 'drawer'\)/);
   // The expense is written with the answer, so float maths is right first time
   // instead of being corrected after the fact.
   assert.match(mp, /source: topUpSource === 'momo' \? 'momo' : 'drawer'/);
@@ -1380,4 +1386,46 @@ test('an over-budget batch cannot save without saying where the money came from'
   assert.match(mp, /label: 'From the drawer'/);
   assert.match(mp, /label: 'From the phone line'/);
   assert.match(mp, /label: 'Owner gave it to me'/);
+});
+
+test('a chef can record what she bought, and the recipe never takes her quantities', () => {
+  const mp = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
+  const rules = read('api/operationsRules.js');
+  // A snack with no recipe used to hide the ingredient editor entirely, so the
+  // only way in was typing a cost price each — and that guess was labelled
+  // "ingredients" on the screen.
+  assert.match(mp, /\+ Add ingredient/);
+  assert.match(mp, /This snack has no recipe yet\. Add what you bought/);
+  assert.equal(/No recipe for this item/.test(mp), false);
+  // And a chef can START a recipe: the pure rule allows creating one, with every
+  // other field still pinned to the stored row.
+  assert.match(rules, /No recipe yet\. A chef who has just bought the ingredients/);
+  assert.match(rules, /recipe: \{ yield: Number\(incomingRecipe\.yield\) \|\| 1, ingredients: created \}/);
+  // The recipe keeps PRICES. Today's bought quantities are never written back,
+  // because a lighter batch or two spoiled is an ordinary day, not a new recipe.
+  assert.match(mp, /The quantities you bought today are for today only/);
+  assert.match(mp, /boughtTouched: true/);
+  // Writing the recipe is a CONFIRMATION, and declining still saves the batch.
+  assert.match(mp, /confirmLabel: 'Save the recipe'/);
+  assert.match(mp, /cancelLabel: 'Just this batch'/);
+  // The cost price is worked out from the ingredients, not typed.
+  assert.match(mp, /const derivedCostEach = batchQtyNum > 0 \? Math\.round\(formSpend \/ batchQtyNum\) : 0;/);
+  // One source for the cost, so the screen cannot contradict itself: profit,
+  // margin and ingredients all read formSpend.
+  assert.match(mp, /const batchProfit = batchRevenue - formSpend;/);
+  assert.match(mp, /const batchMargin = batchRevenue > 0 \? Math\.round\(\(batchProfit \/ batchRevenue\) \* 100\) : 0;/);
+  assert.equal(/const batchProfit = batchRevenue - batchSpend;/.test(mp), false);
+});
+
+test('the ingredient money says where it came from, on every batch', () => {
+  const mp = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
+  // Every batch, not only an overspend: the expense has to land against the
+  // right money or the close maths is wrong.
+  assert.match(mp, /Where is this money coming from\?/);
+  assert.match(mp, /Choose where the ingredient money is coming from before saving/);
+  assert.equal(/This batch is over the money set aside\n/.test(mp), false);
+  // A drawer and a phone line are a label; owner money is the only one that moves.
+  assert.match(mp, /source: topUpSource === 'momo' \? 'momo' : 'drawer'/);
+  assert.match(mp, /label: 'Owner gave it to me'/);
+  assert.match(mp, /They will be asked to confirm|confirm they handed this over/);
 });

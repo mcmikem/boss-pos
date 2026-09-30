@@ -2019,7 +2019,12 @@ app.put('/api/products/bulk', requireManager, asHandler(handleBulkStocktake));
 app.put('/api/stocktake', requireManager, asHandler(handleBulkStocktake));
 app.put('/api/stocktake/bulk', requireManager, asHandler(handleBulkStocktake));
 
-app.put('/api/products/:id', requireManager, asHandler(async (req, res) => {
+// The manager check is INSIDE, not on the route. It used to be `requireManager`
+// on the route, which sent a 403 before this handler ran — so the seller
+// recipe logic below it was dead code, and a chef could never save what she
+// paid for a snack. The gate belongs where the stored row is available, because
+// deciding "is this a recipe-only change?" needs the current recipe.
+app.put('/api/products/:id', asHandler(async (req, res) => {
   let body = req.body && typeof req.body === 'object' ? req.body : {};
   if (body.imageUrl && String(body.imageUrl).length > 60000) {
     return res.status(400).json({ error: 'Image too large (max ~60KB after compression)' });
@@ -2034,16 +2039,20 @@ app.put('/api/products/:id', requireManager, asHandler(async (req, res) => {
   // payload and every other field is pinned to the stored row. It therefore
   // cannot be used to change a selling price, a cost, stock or an identity, no
   // matter what the request body claims.
-  if (!(await requestIsManager(req))) {
-    // Only the recipe's ingredient unit costs may come from a seller; every
-    // other field is pinned to the stored row, so this route cannot be used to
-    // change a selling price, a cost, stock or a product's identity. The
-    // decision is a pure function (api/operationsRules.js) so its boundaries are
-    // covered by tests.
+  if (!(await hasManagerRole(req))) {
+    // Only the recipe's ingredients may come from a seller — a price for one she
+    // bought, or a recipe started for a snack that had none. Every other field
+    // is pinned to the stored row, so this cannot become a way to change a
+    // selling price, a cost, stock or a product's identity, whatever the body
+    // claims. The decision is a pure function (api/operationsRules.js) so its
+    // boundaries are covered by tests.
     const pinned = recipeCostOnlyUpdate(current, body, { confirmed: body.recipeCostsOnly === true });
     delete body.recipeCostsOnly;
     if (!pinned.allowed) {
-      return res.status(403).json({ error: 'Only a manager can change this item', code: MANAGER_REQUIRED_CODE });
+      return res.status(403).json({
+        error: 'Only a manager can change this item. To record what you paid for a snack, save the batch from Morning Production — that is the one recipe change a seller may make.',
+        code: MANAGER_REQUIRED_CODE,
+      });
     }
     body = { ...body, ...pinned.body };
   }

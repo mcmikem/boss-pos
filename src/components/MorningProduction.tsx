@@ -218,10 +218,21 @@ export default function MorningProduction({
   const selectedProduct = eateryProducts.find(p => p.id === prodProductId) || null;
   const batchQtyNum = Math.max(0, parseInt(prodQty, 10) || 0);
   const batchRevenue = selectedProduct && batchQtyNum > 0 ? Math.round(batchQtyNum * (selectedProduct.price || 0)) : 0;
-  const batchProfit = batchRevenue - batchSpend;
-  const batchMargin = batchRevenue > 0 ? Math.round((batchProfit / batchRevenue) * 100) : 0;
+  // A list the cook has just started counts as the recipe path: otherwise the
+  // editor she opened disappears the moment she taps "+ add ingredient".
   const recipePath = !!draftIngredients && draftIngredients.length > 0;
+  const editingIngredients = !!draftIngredients;
+  // ONE source for the cost of the ingredients. It used to be the recipe total
+  // (batchSpend), which is ZERO for a snack with no recipe — so a samosa batch
+  // whose ingredients cost 6,000 was showing "profit if all sold 12,500" and
+  // "100% margin" beside it. The screen contradicted itself because two figures
+  // came from two different sources.
   const formSpend = recipePath ? batchSpend : Math.round(batchQtyNum * (parseFloat(prodCost) || 0));
+  const batchProfit = batchRevenue - formSpend;
+  const batchMargin = batchRevenue > 0 ? Math.round((batchProfit / batchRevenue) * 100) : 0;
+  // Cost of one piece, worked out from the ingredients rather than typed. Typing
+  // it is what started this: a guess of 120 became "ingredients 6,000".
+  const derivedCostEach = batchQtyNum > 0 ? Math.round(formSpend / batchQtyNum) : 0;
 
   const scopedCategory = category === 'Drinks' ? 'Drinks' : 'Eatery';
 
@@ -280,19 +291,54 @@ export default function MorningProduction({
       expenseSaved = written !== false;
       expensed = expenseSaved ? spend : 0;
     }
-    // What was paid today becomes tomorrow's cost.
-    if (recipePath && prod?.recipe && onUpdateProduct) {
+    // The recipe keeps PRICES, not what she bought today. Quantities move every
+    // day — a lighter batch, two spoiled — and saving those would quietly
+    // rewrite a good recipe. Prices genuinely change, so they are offered, and
+    // she decides.
+    if (recipePath && prod && onUpdateProduct) {
       try {
-        const nextIngredients = prod.recipe.ingredients.map(ing => {
-          const draft = (draftIngredients || []).find(d => d.id === ing.id);
-          return draft && Number(draft.unitCost) > 0 ? { ...ing, unitCost: Number(draft.unitCost) } : ing;
-        });
-        const changed = nextIngredients.some((n, idx) => n.unitCost !== prod.recipe!.ingredients[idx].unitCost);
-        if (changed) {
-          // Stated explicitly: without it the server refuses this write, which
-          // is what a price change must always do.
-          const written = await onUpdateProduct({ ...prod, recipeCostsOnly: true, recipe: { ...prod.recipe, ingredients: nextIngredients } } as Product);
-          if (written !== false) triggerToast('Recipe costs updated from what you paid', 'info');
+        const storedIngredients = Array.isArray(prod.recipe?.ingredients) ? prod.recipe.ingredients : [];
+        const byId = new Map(storedIngredients.map(ing => [String(ing.id != null ? ing.id : ing.name), ing]));
+        const nextIngredients: Array<Record<string, unknown>> = [];
+        const priceChanges: string[] = [];
+        const freshLines: string[] = [];
+        for (const d of (draftIngredients || [])) {
+          const name = String(d.name || '').trim();
+          if (!name) continue;
+          const key = String(d.id != null && d.id !== '' ? d.id : name);
+          const stored = byId.get(key) || byId.get(name);
+          if (!stored) {
+            // A line the recipe has never had. The chef asked to be able to add
+            // one; the confirmation is where she says yes.
+            freshLines.push(name);
+            nextIngredients.push({ id: name.toLowerCase().replace(/\s+/g, '-'), name, qty: Number(d.qty) || 0, unit: String(d.unit || ''), unitCost: Number(d.unitCost) || 0 });
+            continue;
+          }
+          const price = Number(d.unitCost) || 0;
+          if (price > 0 && price !== Number(stored.unitCost || 0)) priceChanges.push(name);
+          nextIngredients.push({ ...(stored as object), unitCost: price || Number(stored.unitCost || 0) } as Record<string, unknown>);
+        }
+        if (nextIngredients.length > 0 && (priceChanges.length > 0 || freshLines.length > 0)) {
+          const bits: string[] = [];
+          if (freshLines.length) bits.push(`add ${freshLines.join(', ')}`);
+          if (priceChanges.length) bits.push(`update the price of ${priceChanges.join(', ')}`);
+          const keep = await confirmDialog({
+            title: `Save ${item}'s recipe?`,
+            message: `To ${bits.join(' and ')}. The quantities you bought today are for today only — they are never written to the recipe, so a lighter or heavier batch cannot change it.`,
+            confirmLabel: 'Save the recipe',
+            cancelLabel: 'Just this batch',
+          });
+          if (keep) {
+            // Stated explicitly, because the server refuses a recipe write that
+            // does not say it is only carrying recipe costs.
+            const written = await onUpdateProduct({
+              ...prod,
+              recipeCostsOnly: true,
+              recipe: { yield: Number(prod.recipe?.yield) || Math.max(1, Math.round(Number(qty) || 1)), ingredients: nextIngredients },
+            } as unknown as Product);
+            if (written !== false) triggerToast('Recipe saved — tomorrow it opens with these in it', 'info');
+            else triggerToast("Today's batch is saved, but the recipe was not — a manager can do it in Stock", 'error');
+          }
         }
       } catch {}
     }
@@ -311,14 +357,14 @@ export default function MorningProduction({
         'success',
       );
     }
+    // No source, no save. Guessing "float" is how money ended up recorded as
+    // phone float that never touched the phone.
+    if (spend > 0 && !topUpSource) {
+      triggerToast('Choose where the ingredient money is coming from before saving', 'error');
+      return;
+    }
     if (spend > 0 && availableBudget != null && spend > availableBudget) {
-      // No source, no answer. Guessing "float" is how money ended up claimed as
-      // phone float that never touched the phone.
-      if (!topUpSource) {
-        triggerToast('This batch is over the money set aside — choose where the extra is coming from', 'error');
-        return;
-      }
-      onRequestTopUp?.(spend - availableBudget, topUpSource);
+      onRequestTopUp?.(spend - availableBudget, topUpSource || 'drawer');
     }
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
@@ -373,7 +419,7 @@ export default function MorningProduction({
         {/* What was actually bought and paid for this batch. The recipe sets the
             starting numbers; what the cook types is what the money and the
             tomorrow recipe become. */}
-        {recipePath && (
+        {editingIngredients && (
           <div className="bg-black/25 border border-white/5 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Bought &amp; paid</p>
@@ -387,9 +433,15 @@ export default function MorningProduction({
               return (
                 <div key={ing.id || idx} className="bg-black/20 border border-white/5 rounded-lg p-2 space-y-1.5">
                   <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-xs font-black text-white truncate">{ing.name || 'Ingredient'}</p>
+                    {ing.name ? (
+                      <p className="text-xs font-black text-white truncate">{ing.name}</p>
+                    ) : (
+                      <input value={ing.name || ''} placeholder="What is it?" aria-label="Ingredient name"
+                        onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, name: e.target.value.slice(0, 60) } : x))}
+                        className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-2 h-8 text-xs font-bold focus:border-amber-500 outline-none" />
+                    )}
                     <p className="text-[10px] font-bold text-zinc-500 uppercase shrink-0">
-                      Recipe needs {ing.qty} {ing.unit}
+                      {ing.name ? <>Recipe needs {ing.qty} {ing.unit}</> : 'new line'}
                     </p>
                   </div>
                   <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
@@ -412,26 +464,41 @@ export default function MorningProduction({
                 </div>
               );
             })}
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-white/5">
+            <div className="grid grid-cols-3 gap-3 pt-2 border-t border-white/5">
               <div>
-                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Spent on this batch</p>
-                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(batchSpend)}</p>
+                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Ingredients</p>
+                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(formSpend)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Cost each</p>
+                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(derivedCostEach)}</p>
+                <p className="text-[9px] font-bold text-zinc-600 uppercase">worked out</p>
               </div>
               <div>
                 <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Recipe says</p>
                 <p className="text-base font-black text-zinc-500 font-display tabular-nums">{formatCurrency(recipeNeed)}</p>
-                <p className="text-[9px] font-bold text-zinc-600 uppercase">includes waste allowance</p>
+                <p className="text-[9px] font-bold text-zinc-600 uppercase">with wastage</p>
               </div>
             </div>
           </div>
         )}
 
-        {!recipePath && (
+        {/* A snack with no recipe used to hide the whole ingredient editor, which
+            left "type a cost price each" as the only way in — and that guess is
+            what ended up labelled as ingredients. The editor is now always
+            here: empty, waiting, with somewhere to add a line. */}
+        {!recipePath && prodProductId && (
           <div>
-            <label className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">Cost Price Each</label>
-            <input type="number" min="0" inputMode="decimal" value={prodCost} onChange={e => setProdCost(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
-            <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1">No recipe for this item — leave it at 0 if it came from stock on hand.</p>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <p className="text-[10px] text-zinc-400 font-bold uppercase">Ingredients</p>
+              <button onClick={() => setDraftIngredients([{ id: '', name: '', qty: 1, unit: '', unitCost: 0 } as never])}
+                className="shrink-0 text-[10px] font-black uppercase tracking-wider text-amber-300 hover:text-amber-200 cursor-pointer">
+                + Add ingredient
+              </button>
+            </div>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase">
+              This snack has no recipe yet. Add what you bought — next time it will open with these in it.
+            </p>
           </div>
         )}
 
@@ -446,7 +513,7 @@ export default function MorningProduction({
           />
           <div className="grid grid-cols-2 gap-3">
             <MoneyStat label="Ingredients" value={formatCurrency(formSpend)} tone={formSpend > 0 ? 'amber' : 'zinc'}
-              sub={recipePath ? 'bought × paid' : 'cost each × made'} />
+              sub={recipePath ? 'bought × paid' : 'from what you enter'} />
             <MoneyStat label="Sells for" value={formatCurrency(batchRevenue)} tone="white"
               sub={batchRevenue > 0 ? `${batchMargin}% margin` : 'no selling price set'} />
           </div>
@@ -496,17 +563,20 @@ export default function MorningProduction({
         </div>
       )}
 
-      {/* Over the money set aside: the cook says where the extra is coming from,
-          here, while they can still see the numbers that made it overspend. A
-          drawer and a phone line are a label on the expense; owner money is real
-          money in, and the owner confirms receipt of it. */}
-      {availableBudget != null && formSpend > availableBudget && formSpend > 0 && (
+      {/* Where the ingredient money is coming from. Asked on EVERY batch, not
+          only when it is over budget, because the expense has to be recorded
+          against the right money — the drawer, the phone line, or the owner. A
+          drawer and a phone line are a LABEL on the expense; owner money is real
+          money in, and the owner confirms it. */}
+      {prodProductId && formSpend > 0 && (
         <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-3 space-y-2">
           <p className="text-[11px] font-black text-amber-200 uppercase tracking-widest">
-            This batch is {formatCurrency(formSpend - availableBudget)} over the money set aside
+            {availableBudget != null && formSpend > availableBudget
+              ? `Over the money set aside by ${formatCurrency(formSpend - availableBudget)} — where is the extra from?`
+              : 'Where is this money coming from?'}
           </p>
           <p className="text-[10px] text-zinc-400 font-medium leading-snug">
-            Where is that extra money coming from? The batch will not save until this is answered.
+            The batch will not save until this is answered, so the expense always lands against the right money.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {([

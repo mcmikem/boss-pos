@@ -46,7 +46,7 @@ test('product writes reject impossible expiry dates instead of silently dropping
   const create = slice("app.post('/api/products', requireManager", 'const handleBulkStocktake');
   assert.ok(create.includes('const expiry = expiryDateValue(p.expiryDate)'));
   assert.ok(create.includes("code: 'INVALID_EXPIRY'"));
-  const update = slice("app.put('/api/products/:id', requireManager", "app.delete('/api/products/:id'");
+  const update = slice("app.put('/api/products/:id', asHandler", "app.delete('/api/products/:id'");
   // The update body is `body` (pinned to the stored row for a non-manager),
   // so expiry validation must read whichever name the handler uses.
   assert.ok(/const expiry = expiryDateValue\((p|body)\.expiryDate !== undefined/.test(update));

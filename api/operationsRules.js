@@ -362,7 +362,42 @@ export function recipeCostOnlyUpdate(current, incoming, { confirmed = false } = 
       .filter((i) => i && Number.isFinite(Number(i.unitCost)) && Number(i.unitCost) >= 0)
       .map((i) => [String(i.id != null ? i.id : i.name), Number(i.unitCost)]),
   );
-  if (!storedRecipe || storedIngredients.length === 0 || priced.size === 0) return { allowed: false };
+  if (priced.size === 0) return { allowed: false };
+  if (!storedRecipe || storedIngredients.length === 0) {
+    // No recipe yet. A chef who has just bought the ingredients for a snack must
+    // be able to START one, or the only way to record a real cost is to guess.
+    // Nothing else about the product moves: the body below is still pinned to
+    // the stored row, so this cannot become a back door to pricing or stock.
+    const created = incomingIngredients
+      .filter((i) => i && String(i.name || '').trim())
+      .map((i) => ({
+        id: i.id != null ? i.id : String(i.name).trim().toLowerCase().replace(/\s+/g, '-'),
+        name: String(i.name).trim().slice(0, 120),
+        qty: Number(i.qty) || 0,
+        unit: String(i.unit || '').trim().slice(0, 24),
+        unitCost: Number(i.unitCost) || 0,
+      }));
+    if (created.length === 0) return { allowed: false };
+    return {
+      allowed: true,
+      body: {
+        name: current.name,
+        category: current.category,
+        price: Number(current.price || 0),
+        cost: Number(current.cost || 0),
+        stockQty: Number(current.stockqty != null ? current.stockqty : current.stockQty || 0),
+        lowStockThreshold: Number(current.lowstockthreshold != null ? current.lowstockthreshold : current.lowStockThreshold ?? 5),
+        barcode: current.barcode || '',
+        imei: current.imei || '',
+        variants: current.variants || null,
+        saleUnit: current.saleunit || current.saleUnit || null,
+        imageUrl: current.imageurl || current.imageUrl || '',
+        supplierId: current.supplierid || current.supplierId || null,
+        isService: !!(current.isservice != null ? current.isservice : current.isService),
+        recipe: { yield: Number(incomingRecipe.yield) || 1, ingredients: created },
+      },
+    };
+  }
   const mergedIngredients = storedIngredients.map((ing) => {
     const key = String(ing.id != null ? ing.id : ing.name);
     return priced.has(key) ? { ...ing, unitCost: priced.get(key) } : ing;

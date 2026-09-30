@@ -92,7 +92,10 @@ test('production records what was bought and paid, and shows the batch profit', 
   const mp = read('src/components/MorningProduction.tsx');
   // What left the drawer is bought x paid — the recipe need is reference only.
   assert.match(mp, /Bought &amp; paid/);
-  assert.match(mp, /Spent on this batch/);
+  // One label for the ingredient total, beside the worked-out cost each. It was
+  // "Spent on this batch" reading a DIFFERENT source (the recipe total) from
+  // the profit beside it.
+  assert.match(mp, />Ingredients</);
   assert.match(mp, /Recipe says/);
   assert.match(mp, /Profit if all sold/);
   assert.match(mp, /Record ingredient expense/);
