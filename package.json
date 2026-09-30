@@ -13,12 +13,13 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "icons": "node scripts/generate-icons.mjs",
-    "test": "node --test \"tests/*.test.js\" && vitest run",
-    "lint": "tsc --noEmit",
+    "test": "npm run sql && node --test \"tests/*.test.js\" && vitest run",
+    "lint": "tsc --noEmit && npm run sql",
     "test:unit": "vitest run",
     "test:guards": "node --test tests/frontend-upgrades.test.js",
     "smoke": "node scripts/smoke-prod.mjs",
-    "verify:deployed": "node scripts/verify-deployed-fixes.mjs"
+    "verify:deployed": "node scripts/verify-deployed-fixes.mjs",
+    "sql": "node scripts/check-sql-interpolations.mjs api/index.js api/authz.js api/businessRules.js api/creditLimits.js api/efris.js api/operationsBusiness.js api/operationsRules.js api/procurementRules.js api/reportRange.js server.js"
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",

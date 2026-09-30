@@ -1175,7 +1175,10 @@ test('no sql template interpolates a name the file does not declare', () => {
   // evaluate `e.submitted_at` as an identifier, and every request through that
   // handler dies with a ReferenceError that the global handler reports as a 500.
   // Three endpoints were broken this way and no type check or unit test saw it.
-  const out = execFileSync(process.execPath, ['scripts/check-sql-interpolations.mjs', 'api/index.js'], {
+  const SERVER_FILES = ['api/index.js', 'api/authz.js', 'api/businessRules.js', 'api/creditLimits.js',
+    'api/efris.js', 'api/operationsBusiness.js', 'api/operationsRules.js', 'api/procurementRules.js',
+    'api/reportRange.js', 'server.js'];
+  const out = execFileSync(process.execPath, ['scripts/check-sql-interpolations.mjs', ...SERVER_FILES], {
     cwd: root,
     encoding: 'utf8',
   });
@@ -1613,6 +1616,33 @@ test('the credit book collection endpoint is not a CTE typo again', () => {
   assert.match(server, /COALESCE\(NULLIF\(\$\{branch\}, ''\), current\.branch, ''\)/);
   // The guard that catches the shape, verified against a real throwaway file.
   const guard = read('scripts/check-sql-interpolations.mjs');
-  assert.match(guard, /CTE-NAME-AS-JS/);
-  assert.match(guard, /is a CTE in SQL, never a JS variable/);
+  assert.match(guard, /SQL-NAME-AS-JS/);
+  assert.match(guard, /is a SQL name \(CTE or alias\), never a JS variable/);
+});
+
+test('the SQL guard runs on every server file, and npm test cannot skip it', () => {
+  const pkg = JSON.parse(read('package.json'));
+  // It existed and caught the bug, but nothing ran it. A guard nobody runs
+  // prevents nothing, and this class had already broken writes three times.
+  assert.match(pkg.scripts.test, /npm run sql/);
+  assert.match(pkg.scripts.lint, /npm run sql/);
+  assert.match(pkg.scripts.sql, /api\/index\.js/);
+  // Every file that can hold a tagged sql`...` template, not just the big one.
+  for (const f of ['authz', 'businessRules', 'creditLimits', 'efris', 'operationsBusiness',
+    'operationsRules', 'procurementRules', 'reportRange']) {
+    assert.ok(pkg.scripts.sql.includes(`api/${f}.js`), `${f}.js is unchecked`);
+  }
+  assert.ok(pkg.scripts.sql.includes('server.js'));
+});
+
+test('a server failure is recorded, not just described', () => {
+  const api = read('src/api.ts');
+  const check = read('src/components/TillCheck.tsx');
+  // "It said failed" is not a bug report. Every 5xx keeps its reference on the
+  // phone so one tap turns it into a fact.
+  assert.match(api, /if \(res\.status >= 500\) rememberServerError\(path, err\)/);
+  assert.match(api, /export function lastServerError\(\)/);
+  assert.match(api, /traceId: err\.traceId/);
+  assert.match(check, /Last server failure on this phone/);
+  assert.match(check, /ref \$\{last\.traceId/);
 });

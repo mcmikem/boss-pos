@@ -101,6 +101,37 @@ function controlFailure(err: unknown): unknown {
 
 // Error that carries the HTTP status + server error code so callers can react
 // to specific failures (e.g. 409 CONFLICT from multi-device product edits).
+export interface ServerErrorNote {
+  path: string;
+  message: string;
+  code?: string;
+  traceId?: string;
+  at: string;
+}
+
+const LAST_SERVER_ERROR_KEY = 'boss_pos_last_server_error';
+
+function rememberServerError(path: string, err: ApiError): void {
+  const note: ServerErrorNote = {
+    path: String(path || '').split('?')[0],
+    message: String(err.message || '').slice(0, 120),
+    code: err.code,
+    traceId: err.traceId,
+    at: new Date().toISOString(),
+  };
+  try { localStorage.setItem(LAST_SERVER_ERROR_KEY, JSON.stringify(note)); } catch {}
+}
+
+/** The last time the server answered 5xx on this phone, for Check this till. */
+export function lastServerError(): ServerErrorNote | null {
+  try {
+    const raw = localStorage.getItem(LAST_SERVER_ERROR_KEY);
+    if (!raw) return null;
+    const note = JSON.parse(raw) as ServerErrorNote;
+    return note && typeof note.message === 'string' ? note : null;
+  } catch { return null; }
+}
+
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -1828,7 +1859,12 @@ async function fetchJson<T>(path: string, ms: number): Promise<{ data: T; respon
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const body = (data || {}) as { error?: string; code?: string; traceId?: string };
-    throw new ApiError(body.error || `API error: ${res.status}`, res.status, body.code, body.traceId || responseTraceId(res));
+    const err = new ApiError(body.error || `API error: ${res.status}`, res.status, body.code, body.traceId || responseTraceId(res));
+    // A 5xx is our bug, not hers. Record it where she can read it back in one
+    // tap, because "it said failed" is not something she should have to
+    // describe -- the reference is what turns it into a fixable fact.
+    if (res.status >= 500) rememberServerError(path, err);
+    throw err;
   }
   return { data: data as T, response: res };
 }

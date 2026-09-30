@@ -1,3 +1,4 @@
+import { lastServerError } from '../api';
 import { useState } from 'react';
 import { CheckCircle2, XCircle, Loader2, Wrench } from 'lucide-react';
 import { supportApi } from '../api';
@@ -89,7 +90,21 @@ export default function TillCheck({ onClose, creditEats = [], creditPayments = [
       out.push({ label: 'Credit book collections recorded', ok: null, detail: 'could not be read' });
     }
 
-    // 4. The build, so a report can name it.
+    // 4. The last time the server failed on THIS phone. Every 5xx is our bug,
+    //    so it is recorded with the reference that identifies it -- she reads
+    //    one line instead of describing a symptom.
+    {
+      const last = lastServerError();
+      out.push({
+        label: 'Last server failure on this phone',
+        ok: last ? null : true,
+        detail: last
+          ? `${last.message} · ${last.path} · ref ${last.traceId || last.code || 'none'} · ${last.at.slice(0, 16).replace('T', ' ')}`
+          : 'none — the server has not failed on this phone',
+      });
+    }
+
+    // 5. The build, so a report can name it.
     out.push({ label: 'This till is up to date', ok: true, detail: when.slice(0, 16).replace('T', ' ') });
 
     setChecks(out);

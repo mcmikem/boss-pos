@@ -133,14 +133,20 @@ for (const file of files) {
   const jsNames = new Set();
   for (const m of src.matchAll(/\b(?:const|let|var|class|function)\s+([A-Za-z_$][\w$]*)/g)) jsNames.add(m[1]);
   for (const m of src.matchAll(/\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)/g)) jsNames.add(m[1]);
-  const cteNames = new Set();
-  for (const m of src.matchAll(/\bWITH\s+([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) cteNames.add(m[1]);
-  for (const m of src.matchAll(/,\s*([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) cteNames.add(m[1]);
-  for (const name of cteNames) {
+  // Names that exist in the SQL but never in the JavaScript: table expressions
+  // (`current AS (...)`) and result aliases (`... AS inserted`).
+  const sqlOnlyNames = new Set();
+  for (const m of src.matchAll(/\bWITH\s+([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) sqlOnlyNames.add(m[1]);
+  for (const m of src.matchAll(/,\s*([a-z_][a-z_0-9]*)\s+AS\s*\(/gi)) sqlOnlyNames.add(m[1]);
+  for (const m of src.matchAll(/\bAS\s+([a-z_][a-z_0-9]*)\b/gi)) sqlOnlyNames.add(m[1]);
+  for (const name of sqlOnlyNames) {
     if (jsNames.has(name)) continue;
-    for (const m of src.matchAll(new RegExp('\\$\\{' + name + '\\.', 'g'))) {
+    if (GLOBALS.has(name)) continue;          // JSON.stringify(...) etc.
+    if (name !== name.toLowerCase()) continue; // SQL keywords/casts: CAST(x AS JSON)
+    if (name.length < 3) continue;
+    for (const m of src.matchAll(new RegExp('\\$\\{' + name + '(?:\\.|\\b)', 'g'))) {
       const line = src.slice(0, m.index).split('\n').length;
-      problems.push({ file, line, id: 'CTE-NAME-AS-JS', expr: 'sql`... ${' + name + '. ...}` -- "' + name + '" is a CTE in SQL, never a JS variable' });
+      problems.push({ file, line, id: 'SQL-NAME-AS-JS', expr: 'sql`... ${' + name + '...}` -- "' + name + '" is a SQL name (CTE or alias), never a JS variable' });
     }
   }
 }
