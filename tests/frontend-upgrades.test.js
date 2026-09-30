@@ -1375,9 +1375,13 @@ test('an over-budget batch cannot save without saying where the money came from'
   const sales = read('src/components/Sales.tsx').replace(/^\s*\/\/.*$/gm, '');
   // It used to ask as a free-text note, so the answer could be a sentence and
   // still never reach the books — and it assumed phone float either way.
-  assert.match(mp, /Choose where the ingredient money is coming from before saving/);
-  assert.match(mp, /if \(spend > 0 && !topUpSource\) \{[\s\S]*?return;/);
-  assert.match(mp, /onRequestTopUp\?\.\(spend - availableBudget, topUpSource \|\| 'drawer'\)/);
+  // Compared against what is LEFT, not against the original set-aside: asking
+  // about money she already has, on a batch it fully covers, is noise.
+  assert.match(mp, /const capitalLeft = availableBudget == null \? null : availableBudget - todayCost;/);
+  assert.match(mp, /const overCapital = capitalLeft != null && formSpend > capitalLeft;/);
+  assert.match(mp, /Choose where the extra money is coming from before saving/);
+  assert.match(mp, /const shortfall = capitalLeft != null \? Math\.max\(0, spend - capitalLeft\) : 0;/);
+  assert.match(mp, /onRequestTopUp\?\.\(shortfall, topUpSource \|\| 'drawer'\)/);
   // The expense is written with the answer, so float maths is right first time
   // instead of being corrected after the fact.
   assert.match(mp, /source: topUpSource === 'momo' \? 'momo' : 'drawer'/);
@@ -1420,13 +1424,14 @@ test('a chef can record what she bought, and the recipe never takes her quantiti
   assert.equal(/const batchProfit = batchRevenue - batchSpend;/.test(mp), false);
 });
 
-test('the ingredient money says where it came from, on every batch', () => {
+test('the ingredient money question appears only on a shortfall', () => {
   const mp = read('src/components/MorningProduction.tsx').replace(/^\s*\/\/.*$/gm, '');
   // Every batch, not only an overspend: the expense has to land against the
   // right money or the close maths is wrong.
-  assert.match(mp, /Where is this money coming from\?/);
-  assert.match(mp, /Choose where the ingredient money is coming from before saving/);
-  assert.equal(/This batch is over the money set aside\n/.test(mp), false);
+  // She corrected this: it must NOT appear on every batch. Only a shortfall.
+  assert.match(mp, /Over the money left by \{formatCurrency\(capitalLeft \|\| 0\)\}/);
+  assert.match(mp, /\{asksSource && \(/);
+  assert.equal(/'Where is this money coming from\?'/.test(mp), false);
   // A drawer and a phone line are a label; owner money is the only one that moves.
   assert.match(mp, /source: topUpSource === 'momo' \? 'momo' : 'drawer'/);
   assert.match(mp, /label: 'Owner gave it to me'/);
@@ -1598,7 +1603,7 @@ test('a credit collection is never mistaken for the one before it', () => {
 test('the till can prove the credit book balances, not just claim it', () => {
   const check = read('src/components/TillCheck.tsx');
   assert.match(check, /Credit book collections recorded/);
-  assert.match(check, /taken but not recorded/);
+  assert.match(check, /gaps\.slice\(0, 4\)\.map/);  // names the customers, not a promise
   assert.match(check, /saleId\.startsWith\('book:'\)/);
   const app = read('src/App.tsx');
   assert.match(app, /<TillCheck[\s\S]{0,200}creditPayments=\{creditPayments\}/);
@@ -1663,4 +1668,41 @@ test('a snack with no recipe can still be given one', () => {
   // expense breakdown.
   assert.match(mp, /if \(recipePath && prod && onUpdateProduct\)/);
   assert.match(mp, /: undefined;\n      const written = await onAddExpense/);
+});
+
+test('the audit findings that could hurt her are closed', () => {
+  const bar = read('src/components/CloseReminderBar.tsx');
+  // Tapping the X on the close reminder re-rendered it with one hook fewer
+  // and threw -- taking the screen down as she closed. And "dismiss for today"
+  // was stored as a bare '1', silencing the reminder for good.
+  assert.equal(/if \(!state \|\| dismissed\) return null;\s*\n\s*\/\/ One short beep/.test(bar), false);
+  assert.match(bar, /Every hook above runs on every render/);
+  assert.match(bar, /dismissedDay === todayKey/);
+  assert.match(bar, /localDayKey/);
+
+  const check = read('src/components/TillCheck.tsx');
+  assert.equal(/tap for who/.test(check), false, 'it must not promise a tap that does nothing');
+  // "Up to date" was hardcoded green. It now compares builds.
+  assert.match(check, /This phone is running the latest build/);
+  assert.equal(/label: 'This till is up to date', ok: true/.test(check), false);
+
+  const reg = read('src/components/CategoryRegister.tsx');
+  // Unaccounted money is the reason this screen exists; it may not be sliced away.
+  assert.equal(/f\.kind === 'unaccounted' \|\| f\.kind === 'momo'\)\.slice\(0, 3\)/.test(reg), false);
+  assert.match(reg, /more still to assign — tap to see every department/);
+  // The cap line must judge what she is adding, not only what is already owed.
+  assert.match(reg, /const adding = Math\.max\(0, Math\.round\(parseFloat\(creditPrice\)/);
+  assert.match(reg, /OVER BY/);
+
+  const app = read('src/App.tsx');
+  // Colours is localStorage on the phone; the chip must not claim otherwise.
+  assert.match(app, /id: 'theme', door: 'look', label: 'Colours', text: 'light or dark on this phone', scope: 'phone'/);
+
+  const mp = read('src/components/MorningProduction.tsx');
+  // One predicate for the chooser and the save gate, or the cook is told to
+  // choose a source that is not on the screen.
+  assert.match(mp, /const asksSource = prodProductId != null && formSpend > 0 && overCapital;/);
+  assert.match(mp, /\{asksSource && \(/);
+  assert.match(mp, /if \(shortfall > 0 && !topUpSource\) \{/);
+  assert.equal(/capitalLeft == null \? spend > 0 : shortfall > 0/.test(mp), false);
 });

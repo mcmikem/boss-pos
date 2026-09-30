@@ -1770,9 +1770,32 @@ export default function CategoryRegister({
         )}
 
         <p className="text-[11px] text-zinc-400 font-bold uppercase mb-3">Where did the money go?</p>
-        {!blind && theftFlags.filter(f => f.kind === 'unaccounted' || f.kind === 'momo').slice(0, 3).map((f, i) => (
-          <div key={`m-${i}`} className="mb-2"><FlagCard f={f} /></div>
-        ))}
+        {!blind && (() => {
+          // Never hide money that still needs assigning. If there are more than
+          // three, they share one line -- but every department's figure is
+          // named, because the flags are built per department.
+          const moneyFlags = theftFlags.filter(f => f.kind === 'unaccounted' || f.kind === 'momo');
+          if (!moneyFlags.length) return null;
+          return (
+            <>
+              {moneyFlags.slice(0, 3).map((f, i) => (
+                <div key={`m-${i}`} className="mb-2"><FlagCard f={f} /></div>
+              ))}
+              {moneyFlags.length > 3 && (
+                <details className="mb-2">
+                  <summary className="text-[10px] font-black uppercase tracking-wider text-amber-300 cursor-pointer">
+                    {moneyFlags.length - 3} more still to assign — tap to see every department
+                  </summary>
+                  <div className="mt-1">
+                    {moneyFlags.slice(3).map((f, i) => (
+                      <div key={`m-more-${i}`} className="mb-2"><FlagCard f={f} /></div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
+          );
+        })()}
         <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3 mb-3">
           <div className="flex items-baseline justify-between gap-3">
             <div className="min-w-0">
@@ -2138,10 +2161,16 @@ export default function CategoryRegister({
                   const typed = Math.max(0, Math.round(parseFloat(creditCap) || 0));
                   const cap = typed > 0 ? typed : capFor(creditName);
                   if (owes <= 0 && cap <= 0) return null;
-                  const over = cap > 0 && owes >= cap;
+                  // Include what she is adding RIGHT NOW, or the line says
+                  // "fine" and the save refuses her a second later.
+                  const adding = Math.max(0, Math.round(parseFloat(creditPrice) || 0)) * Math.max(0, parseFloat(creditQty) || 0);
+                  const after = owes + adding;
+                  const over = cap > 0 && after > cap;
                   return (
                     <p className={`text-[10px] font-black uppercase mt-1 ${over ? 'text-rose-400' : 'text-zinc-500'}`}>
                       Owes {formatCurrency(owes)}{cap > 0 ? ` / cap ${formatCurrency(cap)}` : ' • no cap set'}
+                      {adding > 0 ? ` → ${formatCurrency(after)} after this` : ''}
+                      {over ? ` • OVER BY ${formatCurrency(after - cap)}` : ''}
                     </p>
                   );
                 })()}

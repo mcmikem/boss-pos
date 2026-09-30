@@ -235,6 +235,17 @@ export default function MorningProduction({
   // "100% margin" beside it. The screen contradicted itself because two figures
   // came from two different sources.
   const formSpend = recipePath ? batchSpend : Math.round(batchQtyNum * (parseFloat(prodCost) || 0));
+
+  // What is genuinely left of tomorrow's production money. Asking "where is
+  // this money coming from" is only a real question when the batch costs more
+  // than this -- comparing against the original set-aside asked her about
+  // money she already had, on a batch the set-aside fully covers.
+  const capitalLeft = availableBudget == null ? null : availableBudget - todayCost;
+  const overCapital = capitalLeft != null && formSpend > capitalLeft;
+  // When no capital was set aside at all there is nothing to be over, so there
+  // is nothing to ask. The save gate and the chooser must agree on this, or
+  // the cook gets told to choose a source with nothing to choose.
+  const asksSource = prodProductId != null && formSpend > 0 && overCapital;
   const batchProfit = batchRevenue - formSpend;
   const batchMargin = batchRevenue > 0 ? Math.round((batchProfit / batchRevenue) * 100) : 0;
   // Cost of one piece, worked out from the ingredients rather than typed. Typing
@@ -366,12 +377,16 @@ export default function MorningProduction({
     }
     // No source, no save. Guessing "float" is how money ended up recorded as
     // phone float that never touched the phone.
-    if (spend > 0 && !topUpSource) {
-      triggerToast('Choose where the ingredient money is coming from before saving', 'error');
+    // Same question as the screen asked, or none. The batch covers itself from
+    // the capital set aside; only a shortfall has to be explained.
+    const shortfall = capitalLeft != null ? Math.max(0, spend - capitalLeft) : 0;
+    // Over the capital that is actually left -- and only then.
+    if (shortfall > 0 && !topUpSource) {
+      triggerToast('Choose where the extra money is coming from before saving', 'error');
       return;
     }
-    if (spend > 0 && availableBudget != null && spend > availableBudget) {
-      onRequestTopUp?.(spend - availableBudget, topUpSource || 'drawer');
+    if (shortfall > 0) {
+      onRequestTopUp?.(shortfall, topUpSource || 'drawer');
     }
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
@@ -592,15 +607,13 @@ export default function MorningProduction({
           against the right money — the drawer, the phone line, or the owner. A
           drawer and a phone line are a LABEL on the expense; owner money is real
           money in, and the owner confirms it. */}
-      {prodProductId && formSpend > 0 && (
+      {asksSource && (
         <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-3 space-y-2">
           <p className="text-[11px] font-black text-amber-200 uppercase tracking-widest">
-            {availableBudget != null && formSpend > availableBudget
-              ? `Over the money set aside by ${formatCurrency(formSpend - availableBudget)} — where is the extra from?`
-              : 'Where is this money coming from?'}
+            Over the money left by {formatCurrency(capitalLeft || 0)} — where is the extra from?
           </p>
           <p className="text-[10px] text-zinc-400 font-medium leading-snug">
-            The batch will not save until this is answered, so the expense always lands against the right money.
+            Only the extra needs naming. The batch will not save until this is answered, so the expense lands against the right money.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {([

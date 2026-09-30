@@ -513,7 +513,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     { id: 'lockmins', door: 'security', label: 'Lock the till after', text: 'minutes of no tapping', scope: 'shop' },
     { id: 'pin', door: 'security', label: 'The till PIN', text: 'opens the device without naming a person', scope: 'shop' },
     { id: 'bigtext', door: 'look', label: 'Big text', text: 'larger type on this phone only', scope: 'phone' },
-    { id: 'theme', door: 'look', label: 'Colours', text: 'the till\'s brand colour', scope: 'shop' },
+    { id: 'theme', door: 'look', label: 'Colours', text: 'light or dark on this phone', scope: 'phone' },
     { id: 'sheets', door: 'data', label: 'Google Sheet backup', text: 'a copy of every sale, every day', scope: 'shop' },
     { id: 'export', door: 'data', label: 'Export or back up', text: 'take the shop\'s data with you', scope: 'shop' },
   ];

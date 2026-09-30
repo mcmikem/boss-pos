@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Moon, X } from 'lucide-react';
 import { closeReminderState, formatMinutesLeft, type ShopHours } from '../utils/dates';
+import { localDayKey } from '../utils/dates';
 
 const DISMISSED_KEY = 'boss_pos_close_reminder_dismissed';
 
@@ -16,9 +17,13 @@ export default function CloseReminderBar({
   hours, leadMinutes, soundOn, onStartClose, onDismiss,
 }: CloseReminderBarProps) {
   const [now, setNow] = useState(() => new Date());
-  const [dismissed, setDismissed] = useState<boolean>(() => {
-    try { return localStorage.getItem(DISMISSED_KEY) === '1'; } catch { return false; }
+  // Dismissal is for TODAY, as the button says. It stored a bare '1', which
+  // meant one tap silenced the closing reminder for good.
+  const [dismissedDay, setDismissedDay] = useState<string>(() => {
+    try { return localStorage.getItem(DISMISSED_KEY) || ''; } catch { return ''; }
   });
+  const todayKey = localDayKey(now.toISOString());
+  const dismissed = dismissedDay === todayKey;
 
   useEffect(() => {
     const tick = () => setNow(new Date());
@@ -28,7 +33,6 @@ export default function CloseReminderBar({
   }, []);
 
   const state = closeReminderState(hours, leadMinutes, now);
-  if (!state || dismissed) return null;
 
   // One short beep when the reminder first appears, not a repeating alarm.
   useEffect(() => {
@@ -51,6 +55,9 @@ export default function CloseReminderBar({
       }
     } catch {}
   }, [soundOn]);
+
+  // Every hook above runs on every render. The early return belongs here.
+  if (!state || dismissed) return null;
 
   const urgent = state.minutesLeft <= 15;
   const label = state.minutesLeft <= 0
@@ -85,7 +92,7 @@ export default function CloseReminderBar({
         Close day
       </button>
       <button
-        onClick={() => { setDismissed(true); onDismiss(); try { localStorage.setItem(DISMISSED_KEY, '1'); } catch {} }}
+        onClick={() => { setDismissedDay(todayKey); onDismiss(); try { localStorage.setItem(DISMISSED_KEY, todayKey); } catch {} }}
         aria-label="Dismiss closing reminder for today"
         className="shrink-0 p-2 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer"
       >

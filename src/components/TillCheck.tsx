@@ -78,13 +78,13 @@ export default function TillCheck({ onClose, creditEats = [], creditPayments = [
       const gaps = (creditEats || [])
         .map(c => ({ c, missing: (Number(c.paidAmount) || 0) - (serverBook.get(`book:${c.id}`) || 0) }))
         .filter(x => x.missing > 0.5);
-      const lost = gaps.reduce((a, x) => a + x.missing, 0);
       out.push({
         label: 'Credit book collections recorded',
         ok: gaps.length === 0,
         detail: gaps.length === 0
           ? 'every payment taken is on the server'
-          : `${gaps.length} record(s) · ${Math.round(lost).toLocaleString()} UXG taken but not recorded — tap for who`,
+          : gaps.slice(0, 4).map(x => `${x.c.customerName || 'unnamed'} ${Math.round(x.missing).toLocaleString()}`).join(' · ')
+            + (gaps.length > 4 ? ` · +${gaps.length - 4} more` : ''),
       });
     } catch (e) {
       out.push({ label: 'Credit book collections recorded', ok: null, detail: 'could not be read' });
@@ -105,7 +105,18 @@ export default function TillCheck({ onClose, creditEats = [], creditPayments = [
     }
 
     // 5. The build, so a report can name it.
-    out.push({ label: 'This till is up to date', ok: true, detail: when.slice(0, 16).replace('T', ' ') });
+    {
+      const serverBuild = (checks.find(c => c.label === 'Reaches the server')?.detail || '').match(/build ([0-9a-f]{7,})/)?.[1] || '';
+      const here = (typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__ : '').slice(0, 7);
+      const same = !serverBuild || !here || serverBuild === here || serverBuild === 'unknown';
+      out.push({
+        label: 'This phone is running the latest build',
+        ok: same,
+        detail: same
+          ? `yes · ${here || 'dev'} · checked ${when.slice(11, 16)}`
+          : `this phone is on ${here || 'dev'} but the server is on ${serverBuild} — reload to update`,
+      });
+    }
 
     setChecks(out);
     setRanAt(when);
