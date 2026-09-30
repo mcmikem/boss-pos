@@ -17,6 +17,29 @@ interface ProductCardProps {
   simple?: boolean;
 }
 
+/**
+ * What margin a card may honestly claim.
+ *
+ * A card with sizes shows a price RANGE, so one margin taken from the base
+ * price is a lie: a size can be selling below cost while the card says +40%.
+ * Returns the headline margin, the worst margin across the sizes, and the
+ * price that worst one is.
+ */
+export function marginForDisplay(input: {
+  basePrice: number;
+  cost: number;
+  variantPrices: number[];
+  applies: boolean;
+}): { marginPct: number | null; worstMargin: number | null; worstPrice: number | null } {
+  const { basePrice, cost, variantPrices, applies } = input;
+  if (!applies || !(cost > 0) || !(basePrice > 0)) return { marginPct: null, worstMargin: null, worstPrice: null };
+  const at = (p: number) => (p > 0 ? ((p - cost) / p) * 100 : null);
+  const marginPct = at(basePrice);
+  const priced = variantPrices.filter((p) => p > 0).map((p) => ({ p, m: at(p)! }));
+  const worst = priced.length ? priced.reduce((a, b) => (b.m < a.m ? b : a)) : undefined;
+  return { marginPct, worstMargin: worst ? worst.m : null, worstPrice: worst ? worst.p : null };
+}
+
 const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, onAddToCart, onAdjustQty, onOutOfStock, compact, pinned, onTogglePin, simple }: ProductCardProps) {
   const isLowStock = product.stockQty <= product.lowStockThreshold && !product.isService;
   const isOutOfStock = product.stockQty <= 0 && !product.isService;
@@ -45,7 +68,16 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
   const CatIcon = catVis.icon;
   const isEatery = product.category === 'Eatery' || product.category === 'Drinks';
   const effCost = isEatery ? effectiveCost(product) : product.cost;
-  const marginPct = isEatery && effCost > 0 && product.price > 0 ? ((product.price - effCost) / product.price) * 100 : null;
+  // A range of prices needs a range of margins. Using the base price alone
+  // meant a card could read "+40%" while the biggest size sold below cost.
+  const { marginPct, worstMargin: worstVariantMargin, worstPrice } = marginForDisplay({
+    basePrice: product.price, cost: effCost, variantPrices, applies: isEatery,
+  });
+  const marginLabel = worstVariantMargin == null
+    ? null
+    : marginPct == null || Math.abs(worstVariantMargin - marginPct) < 0.5
+      ? `${Math.round(worstVariantMargin)}%`
+      : `${Math.round(marginPct)}% (down to ${Math.round(worstVariantMargin)}%)`;
   const handleClick = () => {
     if (isOutOfStock) {
       if (onOutOfStock) onOutOfStock(product);
@@ -227,9 +259,10 @@ const ProductCard = memo(function ProductCard({ product, cart, formatCurrency, o
           <div className="min-w-0 flex-1">
             {isLowStock && !isOutOfStock && !product.isService ? (
               <p className="text-[11px] font-semibold text-amber-400/90 mt-0.5 truncate">Only {product.stockQty} left</p>
-            ) : marginPct !== null ? (
-              <p className={`text-[11px] font-bold mt-0.5 truncate ${marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                {marginPct <= 0 ? 'Loss' : `+${marginPct.toFixed(0)}%`}
+            ) : marginLabel !== null && marginPct !== null ? (
+              <p className={`text-[11px] font-bold mt-0.5 break-words ${worstVariantMargin != null && worstVariantMargin <= 0 ? 'text-rose-400' : marginPct <= 0 ? 'text-rose-400' : marginPct < 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {marginPct <= 0 ? 'Loss' : `+${marginLabel}`}
+                {worstVariantMargin != null && worstVariantMargin <= 0 && marginPct > 0 && worstPrice != null && ` at ${formatCurrency(worstPrice)}`}
               </p>
             ) : (
               product.cost > 0 ? (

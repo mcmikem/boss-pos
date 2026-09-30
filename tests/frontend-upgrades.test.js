@@ -1760,3 +1760,13 @@ test('the money on every screen now reconciles with itself', () => {
   assert.equal(/remaining\.slice\(0, 4\)/.test(eat), false);
   assert.equal(/sold\.slice\(0, 4\)/.test(eat), false);
 });
+
+test('a card with sizes cannot claim one margin for a price range', () => {
+  const card = read('src/components/ProductCard.tsx');
+  assert.match(card, /export function marginForDisplay/);
+  assert.match(card, /marginForDisplay\(\{\s*basePrice: product\.price, cost: effCost, variantPrices, applies: isEatery/);
+  // Tested as arithmetic, not by reading the JSX: a size can sell below cost
+  // while the card says +40%.
+  assert.match(read('src/components/ProductCard.variants.test.ts'), /worstPrice\)\.toBe\(1500\)/);
+  assert.match(read('src/components/ProductCard.variants.test.ts'), /toBeLessThan\(0\)/);
+});
