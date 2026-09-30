@@ -88,16 +88,18 @@ export default function EateryHome({
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Sold</p>
           {sold.length === 0
             ? <p className="text-xs text-zinc-500 font-bold uppercase mt-1">Nothing yet</p>
-            : sold.slice(0, 4).map(r => (
-              <p key={r.productId} className="text-xs font-bold text-zinc-200 mt-1 tabular-nums truncate">{r.productName} {r.sold}</p>
+            : sold.map(r => (
+              <p key={r.productId} className="text-xs font-bold text-zinc-200 mt-1 tabular-nums break-words">{r.productName} {r.sold}</p>
             ))}
         </div>
         <div className="boss-card p-3 border-l-4 border-l-cyan-500">
           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Remaining</p>
           {remaining.length === 0
             ? <p className="text-xs text-zinc-500 font-bold uppercase mt-1">Tray clear</p>
-            : remaining.slice(0, 4).map(r => (
-              <p key={r.productId} className="text-xs font-bold text-cyan-200 mt-1 tabular-nums truncate">{r.productName} {r.leftover} →</p>
+            : remaining.map(r => (
+              <p key={r.productId} className="text-xs font-bold text-cyan-200 mt-1 tabular-nums break-words">
+                {r.productName} <span className="text-cyan-400/70">{r.leftover} left</span>
+              </p>
             ))}
         </div>
         <div className="boss-card p-3 border-l-4 border-l-rose-500">

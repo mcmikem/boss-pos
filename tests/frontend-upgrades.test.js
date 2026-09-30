@@ -1706,3 +1706,57 @@ test('the audit findings that could hurt her are closed', () => {
   assert.match(mp, /if \(shortfall > 0 && !topUpSource\) \{/);
   assert.equal(/capitalLeft == null \? spend > 0 : shortfall > 0/.test(mp), false);
 });
+
+test('the money on every screen now reconciles with itself', () => {
+  const an = read('src/components/Analytics.tsx');
+  // The pie sliced GROSS line totals while the middle showed NET of the cart
+  // discount, so the slices could never add up to the centre.
+  assert.match(an, /const factor = gross > 0 \? \(Number\(sale\.total\) \|\| 0\) \/ gross : 0;/);
+  assert.equal(/categoriesSum\[cat\] = \(categoriesSum\[cat\] \|\| 0\) \+ item\.lineTotal;/.test(an), false);
+  // "How?" subtracted discounts from a sales figure that was already net of
+  // them, and never showed design profit at all.
+  assert.match(an, /already off the sales figure/);
+  assert.match(an, /Design profit/);
+  // The breakdown must be built from the SAME source as the figure it explains.
+  for (const v of ['shownRevenue', 'shownCogs', 'shownDesignProfit', 'shownExpenses']) {
+    assert.match(an, new RegExp('const ' + v + ' = serverWindowSummary'));
+  }
+  // A day of per-line haggling reported zero discounts.
+  assert.match(an, /const lines = \(s\.items \|\| \[\]\)\.reduce\(\(a, i\) => a \+ \(Number\(i\.lineDiscount\) \|\| 0\), 0\);/);
+  // "Total sales - Design X" where the total already contained X.
+  assert.match(an, /includes design/);
+  assert.equal(/Total sales\$\{displayDesignRevenue/.test(an), false);
+
+  const inv = read('src/components/Inventory.tsx');
+  assert.match(inv, /effectiveCost\(p\) \* p\.stockQty/);
+  assert.equal(/\(p\.cost \|\| 0\) \* p\.stockQty/.test(inv), false);
+  assert.match(inv, /priceNum > 0 && costNum > 0 && costNum >= priceNum/);
+
+  const dobj = read('src/components/DesignOrders.tsx');
+  // Two profit figures on one order, differing by transport.
+  assert.match(dobj, /const totalCost = material \+ labor \+ transport;/);
+  // "Target profit %" used as a margin: 30 typed, 43 earned.
+  assert.match(dobj, /const suggested = totalCost > 0 \? totalCost \* \(1 \+ margin \/ 100\) : 0;/);
+  assert.match(dobj, /Est\. profit \(on cost\)/);
+
+  const dash = read('src/components/Dashboard.tsx');
+  // Cash kept in the drawer is not money on the phone.
+  assert.match(dash, /\.filter\(t => \(t\.to \|\| 'float'\) === 'float'\)/);
+  assert.equal(/=== 'float' \|\| t\.to === 'cash'/.test(dash), false);
+
+  const reg = read('src/components/CategoryRegister.tsx');
+  // Cash handed to a manager appeared in the table and not in the total above it.
+  assert.match(reg, /d === 'owner' \|\| d === 'manager'/);
+  assert.match(reg, /To owner or manager \(total\)/);
+  assert.match(reg, /of which \{fmt\(managerTotal\)\} to a named manager/);
+
+  const design = read('src/components/Design.tsx');
+  // A shilling figure truncated behind a hover tooltip no thumb can reach.
+  assert.equal(/font-display tabular-nums truncate/.test(design), false);
+  assert.match(design, /break-words/);
+
+  const eat = read('src/components/EateryHome.tsx');
+  // Four of six dishes on the tray, and a dangling arrow.
+  assert.equal(/remaining\.slice\(0, 4\)/.test(eat), false);
+  assert.equal(/sold\.slice\(0, 4\)/.test(eat), false);
+});

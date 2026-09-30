@@ -64,14 +64,17 @@ export function MoneyHero({ label, value, sub, tone = 'white', title }: MoneyFig
   return (
     <div className="min-w-0">
       <p className="text-[11px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
+      {/* Never truncate the money. It steps down a size, and whatever would
+          have been cut off is repeated in full underneath. A tooltip is not
+          reachable with a thumb, and this is the figure a seller reads first. */}
       <p
-        className={`text-[28px] sm:text-[32px] leading-tight font-black font-display tabular-nums truncate ${TONE_TEXT[tone]}`}
+        className={`${String(value).length > 13 ? 'text-[19px] sm:text-[24px]' : 'text-[28px] sm:text-[32px]'} leading-tight font-black font-display tabular-nums break-words ${TONE_TEXT[tone]}`}
         title={title}
       >
         {value}
       </p>
       {sub != null && sub !== '' && (
-        <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5 truncate">{sub}</p>
+        <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5 break-words">{sub}</p>
       )}
     </div>
   );
@@ -82,11 +85,11 @@ export function MoneyStat({ label, value, sub, tone = 'zinc', title }: MoneyFigu
   return (
     <div className="min-w-0">
       <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">{label}</p>
-      <p className={`text-base font-black font-display tabular-nums truncate mt-0.5 ${TONE_TEXT[tone]}`} title={title}>
+      <p className={`text-base font-black font-display tabular-nums break-words mt-0.5 ${TONE_TEXT[tone]}`} title={title}>
         {value}
       </p>
       {sub != null && sub !== '' && (
-        <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5 truncate">{sub}</p>
+        <p className="text-[10px] font-bold text-zinc-500 uppercase mt-0.5 break-words">{sub}</p>
       )}
     </div>
   );

@@ -454,7 +454,8 @@ export default function CategoryRegister({
   const carryAll = async () => {
     const rows = balanceRows.filter(r => r.recon > 0);
     if (rows.length === 0) return;
-    if (!(await confirmDialog({ title: 'Carry tray', message: `Confirm tray counts for ${rows.reduce((s, r) => s + Math.round(r.recon), 0)} item(s)? They auto-carry anyway.`, confirmLabel: 'Carry' }))) return;
+    // No confirmation that says "this happens anyway". It carried on its own;
+    // the dialog was only ever a tap between her and the close.
     setCarrying(true);
     try {
       let carried = 0;
@@ -463,6 +464,8 @@ export default function CategoryRegister({
       // without anyone noticing.
       if (carried < rows.length) {
         triggerToast(`Carried ${carried} of ${rows.length} tray counts — the rest were refused`, 'error');
+      } else if (rows.length) {
+        triggerToast(`Carried ${rows.length} tray count${rows.length === 1 ? '' : 's'} to tomorrow`, 'success');
       }
     } finally {
       setCarrying(false);
@@ -976,7 +979,15 @@ export default function CategoryRegister({
   };
   // Cumulative handoffs across loaded history: what the owner has received
   // in total, and what sits banked. Totals, not today-flows.
-  const ownerTotal = useMemo(() => momoTransfers.filter(t => (t.to || 'float') === 'owner').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
+  // Owner AND manager: both are money handed to a person, and the per-department
+  // table below already puts them in the same column. Counting only 'owner'
+  // made every handover invisible in this total.
+  const ownerTotal = useMemo(() => momoTransfers
+    .filter(t => { const d = t.to || 'float'; return d === 'owner' || d === 'manager'; })
+    .reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
+  const managerTotal = useMemo(() => momoTransfers
+    .filter(t => t.to === 'manager')
+    .reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
   const bankTotal = useMemo(() => momoTransfers.filter(t => t.to === 'bank').reduce((s, t) => s + (t.amount || 0), 0), [momoTransfers]);
   // A seller, with the setting on, sees ONE destination instead of five. Five
   // buttons where one is permitted is how a form teaches someone to guess.
@@ -2289,8 +2300,13 @@ export default function CategoryRegister({
       <section className="boss-card p-4 rounded-2xl border border-cyan-900/40 bg-cyan-950/10">
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To owner (total)</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">To owner or manager (total)</p>
             <p className="text-base font-black text-amber-400 font-display">{fmt(ownerTotal)}</p>
+            {managerTotal > 0 && (
+              <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">
+                of which {fmt(managerTotal)} to a named manager
+              </p>
+            )}
           </div>
           <div className="bg-zinc-950/60 border border-white/5 rounded-xl p-3">
             <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Banked (total)</p>

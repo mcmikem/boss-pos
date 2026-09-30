@@ -265,7 +265,14 @@ export default function Analytics({
 
   // Discount leakage: money knocked off at the till in this window.
   const totalDiscounts = useMemo(() => {
-    return filteredSales.reduce((acc, s) => acc + (s.discount || 0), 0);
+    // Both kinds. Per-line haggling is written into each line's total and never
+    // reached sale.discount, so a day of it reported zero discounts while the
+    // manager PIN gate was firing all afternoon.
+    return filteredSales.reduce((acc, s) => {
+      const cart = Number(s.discount) || 0;
+      const lines = (s.items || []).reduce((a, i) => a + (Number(i.lineDiscount) || 0), 0);
+      return acc + cart + lines;
+    }, 0);
   }, [filteredSales]);
 
   // Delivered design & print orders count as realized revenue + profit.
@@ -296,6 +303,14 @@ export default function Analytics({
   const displayNetProfit = serverWindowSummary ? serverWindowSummary.netProfit : netProfit;
   // VAT collected inside these sales (server-stamped per sale). Falls back to
   // the in-memory rows when the server window hasn't loaded.
+  // The "How?" list has to be the SAME numbers as the figure it explains. When
+  // the server window is authoritative it sends every component, so use them
+  // rather than mixing a server total with phone-side rows.
+  const shownRevenue = serverWindowSummary ? serverWindowSummary.revenue : revenue;
+  const shownCogs = serverWindowSummary ? serverWindowSummary.cogs : cogs;
+  const shownDesignProfit = serverWindowSummary ? (serverWindowSummary.designProfit || 0) : designProfit;
+  const shownExpenses = serverWindowSummary ? serverWindowSummary.expenseTotal : totalExpenses;
+
   const displayVat = serverWindowSummary && typeof serverWindowSummary.vatTotal === 'number'
     ? serverWindowSummary.vatTotal
     : filteredSales.reduce((a, s) => a + (s.tax || 0), 0);
@@ -409,10 +424,17 @@ export default function Analytics({
     const categoriesSum: { [key: string]: number } = {};
 
     filteredSales.forEach(sale => {
-      sale.items.forEach(item => {
+      const items = sale.items || [];
+      const gross = items.reduce((a, i) => a + (Number(i.lineTotal) || 0), 0);
+      // What the customer actually paid for this sale, split across its lines
+      // in proportion to what each line was worth. Without this the slices
+      // total the shelf price and the middle shows the money taken, and the
+      // two can never agree.
+      const factor = gross > 0 ? (Number(sale.total) || 0) / gross : 0;
+      items.forEach(item => {
         const prod = products.find(p => p.id === item.productId);
         const cat = prod ? prod.category : (serviceCategoryOf(item.productId) || 'Other');
-        categoriesSum[cat] = (categoriesSum[cat] || 0) + item.lineTotal;
+        categoriesSum[cat] = (categoriesSum[cat] || 0) + (Number(item.lineTotal) || 0) * factor;
       });
     });
 
@@ -927,7 +949,7 @@ const colorsMap: { [key: string]: string } = {
               <MoneyHero
                 label={LABELS.moneyIn}
                 value={formatCurrency(displayIncome)}
-                sub={`Total sales${displayDesignRevenue > 0 ? ` • Design ${formatCurrency(displayDesignRevenue)}` : ''}`}
+                sub={`Sales${displayDesignRevenue > 0 ? ` • includes design ${formatCurrency(displayDesignRevenue)}` : ''}`}
                 tone="white"
                 title={formatCurrency(displayIncome)}
               />
@@ -952,11 +974,22 @@ const colorsMap: { [key: string]: string } = {
                 <details className="mt-2">
                   <summary className="text-[10px] font-black text-gold-brand/80 uppercase tracking-wider cursor-pointer hover:text-gold-brand">How?</summary>
                   <div className="mt-1 space-y-0.5 text-[11px] font-bold tabular-nums">
-                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Sales in</span><span className="text-zinc-100">+{formatCurrency(revenue)}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Stock cost</span><span className="text-amber-300">−{formatCurrency(cogs)}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Spending</span><span className="text-rose-300">−{formatCurrency(totalExpenses)}</span></div>
+                    {/* These four lines have to ADD UP to the figure above them.
+                        Sales in is already net of every discount, so subtracting
+                        them again was counting the same money twice, and design
+                        profit was never shown at all -- the gap between this
+                        list and "Profit Left" was exactly those two errors. */}
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Sales in</span><span className="text-zinc-100">+{formatCurrency(shownRevenue)}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Stock cost</span><span className="text-amber-300">−{formatCurrency(shownCogs)}</span></div>
+                    {shownDesignProfit !== 0 && (
+                      <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Design profit</span><span className={shownDesignProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{shownDesignProfit >= 0 ? '+' : '−'}{formatCurrency(Math.abs(shownDesignProfit))}</span></div>
+                    )}
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Spending</span><span className="text-rose-300">−{formatCurrency(shownExpenses)}</span></div>
                     {totalDiscounts > 0 && (
-                      <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Discounts given</span><span className="text-purple-300">−{formatCurrency(totalDiscounts)}</span></div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-zinc-600 uppercase">Discounts given</span>
+                        <span className="text-purple-300/80">{formatCurrency(totalDiscounts)} <span className="text-zinc-600 normal-case">already off the sales figure</span></span>
+                      </div>
                     )}
                     {expenseCategoryBreakdown.slice(0, 3).map(c => (
                       <div key={c.category} className="flex justify-between gap-2">
@@ -1257,8 +1290,8 @@ const colorsMap: { [key: string]: string } = {
                       <span className="text-[10px] font-bold text-zinc-500 uppercase">{s.count} sale{s.count !== 1 ? 's' : ''}</span>
                       <span className="text-xs font-black text-gold-brand tabular-nums">{formatCurrency(s.total)}</span>
                       {(settings.commissionPct || 0) > 0 && (
-                        <span className="text-[10px] font-black text-emerald-400 uppercase tabular-nums" title={`Commission ${settings.commissionPct}%`}>
-                          +{formatCurrency(s.total * (settings.commissionPct || 0) / 100)}
+                        <span className="text-[10px] font-black text-emerald-400 uppercase tabular-nums">
+                          commission {formatCurrency(s.total * (settings.commissionPct || 0) / 100)}
                         </span>
                       )}
                     </div>
@@ -1320,7 +1353,7 @@ const colorsMap: { [key: string]: string } = {
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-widest mb-3">Sales by Category</h3>
               <div className="flex flex-col sm:flex-row items-center gap-6">
                 <div className="relative w-28 h-28 shrink-0">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36" role="img" aria-label={`Sales share by category, total ${formatCurrency(revenue)}`}>
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36" role="img" aria-label={`Sales share by category, total ${formatCurrency(shownRevenue)}`}>
                     <circle cx="18" cy="18" r="16" fill="none" stroke="#2a2a2a" strokeWidth="4" pathLength={100}></circle>
                     {donutSegments.map((seg, idx) => (
                       <circle key={idx} cx="18" cy="18" r="16" fill="none" stroke={seg.color} strokeWidth="4" pathLength={100} strokeLinecap="butt" strokeDasharray={seg.strokeDash} strokeDashoffset={seg.strokeOffset} className="transition-all duration-300"></circle>
@@ -1328,7 +1361,7 @@ const colorsMap: { [key: string]: string } = {
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center px-1 text-center">
                     <span className="text-[10px] text-zinc-500 font-bold uppercase">Total</span>
-                    <span className="text-[11px] font-black text-white tabular-nums leading-tight" title={formatCurrency(revenue)}>{revenue > 0 ? formatCurrency(revenue) : '—'}</span>
+                    <span className="text-[11px] font-black text-white tabular-nums leading-tight">{shownRevenue > 0 ? formatCurrency(shownRevenue) : '—'}</span>
                   </div>
                 </div>
                 <div className="space-y-2 flex-1 w-full min-w-0">
@@ -1337,7 +1370,7 @@ const colorsMap: { [key: string]: string } = {
                   )}
                   {Object.entries(categoryBreakdown).map(([cat, val]) => {
                     const numericVal = val as number;
-                    const pct = revenue > 0 ? (numericVal / revenue) * 100 : 0;
+                    const pct = shownRevenue > 0 ? (numericVal / shownRevenue) * 100 : 0;
                     const catColor = colorsMap[cat] || '#3f3f46';
                     return (
                       <div key={cat} className="flex items-center justify-between gap-4 min-w-0">

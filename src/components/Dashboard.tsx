@@ -83,12 +83,13 @@ export default function Dashboard({
     return acc + splitLegs(s).filter(l => l.method !== 'Cash').reduce((a, l) => a + l.amount, 0);
   }, 0);
 
-  // Sente z'Esimu = MoMo sales + money moved onto the phone today (Float +
-  // Cash destinations from Close day). Owner payouts and bank deposits leave
-  // the phone, so they are excluded. Previously this tile only counted MoMo
-  // sales, so cash moved to float never showed up here.
+  // Sente z'Esimu = MoMo sales + money actually moved ONTO the phone today.
+  // Float only. The 'cash' destination is money taken out of the phone and kept
+  // in the drawer, so counting it here put drawer cash on the phone and made
+  // this tile disagree with the close day and the morning card, which both
+  // count float only. Owner, manager and bank leave the phone entirely.
   const phoneTopUpToday = momoTransfers
-    .filter(t => (t.to || 'float') === 'float' || t.to === 'cash')
+    .filter(t => (t.to || 'float') === 'float')
     .filter(t => localDayKey(t.createdAt) === todayStr)
     .reduce((acc, t) => acc + (t.amount || 0), 0);
   const momoTotal = momoCollected + phoneTopUpToday;

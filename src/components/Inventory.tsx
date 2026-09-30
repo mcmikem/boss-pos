@@ -270,11 +270,14 @@ export default function Inventory({
 
   // Capital locked on shelves (cost × on-hand, services excluded) + how much
   // of it is dead (stale items). Answers "how much money is sitting here?"
+  // effectiveCost, not the typed cost: this is the same figure every row below
+  // shows, and for anything with a recipe it is the only correct one. Valued
+  // at p.cost the headline disagreed with the item list on the same screen.
   const stockValue = useMemo(() => {
-    return products.reduce((a, p) => a + (p.isService || p.stockQty <= 0 ? 0 : (p.cost || 0) * p.stockQty), 0);
+    return products.reduce((a, p) => a + (p.isService || p.stockQty <= 0 ? 0 : effectiveCost(p) * p.stockQty), 0);
   }, [products]);
   const deadCapital = useMemo(() => {
-    return staleList.reduce((a, s) => a + (s.product.stockQty > 0 && !s.product.isService ? (s.product.cost || 0) * s.product.stockQty : 0), 0);
+    return staleList.reduce((a, s) => a + (s.product.stockQty > 0 && !s.product.isService ? effectiveCost(s.product) * s.product.stockQty : 0), 0);
   }, [staleList]);
 
   const processedProducts = useMemo(() => {
@@ -361,7 +364,9 @@ export default function Inventory({
     const priceNum = parseFloat(editPrice) || 0;
     const thresholdNum = parseQty(editThreshold) || 0;
 
-    if (costNum >= priceNum) {
+    // Only when both figures are actually entered: an empty form gave
+    // "Cost (USh 0) is same or more than Price (USh 0)".
+    if (priceNum > 0 && costNum > 0 && costNum >= priceNum) {
       triggerToast(`Warning: Cost (${formatCurrency(costNum)}) is same or more than Price (${formatCurrency(priceNum)})!`, 'info');
     }
 
@@ -787,7 +792,7 @@ export default function Inventory({
           <MoneyHero
             label={LABELS.moneyOnShelves}
             value={formatCurrency(stockValue)}
-            sub="Cost × quantity on hand"
+            sub="What each item really cost × how many are on hand"
             tone="white"
             title={formatCurrency(stockValue)}
           />

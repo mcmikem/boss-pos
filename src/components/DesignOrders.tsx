@@ -125,12 +125,16 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
     const labor = parseFloat(f.laborCost) || 0;
     const transport = parseFloat(f.transportCost) || 0;
     const qty = Math.max(1, parseFloat(f.qty) || 1);
-    const margin = Math.min(95, Math.max(0, parseFloat(f.targetMarginPct) || 0));
-    const totalCost = material + labor;
-    const suggested = totalCost > 0 && margin < 100 ? totalCost / (1 - margin / 100) : 0;
+    const margin = Math.max(0, parseFloat(f.targetMarginPct) || 0);
+    // Transport is part of what the job costs. Leaving it out gave the same
+    // order two profit figures that differed by exactly the transport.
+    const totalCost = material + labor + transport;
+    // Profit ON COST, which is what "target profit 30%" means to a shop
+    // quoting. The margin formula turned 30 into 43 without saying so.
+    const suggested = totalCost > 0 ? totalCost * (1 + margin / 100) : 0;
     const unit = qty > 0 ? suggested / qty : 0;
     const actualTotal = parseFloat(f.totalAmount) || 0;
-    const actualProfit = actualTotal > 0 ? actualTotal - totalCost - transport : 0;
+    const actualProfit = actualTotal > 0 ? actualTotal - totalCost : 0;
     return { totalCost, suggested, unit, actualTotal, actualProfit };
   }, [f.materialCost, f.laborCost, f.transportCost, f.qty, f.targetMarginPct, f.totalAmount]);
 
@@ -240,7 +244,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
       unitPrice: parseFloat(f.unitPrice) || 0,
       totalAmount: total,
       depositPaid: parseFloat(f.depositPaid) || 0,
-      targetMarginPct: Math.min(95, Math.max(0, parseFloat(f.targetMarginPct) || 50)),
+      targetMarginPct: Math.max(0, parseFloat(f.targetMarginPct) || 50),
       status: existing?.status || 'pending',
       notes: f.notes.trim(),
       completedDate: existing?.completedDate,
@@ -897,7 +901,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
                           className="w-full bg-[#0A0A0A] border border-white/5 text-amber-400 font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
                       </div>
                       <div>
-                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target profit %</label>
+                        <label className="text-[10px] text-zinc-600 font-bold uppercase mb-1 block">Target profit % <span className="text-zinc-500 normal-case">(of cost, not of the price)</span></label>
                         <input type="number" min="0" max="95" value={f.targetMarginPct} onChange={e => setF(p => ({ ...p, targetMarginPct: e.target.value }))}
                           className="w-full bg-[#0A0A0A] border border-white/5 text-gold-brand font-black rounded-lg h-11 px-3 text-sm focus:border-gold-brand focus:outline-none" />
                       </div>
@@ -916,7 +920,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
                         <span className="text-sm font-black text-gold-brand">{calc.suggested ? Math.round(calc.suggested).toLocaleString() : '—'}</span>
                       </div>
                       <div className="bg-[#0A0A0A] border border-white/5 rounded-lg px-3 py-2 flex justify-between items-center">
-                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Est. profit</span>
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Est. profit (on cost)</span>
                         <span className="text-sm font-black text-emerald-400">{calc.suggested ? Math.round(calc.suggested - calc.totalCost).toLocaleString() : '—'}</span>
                       </div>
                     </div>

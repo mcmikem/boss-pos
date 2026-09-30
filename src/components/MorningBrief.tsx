@@ -345,7 +345,7 @@ export default function MorningBrief({ sales, products, creditEats, pendingCount
         </p>
       )}
       {dailyGoal !== undefined && dailyGoal > 0 && (
-        <div className="mb-3" title={`Daily goal: ${dailyGoal} sales${dailyGoalRevenue ? ` • ${formatCurrency(dailyGoalRevenue)}` : ''}`}>
+        <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Daily goal</span>
             <span className="text-[10px] font-black text-gold-brand tabular-nums">
