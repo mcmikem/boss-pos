@@ -1491,3 +1491,28 @@ test('a seller can check the till without describing a symptom', () => {
   assert.match(check, /Changes nothing\./);
   assert.match(check, /not saved|waiting/);
 });
+
+test('a setting says where it is saved, and can be found without remembering', () => {
+  const app = read('src/App.tsx');
+  const help = read('src/components/SettingHelp.tsx');
+  // Search, because a menu you have to remember is a menu that hides things.
+  assert.match(app, /Find a setting — blind close, PIN, receipt/);
+  assert.match(app, /const settingsResults = useMemo/);
+  assert.match(app, /openSettingsSection\(hit\.door\)/);
+  // Every setting in the index is searchable, and none of them is a lie about
+  // where it lives: a phone-only setting that LOOKS saved is how a manager
+  // changes something and cannot work out why the other till ignored it.
+  const index = app.match(/const SETTINGS_INDEX:[\s\S]*?\];/)?.[0] || '';
+  const entries = index.match(/\{ id: '[a-z]+'/g) || [];
+  assert.ok(entries.length >= 20, `only ${entries.length} settings are searchable`);
+  const entryLines = index.split('\n').filter(l => l.includes("{ id: '"));
+  assert.equal(entryLines.filter(l => /scope: '(shop|phone)'/.test(l)).length, entries.length,
+    'every searchable setting must declare where it is saved');
+  assert.match(help, /All tills/);
+  assert.match(help, /This phone/);
+  // And the doors lead with what THIS shop trades in.
+  assert.match(app, /const orderedSections = useMemo/);
+  assert.match(app, /kitchen: \['selling', 'money', 'staff', 'security'\]/);
+  assert.match(app, /orderedSections\.map/);
+  assert.equal(/SETTINGS_SECTIONS\.map\(s => \(\s*<button key=\{s\.key\} onClick=\{\(\) => openSettingsSection/.test(app), false);
+});

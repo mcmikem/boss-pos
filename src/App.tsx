@@ -40,7 +40,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Toast, { type ToastAction, type TriggerToast } from './components/Toast';
 import { confirmDialog, promptDialog } from './components/Dialog';
 import PinGate from './components/PinGate';
-import SettingHelp from './components/SettingHelp';
+import SettingHelp, { ScopeChip } from './components/SettingHelp';
 import MorningBrief from './components/MorningBrief';
 import NotificationsBell from './components/NotificationsBell';
 import { pushNotice, dayKeyOf } from './utils/notifications';
@@ -486,6 +486,63 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [setupIdx, setSetupIdx] = useState(0);
 
   const [settings, setSettings] = useState<StoreSettings>(DEFAULT_SETTINGS);
+
+  // Settings search, and the doors in the order THIS shop needs them: a tailor
+  // should not be scrolling past Eatery doors to find their PINs.
+  const [settingsSearch, setSettingsSearch] = useState('');
+  const SETTINGS_INDEX: Array<{ id: string; door: string; label: string; text: string; scope: 'shop' | 'phone' }> = [
+    { id: 'shopname', door: 'shop', label: 'Shop name', text: 'what the till and the receipts call this shop', scope: 'shop' },
+    { id: 'shoptype', door: 'shop', label: 'Shop type', text: 'which trade unlocks which screens', scope: 'shop' },
+    { id: 'receipt', door: 'shop', label: 'Receipt footer and logo', text: 'printed under every receipt', scope: 'shop' },
+    { id: 'hours', door: 'shop', label: 'Opening hours', text: 'when the shop is open, for the till reminder', scope: 'shop' },
+    { id: 'lang', door: 'shop', label: 'Language', text: 'English or Luganda, and the till PIN screen', scope: 'shop' },
+    { id: 'grid', door: 'selling', label: 'Sold-out items on the grid', text: 'hide the ones you cannot sell right now', scope: 'phone' },
+    { id: 'simple', door: 'selling', label: 'Simple menu', text: 'fewer buttons, for a new till', scope: 'phone' },
+    { id: 'goal', door: 'selling', label: 'Daily sales goal', text: 'the target shown on the dashboard', scope: 'shop' },
+    { id: 'loyalty', door: 'selling', label: 'Regulars reward', text: 'every Nth visit earns a discount', scope: 'shop' },
+    { id: 'staff', door: 'staff', label: 'Staff logins', text: 'one PIN per person, and each PIN is written for you', scope: 'shop' },
+    { id: 'handover', door: 'staff-doors', label: 'Cashier hand-overs', text: 'let a seller claim money given to a named manager', scope: 'shop' },
+    { id: 'doors', door: 'staff-doors', label: 'What cashiers can open', text: 'Close day, Stock, Sales', scope: 'shop' },
+    { id: 'seller', door: 'staff', label: 'Seller name', text: 'stamped on sales when nobody is signed in', scope: 'shop' },
+    { id: 'blind', door: 'staff', label: 'Blind close', text: 'cashiers close without seeing any totals', scope: 'shop' },
+    { id: 'notify', door: 'staff', label: 'WhatsApp the owner after close', text: 'sends the evening summary', scope: 'shop' },
+    { id: 'capital', door: 'money', label: 'Money kept for tomorrow', text: 'the float each department carries over', scope: 'shop' },
+    { id: 'ownerphone', door: 'money', label: 'Owner number', text: 'where the close summary goes', scope: 'shop' },
+    { id: 'discountpin', door: 'security', label: 'Manager needed above', text: 'the discount a manager must approve', scope: 'shop' },
+    { id: 'rescue', door: 'security', label: 'Rescue PIN', text: 'a backup way into the till', scope: 'shop' },
+    { id: 'lockmins', door: 'security', label: 'Lock the till after', text: 'minutes of no tapping', scope: 'shop' },
+    { id: 'pin', door: 'security', label: 'The till PIN', text: 'opens the device without naming a person', scope: 'shop' },
+    { id: 'bigtext', door: 'look', label: 'Big text', text: 'larger type across every till', scope: 'shop' },
+    { id: 'theme', door: 'look', label: 'Colours', text: 'the till\'s brand colour', scope: 'shop' },
+    { id: 'sheets', door: 'data', label: 'Google Sheet backup', text: 'a copy of every sale, every day', scope: 'shop' },
+    { id: 'export', door: 'data', label: 'Export or back up', text: 'take the shop\'s data with you', scope: 'shop' },
+  ];
+  const settingsResults = useMemo(() => {
+    const q = settingsSearch.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return SETTINGS_INDEX.filter(hit => (
+      hit.label.toLowerCase().includes(q) || hit.text.toLowerCase().includes(q)
+    )).slice(0, 8);
+  }, [settingsSearch]);
+  const orderedSections = useMemo(() => {
+    const wanted = settings.trades;
+    if (!Array.isArray(wanted) || wanted.length === 0) return SETTINGS_SECTIONS;
+    // A kitchen shop leads with its own doors; a shelf shop with its own.
+    const leads: Record<string, string[]> = {
+      kitchen: ['selling', 'money', 'staff', 'security'],
+      orders: ['staff', 'money', 'security', 'data'],
+      services: ['staff', 'selling', 'money', 'security'],
+      sell: ['inventory', 'staff', 'money', 'security'],
+    };
+    const first = leads[wanted[0]] || [];
+    return [...SETTINGS_SECTIONS].sort((a, b) => {
+      const ia = first.indexOf(a.key), ib = first.indexOf(b.key);
+      if (ia === -1 && ib === -1) return 0;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  }, [settings.trades]);
   // Every configured department — what the question is allowed to hide.
   const departmentKeys = useMemo(() => {
     const cats = Array.isArray(settings.categories) ? settings.categories.filter(Boolean) : [];
@@ -4064,8 +4121,40 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   visible and the rest were cut with no fade, no arrow and no
                   hint that the row moved — the PINs and Data doors were simply
                   invisible unless you happened to try scrolling sideways. */}
+              {/* Search first. Eight doors, and to reach "Blind close" you had
+                  to know which door it lived in — which is the whole problem
+                  with a menu you have to remember. */}
+              <div className="relative">
+                <input value={settingsSearch} onChange={e => setSettingsSearch(e.target.value)}
+                  placeholder="Find a setting — blind close, PIN, receipt…"
+                  aria-label="Search settings"
+                  className="w-full h-11 bg-[#0A0A0A] border border-white/10 text-white rounded-xl px-3 pr-9 text-sm font-bold outline-none focus:border-gold-brand" />
+                {settingsSearch && (
+                  <button onClick={() => setSettingsSearch('')} aria-label="Clear search"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-lg text-zinc-500 hover:text-white cursor-pointer">
+                    ×
+                  </button>
+                )}
+              </div>
+              {settingsResults.length > 0 ? (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-0.5">
+                    {settingsResults.length} match{settingsResults.length !== 1 ? 'es' : ''}
+                  </p>
+                  {settingsResults.map(hit => (
+                    <button key={hit.id} onClick={() => { openSettingsSection(hit.door); setSettingsSearch(''); }}
+                      className="w-full text-left rounded-xl border border-white/10 bg-[#0A0A0A] px-3 py-2.5 min-h-[44px] active:scale-[0.99] transition-all cursor-pointer hover:border-gold-brand/40">
+                      <span className="block text-xs font-black text-white uppercase tracking-wider">{hit.label}</span>
+                      <span className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[10px] text-zinc-500 font-medium leading-snug flex-1">{hit.text}</span>
+                        <ScopeChip scope={hit.scope} />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
               <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur grid grid-cols-4 sm:grid-cols-8 gap-1.5">
-                {SETTINGS_SECTIONS.map(s => (
+                {orderedSections.map(s => (
                   <button key={s.key} onClick={() => openSettingsSection(s.key)}
                     aria-current={settingsSection === s.key ? 'true' : undefined}
                     className={`min-w-0 h-9 px-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer truncate ${settingsSection === s.key ? 'bg-gold-brand border-gold-brand text-black' : 'bg-[#0A0A0A] border-white/10 text-zinc-400 hover:text-zinc-200'}`}>
@@ -4073,6 +4162,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </button>
                 ))}
               </div>
+              )}
               <SettingsSection id="set-shop" icon={Store} title="Shop" hint="Name, type, language, hours, branches"
                 open={settingsSection === 'shop'} onToggle={() => toggleSettingsSection('shop')}>
               <div className="space-y-1">
@@ -4434,7 +4524,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">The grid <SettingHelp label="The grid" text="Sold-out items can sit on the till grid or stay off it. Off keeps the grid to things you can actually sell right now; sold-out items are still counted and still listed in Stock." /></label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">The grid <SettingHelp scope="phone" label="The grid" text="Sold-out items can sit on the till grid or stay off it. Off keeps the grid to things you can actually sell right now; sold-out items are still counted and still listed in Stock." /></label>
                 <button onClick={() => {
                     const next = !showSoldOut;
                     setShowSoldOut(next);
@@ -4724,7 +4814,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               <SettingsSection id="set-staff-doors" icon={LayoutGrid} title="Cashier doors" hint="What cashiers may open — Sell and Spend always on"
                 open={settingsSection === 'staff-doors'} onToggle={() => toggleSettingsSection('staff-doors')}>
               <div className="space-y-1">
-                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier can open <SettingHelp label="Cashier doors" text="Sell and Spend are always on. Tick what else cashiers may open: Close day for the evening close-out (blind mode hides every total), Stock and Sales only if you trust them with it. Cashiers need the Sales door to spot mistakes and ask for fixes." /></label>
+                <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier can open <ScopeChip scope="shop" /> <SettingHelp label="Cashier doors" text="Sell and Spend are always on. Tick what else cashiers may open: Close day for the evening close-out (blind mode hides every total), Stock and Sales only if you trust them with it. Cashiers need the Sales door to spot mistakes and ask for fixes." /></label>
                 {([['registers', 'Close day'], ['inventory', 'Stock'], ['analytics', 'Sales']] as const).map(([tab, label]) => {
                   const doors = settings.cashierTabs ?? ['registers'];
                   const on = doors.includes(tab);
@@ -4742,7 +4832,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 <p className="text-[10px] text-zinc-600">Blind close (Shop hours section) hides every total on Close day.</p>
               </div>
                 <div className="space-y-1 pt-2 mt-1 border-t border-white/5">
-                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier hand-overs <SettingHelp label="Cashier hand-overs" text="For shops with no manager in the building. Lets a cashier record that cash was handed to a NAMED manager, who confirms receipt on their own phone. It is a claim, not a movement: the cashier cannot move money to the owner, float or a bank, and cannot delete a claim." /></label>
+                  <label className="text-xs text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1 flex-wrap">Cashier hand-overs <ScopeChip scope="shop" /> <SettingHelp label="Cashier hand-overs" text="For shops with no manager in the building. Lets a cashier record that cash was handed to a NAMED manager, who confirms receipt on their own phone. It is a claim, not a movement: the cashier cannot move money to the owner, float or a bank, and cannot delete a claim." /></label>
                   <button onClick={() => setSettings(prev => ({ ...prev, cashierHandover: !prev.cashierHandover }))}
                     className={`w-full h-11 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border flex items-center justify-between px-4 ${settings.cashierHandover ? 'bg-gold-brand/15 border-gold-brand/50 text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
                     <span>Cashier can record a hand-over to a manager</span>
