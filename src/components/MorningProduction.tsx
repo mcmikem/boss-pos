@@ -162,7 +162,7 @@ export default function MorningProduction({
       setProdCustomItem('');
       setProdCost('');
       setProdProductId(null);
-      setDraftIngredients(null);
+      setDraftIngredients([]);
       setRecipeProductId(null);
       return;
     }
@@ -179,7 +179,8 @@ export default function MorningProduction({
       })));
     } else {
       setRecipeProductId(null);
-      setDraftIngredients(null);
+      // Empty, not null: the editor opens so she can type the first ingredient.
+      setDraftIngredients([]);
     }
   };
 
@@ -223,7 +224,11 @@ export default function MorningProduction({
   // A list the cook has just started counts as the recipe path: otherwise the
   // editor she opened disappears the moment she taps "+ add ingredient".
   const recipePath = !!draftIngredients && draftIngredients.length > 0;
-  const editingIngredients = !!draftIngredients;
+  // An empty list still means the editor is OPEN. Using `null` here made
+  // "no recipe yet" hide the whole editor -- including the one button that
+  // adds the first line -- so a snack with no recipe could never be given
+  // one. null now only means "nothing selected yet".
+  const editingIngredients = !!prodProductId || prodItem === '__custom';
   // ONE source for the cost of the ingredients. It used to be the recipe total
   // (batchSpend), which is ZERO for a snack with no recipe — so a samosa batch
   // whose ingredients cost 6,000 was showing "profit if all sold 12,500" and

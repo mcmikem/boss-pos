@@ -1646,3 +1646,21 @@ test('a server failure is recorded, not just described', () => {
   assert.match(check, /Last server failure on this phone/);
   assert.match(check, /ref \$\{last\.traceId/);
 });
+
+test('a snack with no recipe can still be given one', () => {
+  const mp = read('src/components/MorningProduction.tsx');
+  // Deadlock, found on her phone: the ingredient editor -- including the only
+  // button that adds the first line -- was hidden whenever the snack had no
+  // recipe, and it had no recipe precisely because she could never add one.
+  assert.match(mp, /const editingIngredients = !!prodProductId \|\| prodItem === '__custom'/);
+  assert.equal(/const editingIngredients = !!draftIngredients/.test(mp), false);
+  // Selecting a snack with no recipe opens an empty editor, not a hidden one.
+  assert.match(mp, /setDraftIngredients\(\[\]\);/);
+  // The line that starts it all must be reachable and carry a name.
+  assert.match(mp, /\+ Add ingredient/);
+  assert.match(mp, /aria-label=\{`Unit for \$\{ing\.name/);
+  // An empty list must never invent a recipe, and must never file a blank
+  // expense breakdown.
+  assert.match(mp, /if \(recipePath && prod && onUpdateProduct\)/);
+  assert.match(mp, /: undefined;\n      const written = await onAddExpense/);
+});
