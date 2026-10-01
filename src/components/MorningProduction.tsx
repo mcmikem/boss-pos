@@ -275,6 +275,18 @@ export default function MorningProduction({
     // a real batch, just no money out today.
     const spend = recipePath ? batchSpend : Math.round(qty * (parseFloat(prodCost) || 0));
     if (!recipePath && spend <= 0) { triggerToast('Enter the cost price each', 'error'); return; }
+      // Asked FIRST, before a single row is written. This gate used to run after
+    // the batch and the expense were already on the server, and because the
+    // form stayed filled, saving again added the batch a second time.
+    const shortfall = capitalLeft != null ? Math.max(0, spend - capitalLeft) : 0;
+    if (shortfall > 0 && !topUpSource) {
+      triggerToast('Choose where the extra money is coming from before saving', 'error');
+      return;
+    }
+    if (shortfall > 0) {
+      onRequestTopUp?.(shortfall, topUpSource || 'drawer');
+    }
+
     const cost = qty > 0 ? spend / qty : 0;
     const batchSaved = await onAddProduction({
       id: `pr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -377,17 +389,7 @@ export default function MorningProduction({
     }
     // No source, no save. Guessing "float" is how money ended up recorded as
     // phone float that never touched the phone.
-    // Same question as the screen asked, or none. The batch covers itself from
-    // the capital set aside; only a shortfall has to be explained.
-    const shortfall = capitalLeft != null ? Math.max(0, spend - capitalLeft) : 0;
-    // Over the capital that is actually left -- and only then.
-    if (shortfall > 0 && !topUpSource) {
-      triggerToast('Choose where the extra money is coming from before saving', 'error');
-      return;
-    }
-    if (shortfall > 0) {
-      onRequestTopUp?.(shortfall, topUpSource || 'drawer');
-    }
+
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
   };

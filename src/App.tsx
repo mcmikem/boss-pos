@@ -22,7 +22,7 @@ import { downloadBlob } from './utils/download';
 import { computeKeptItems, scaleKept } from './utils/returns';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
-import { isPastClose, middayStamp } from './utils/dates';
+import { isPastClose, middayStamp, todayLocalKey } from './utils/dates';
 import { readSyncReview, clearSyncReview, buildReconnectReport, type SyncReviewItem } from './utils/syncReview';
 import { salesCsv, productsCsv, creditCsv } from './utils/csv';
 import { reconcileCartPrices } from './utils/cart';
@@ -2274,8 +2274,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     try { logVoidDay(saleId); } catch {}
     setSales(prev => prev.filter(s => s.id !== saleId));
     setProducts(prev => prev.map(p => {
-      const it = sale.items.find(i => i.productId === p.id);
-      return it && !p.isService ? { ...p, stockQty: p.stockQty + it.qty } : p;
+      if (p.isService) return p;
+      // Every line for this product, exactly as the sale counted them. `find`
+      // restored only the first, so two sizes of one item in a single sale lost
+      // a pair on every refund.
+      const qty = (sale.items || [])
+        .filter(i => i.productId === p.id)
+        .reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+      return qty > 0 ? { ...p, stockQty: p.stockQty + qty } : p;
     }));
     try { await saleApi.remove(saleId); } catch (err) {
       const code = (err as { code?: string })?.code;
@@ -2563,7 +2569,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // close, minus the batches already logged today. This is the number the
   // kitchen works against, so the drawer never quietly over-commits.
   const ingredientBudgetToday = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayLocalKey();
     const setAside = Math.max(0, Number(settings.eodCapital?.Eatery || 0) + Math.max(0, Number(settings.eodCapital?.Drinks || 0)));
     if (setAside <= 0) return undefined;
     const spent = productionRegisters
@@ -2590,7 +2596,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         category: 'Eatery',
         amount: amt,
         comment: `Ingredients — owner handed this over`,
-        createdAt: middayStamp(new Date().toISOString().slice(0, 10)),
+        createdAt: middayStamp(todayLocalKey()),
         to: 'float',
         direction: 'in',
         recipientName: settings.ownerName || 'Owner',
@@ -3516,9 +3522,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             ownerPhone={settings.ownerPhone || ''}
             closeSummaryAuto={settings.closeSummaryAuto !== false}
             lang={settings.language}
-            onPrintClose={() => printDailyClose(new Date().toISOString().slice(0, 10), sales, expenses, products)}
+            onPrintClose={() => printDailyClose(todayLocalKey(), sales, expenses, products)}
             onSendClose={() => {
-              const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
+              const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(todayLocalKey(), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
               if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
               window.open(url, '_blank', 'noopener');
             }}
@@ -4821,7 +4827,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     onChange={(e) => setSettings(prev => ({ ...prev, ownerPhone: e.target.value.replace(/\D/g, '').slice(0, 12) || undefined }))}
                     className="w-full h-11 bg-[#141414] border border-white/5 text-sm px-3 rounded-xl text-white font-bold focus:border-gold-brand outline-none" />
                   <button onClick={() => {
-                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(new Date().toISOString().slice(0, 10), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
+                    const url = supplierWhatsAppUrl(settings.ownerPhone, buildCloseSummary(settings.shopName, closeTotals(todayLocalKey(), sales, expenses, creditPayments, creditEats), activeStaff?.name || staffName || undefined));
                     if (!url) { triggerToast('Enter a valid owner number first', 'error'); return; }
                     window.open(url, '_blank', 'noopener');
                   }} className="w-full h-10 bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-950/60">
@@ -5162,7 +5168,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                       <button key={kind} onClick={() => {
                         try {
                           const slug = (settings.shopName || 'pos').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                          const ok = downloadBlob(new Blob([build()], { type: 'text/csv' }), `${slug}-${kind}-${new Date().toISOString().slice(0, 10)}.csv`);
+                          const ok = downloadBlob(new Blob([build()], { type: 'text/csv' }), `${slug}-${kind}-${todayLocalKey()}.csv`);
                           triggerToast(ok ? `${label} CSV downloaded` : 'Download failed on this device', ok ? 'success' : 'error');
                         } catch {
                           triggerToast('Export failed', 'error');

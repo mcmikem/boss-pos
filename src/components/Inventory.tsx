@@ -425,9 +425,15 @@ export default function Inventory({
     // for a movement the server then refused.
     const saved = await onUpdateProduct(updated);
     if (saved === false) return;
-        triggerToast(`Set stock to ${finalStock}`, 'success');
-        triggerToast(`Added ${stockAdjustment} units!`, 'success');
-        triggerToast(`Removed ${stockAdjustment} units`, 'info');
+        // One message, describing what actually happened.
+        triggerToast(
+          adjustmentType === 'set'
+            ? `Stock set to ${finalStock}`
+            : adjustmentType === 'add'
+              ? `Added ${stockAdjustment} units`
+              : `Removed ${stockAdjustment} units`,
+          adjustmentType === 'remove' ? 'info' : 'success',
+        );
       logAdjustment({
         ts: new Date().toISOString(), productId: editingProduct.id, name: nameTrimmed,
         type: adjustmentType, qty: movedQty, reason,

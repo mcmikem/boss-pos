@@ -1770,3 +1770,62 @@ test('a card with sizes cannot claim one margin for a price range', () => {
   assert.match(read('src/components/ProductCard.variants.test.ts'), /worstPrice\)\.toBe\(1500\)/);
   assert.match(read('src/components/ProductCard.variants.test.ts'), /toBeLessThan\(0\)/);
 });
+
+test('a whole trading day cannot vanish because a phone signed in with a staff PIN', () => {
+  const api = read('src/api.ts');
+  // The outbox gate checked ONLY the till token, but every request is sent with
+  // `getStaffToken() || getAuthToken()`. On a staff-PIN-only phone -- the normal
+  // case, and every seller phone -- every entry was marked blocked_auth on
+  // every flush and nothing was ever sent. The header said "they will go up on
+  // their own" and Retry just re-blocked it.
+  assert.match(api, /if \(!getStaffToken\(\) && !getAuthToken\(\)\) \{/);
+  assert.equal(/if \(!getAuthToken\(\)\) \{\s*\n\s*const blocked/.test(api), false);
+});
+
+test('no question is asked after the money has already moved', () => {
+  const mp = read('src/components/MorningProduction.tsx');
+  // The shortfall gate ran AFTER the batch and the expense were on the server.
+  // The error said "choose where the money came from", the form stayed filled,
+  // and saving again added the batch twice: double stock, double expense.
+  const submit = mp.slice(mp.indexOf('const submitBatch'));
+  const asks = submit.indexOf('Choose where the extra money is coming from');
+  const writes = submit.indexOf('await onAddProduction');
+  assert.ok(asks > 0 && writes > 0, 'both must exist');
+  assert.ok(asks < writes, 'the question must come before the first write');
+});
+
+test('a refund puts back every line, not just the first', () => {
+  const app = read('src/App.tsx');
+  // The sale sums every line for a product; the refund used `find`, so two
+  // sizes of one item in a single sale lost a pair on every refund.
+  const at = app.indexOf('logVoidDay(saleId)');
+  assert.ok(at > 0);
+  const region = app.slice(at, at + 900);
+  assert.equal(/sale\.items\.find\(i => i\.productId === p\.id\)/.test(region), false);
+  assert.match(region, /\.filter\(i => i\.productId === p\.id\)/);
+});
+
+test('an eager tap cannot collect or save twice', () => {
+  const ledger = read('src/components/CreditsLedger.tsx');
+  assert.match(ledger, /if \(!paymentKey \|\| collecting\) return;/);
+  assert.match(ledger, /disabled=\{collecting\}/);
+  assert.match(ledger, /finally \{/);
+  assert.match(ledger, /setCollecting\(false\);/);
+  const inv = read('src/components/Inventory.tsx');
+  // Three toasts for one save, and the slot is last-wins, so restocking read
+  // "Removed 50 units" after she had added 50.
+  assert.equal(/Removed \$\{stockAdjustment\} units', 'info'\);/.test(inv), false);
+  assert.match(inv, /adjustmentType === 'add'/);
+});
+
+test("the day is the shop's day, not UTC", () => {
+  const app = read('src/App.tsx');
+  // toISOString() is UTC. The shop is UTC+3, so between 00:00 and 03:00 it
+  // returns YESTERDAY -- and the Eatery is exactly the department working then.
+  assert.equal(/toISOString\(\)\.slice\(0, 10\)/.test(app), false);
+  assert.match(app, /import \{ isPastClose, middayStamp, todayLocalKey \}/);
+  const api = read('src/api.ts');
+  // /api/summary is the weekly and monthly report. No write cleared it, so the
+  // figure could be a full day stale and still look authoritative.
+  assert.match(api, /key\.includes\('\/api\/summary'\)/);
+});

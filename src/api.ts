@@ -695,7 +695,10 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
       authFailed: false, networkFailed: false, counts: countsFor(list),
     };
   }
-  if (!getAuthToken()) {
+  // Either credential authorises a write -- this is the same pair the request
+  // itself sends. Checking only the till token meant a staff-PIN-only phone
+  // could never flush: every entry went to blocked_auth on every attempt.
+  if (!getStaffToken() && !getAuthToken()) {
     const blocked = list.map(entry => isActionable(entry) ? mark(entry, 'blocked_auth', 'Authentication required') : entry);
     await persistOutbox(trimOutbox(blocked));
     return {
@@ -1091,7 +1094,9 @@ function clearRelatedCaches(path: string): void {
   for (const key of keys) {
     // Writes invalidate the matching list AND the combined /api/boot blob, so
     // a later offline boot never shows data that contradicts what was saved.
-    if (key.includes(basePath) || key.includes('/api/boot')) {
+    // /api/summary too: it is the Weekly and Monthly report, and it is a
+    // whole-table rollup, so every write to sales, expenses or stock moves it.
+    if (key.includes(basePath) || key.includes('/api/boot') || key.includes('/api/summary')) {
       localStorage.removeItem(key);
       keys.delete(key);
     }

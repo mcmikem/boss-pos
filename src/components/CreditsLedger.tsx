@@ -89,41 +89,52 @@ export default function CreditsLedger({
 
   const totalOutstanding = records.reduce((sum, r) => sum + r.remaining, 0);
 
+  // An eager second tap must not collect twice. Every call mints a fresh id and
+  // a fresh write id, so nothing downstream could have caught it.
+  const [collecting, setCollecting] = useState(false);
   const handleRecordPayment = async () => {
-    if (!paymentKey) return;
-    const amtNum = parseFloat(paymentAmount);
-    if (isNaN(amtNum) || amtNum <= 0) {
-      triggerToast('Enter valid payment amount', 'error');
-      return;
-    }
-
-    const record = records.find(r => r.key === paymentKey);
-    if (!record || amtNum > record.remaining) {
-      triggerToast(`Cannot exceed outstanding amount (${formatCurrency(record?.remaining || 0)})`, 'error');
-      return;
-    }
-
-    if (record.kind === 'book') {
-      if (!onPayCreditEat) {
-        triggerToast('Collect book payments in Close day', 'info');
+    if (!paymentKey || collecting) return;
+    setCollecting(true);
+    try {
+      const amtNum = parseFloat(paymentAmount);
+      if (isNaN(amtNum) || amtNum <= 0) {
+        triggerToast('Enter valid payment amount', 'error');
         return;
       }
-      // Awaited: this toast used to fire before the server had the payment, so
-      // a refused collection announced itself as recorded and cleared the
-      // amount the cashier had typed.
-      const written = await onPayCreditEat(record.refId, amtNum);
+
+      const record = records.find(r => r.key === paymentKey);
+      if (!record || amtNum > record.remaining) {
+        triggerToast(`Cannot exceed outstanding amount (${formatCurrency(record?.remaining || 0)})`, 'error');
+        return;
+      }
+
+      if (record.kind === 'book') {
+        if (!onPayCreditEat) {
+          triggerToast('Collect book payments in Close day', 'info');
+          return;
+        }
+        // Awaited: this toast used to fire before the server had the payment, so
+        // a refused collection announced itself as recorded and cleared the
+        // amount the cashier had typed.
+        const written = await onPayCreditEat(record.refId, amtNum);
+        if (written === false) return;
+        triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
+        setPaymentKey(null);
+        setPaymentAmount('');
+        return;
+      }
+
+      const written = await onPayCredit(record.refId, amtNum);
       if (written === false) return;
       triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
       setPaymentKey(null);
       setPaymentAmount('');
-      return;
+  
+    } finally {
+      // Every exit above returns early; without this the button would stay
+      // greyed for good after one mistyped amount.
+      setCollecting(false);
     }
-
-    const written = await onPayCredit(record.refId, amtNum);
-    if (written === false) return;
-    triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
-    setPaymentKey(null);
-    setPaymentAmount('');
   };
 
   // One card when clear (no header-0 + empty-message duplication), full
@@ -265,9 +276,11 @@ export default function CreditsLedger({
 
                 <button
                   onClick={handleRecordPayment}
-                  className="w-full h-10 bg-green-600 text-white font-black uppercase tracking-widest rounded-xl text-xs hover:bg-green-700 active:scale-98 transition-all"
+                  disabled={collecting}
+                  aria-busy={collecting}
+                  className="w-full h-10 bg-green-600 text-white font-black uppercase tracking-widest rounded-xl text-xs hover:bg-green-700 active:scale-98 transition-all disabled:opacity-60"
                 >
-                  Confirm Payment
+                  {collecting ? 'Saving…' : 'Confirm Payment'}
                 </button>
               </>
             )}
