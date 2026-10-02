@@ -1829,3 +1829,43 @@ test("the day is the shop's day, not UTC", () => {
   // figure could be a full day stale and still look authoritative.
   assert.match(api, /key\.includes\('\/api\/summary'\)/);
 });
+
+test('a crash on a phone I cannot see is written down and shown', () => {
+  const eb = read('src/components/ErrorBoundary.tsx');
+  // It caught crashes and stored them in sessionStorage, which dies with the
+  // tab -- so a crash that took the whole screen left no trace at all and the
+  // only symptom was "it doesn't work".
+  assert.match(eb, /export function readLastCrash\(\)/);
+  assert.match(eb, /localStorage\.setItem\(LAST_CRASH_KEY/);
+  assert.match(eb, /build: typeof __BUILD_COMMIT__/);
+  const pin = read('src/components/PinGate.tsx');
+  assert.match(pin, /This phone stopped working/);
+  assert.match(pin, /It is the fault, not the phone/);
+  const check = read('src/components/TillCheck.tsx');
+  assert.match(check, /This phone has crashed/);
+});
+
+test('a handover cannot be rung twice, and a refused sale cannot invent stock', () => {
+  const svc = read('src/utils/serviceSale.ts');
+  // The status save happens AFTER the money, and when it failed the app said
+  // "retry Deliver" -- which rang the money again. The sale id is derived now.
+  assert.match(svc, /const stable = /);
+  assert.match(svc, /key\?: string;/);
+  for (const f of ['DesignOrders', 'RepairJobs', 'Bookings', 'TailoringOrders']) {
+    assert.match(read(`src/components/${f}.tsx`), /key: (order|updated|created)\.id,/);
+  }
+  const app = read('src/App.tsx');
+  // The decrement clamps at zero, so adding the quantity back on the rollback
+  // invented stock that was never on the shelf.
+  assert.match(app, /const stockBefore = new Map<string, number>\(\)/);
+  assert.match(app, /stockQty: was != null \? was :/);
+});
+
+test('a slow network cannot freeze the till for 90 seconds', () => {
+  const api = read('src/api.ts');
+  // Three 30s attempts fired before a write was even queued. A dead-but-"online"
+  // Wi-Fi answers with a timeout, not a TypeError, so all three burned.
+  assert.match(api, /const FIRST_WRITE_TIMEOUT_MS = 7000;/);
+  assert.match(api, /attempt === 0 \? FIRST_WRITE_TIMEOUT_MS : WRITE_TIMEOUT_MS/);
+  assert.match(api, /if \(timedOut && !isRead\) break;/);
+});

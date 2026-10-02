@@ -45,6 +45,9 @@ export interface ServiceSaleInput {
   unitCost?: number;
   /** Trace tag so Reports can dedupe, e.g. `Design order dorder-123`. */
   note?: string;
+  /** The job this settles. Makes the sale id stable, so a retry of the same
+   *  handover is recognised as the same sale instead of ringing it twice. */
+  key?: string;
 }
 
 // One service money movement = one real sale row (deposit at intake, balance
@@ -60,8 +63,12 @@ export async function ringServiceSale(input: ServiceSaleInput): Promise<SaleSave
   // customer's money handed over, the goods gone, and the books never had it.
   // Throwing means every caller already inside a try/catch is protected without
   // touching it, and the sale handler has already said why it was refused.
+  // Derived, not random. The status save happens AFTER this, and when it failed
+  // the app said "retry Deliver" -- which rang the money a second time. A
+  // deterministic id makes the retry the same sale rather than a new one.
+  const stable = `svc-${(input.key || input.productId || 'service')}-${amount}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120);
   const written = await input.onAddSale({
-    id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: stable,
     orderNumber,
     timestamp: new Date().toISOString(),
     items: [{

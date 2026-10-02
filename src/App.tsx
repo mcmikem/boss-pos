@@ -2162,6 +2162,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     if (inflight) return inflight;
     const run = (async (): Promise<SaleSaveResult> => {
     const alreadyKnown = sales.some(s => s.id === newSale.id);
+    // Where each product stood before this sale decremented it. The rollback
+    // restores these exact figures: the decrement clamps at zero, so adding the
+    // quantity back on would invent stock that was never on the shelf.
+    const stockBefore = new Map<string, number>();
     const soldQty = (productId: string) => newSale.items
       .filter(item => item.productId === productId)
       .reduce((sum, item) => sum + item.qty, 0);
@@ -2170,6 +2174,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setProducts(prevProducts => prevProducts.map(prod => {
         const qty = soldQty(prod.id);
         if (qty > 0 && !prod.isService) {
+          stockBefore.set(prod.id, prod.stockQty);
           return { ...prod, stockQty: Math.max(0, prod.stockQty - qty) };
         }
         return prod;
@@ -2204,8 +2209,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         setSales(prev => prev.filter(s => s.id !== newSale.id));
         setProducts(prevProducts => prevProducts.map(prod => {
           const qty = soldQty(prod.id);
+          // The exact figure from before the decrement. Adding qty back onto an
+          // already-clamped 0 invented stock that was never on the shelf.
           if (qty > 0 && !prod.isService) {
-            return { ...prod, stockQty: prod.stockQty + qty };
+            const was = stockBefore.get(prod.id);
+            return { ...prod, stockQty: was != null ? was : prod.stockQty + qty };
           }
           return prod;
         }));

@@ -266,6 +266,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
               customerName: updated.customerName,
               unitCost: (updated.materialCost || 0) + (updated.laborCost || 0) + (updated.transportCost || 0),
               note: DESIGN_SALE_TAG(updated.id),
+              key: updated.id,
             });
               } catch {
             triggerToast('The balance was not recorded, so the job is still open', 'error');
@@ -288,6 +289,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
               customerName: created.customerName,
               unitCost: (created.materialCost || 0) + (created.laborCost || 0) + (created.transportCost || 0),
               note: DESIGN_SALE_TAG(created.id),
+              key: created.id,
             });
               } catch {
             triggerToast('The balance was not recorded, so the job is still open', 'error');
@@ -315,6 +317,7 @@ export default function DesignOrders({ triggerToast, shopName = 'Design & Print'
           customerName: order.customerName,
           unitCost: Math.max(0, (order.materialCost || 0) + (order.laborCost || 0) + (order.transportCost || 0) - (order.depositPaid || 0)),
           note: DESIGN_SALE_TAG(order.id),
+          key: order.id,
         });
       } catch {
         triggerToast('The balance was not recorded, so the job is still open', 'error');

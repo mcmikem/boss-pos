@@ -77,6 +77,11 @@ function fetchTimeout(url: string, options: RequestInit, ms: number): Promise<Re
   });
 }
 const WRITE_TIMEOUT_MS = 30000;
+// How long the FIRST write attempt may hang before the till stops waiting. A
+// customer is standing there. After this the sale is queued and the outbox
+// finishes the job in the background, which is the only place a slow answer
+// belongs.
+const FIRST_WRITE_TIMEOUT_MS = 7000;
 const READ_TIMEOUT_MS = 15000;
 const CONTROL_PATHS = new Set([
   '/api/export',
@@ -1195,7 +1200,7 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
       const res = await fetchTimeout(`${BASE}${path}`, {
         headers: { 'Content-Type': 'application/json', Authorization: getAuthHeader() },
         ...options,
-      }, isRead ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
+      }, isRead ? READ_TIMEOUT_MS : (attempt === 0 ? FIRST_WRITE_TIMEOUT_MS : WRITE_TIMEOUT_MS));
       if (!res.ok) {
         let message = `API error: ${res.status}`;
         let code: string | undefined;
@@ -1274,6 +1279,12 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
         (err instanceof ApiError &&
           (err.status === 502 || err.status === 503 || err.status === 504 ||
             (err.status === 500 && /temporarily unavailable|Database temporarily/i.test(err.message))));
+      // A timeout means the request is not going to be answered. Retrying it
+      // inline just froze the till for another 30 seconds. Hand it to the
+      // outbox, which retries with backoff while she keeps selling.
+      const timedOut = (err instanceof TypeError || err instanceof ApiError)
+        && /network timeout|timeout|aborted/i.test(String((err as Error)?.message || ''));
+      if (timedOut && !isRead) break;
       if (isTransient && attempt < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, 900 * (attempt + 1)));
         continue;

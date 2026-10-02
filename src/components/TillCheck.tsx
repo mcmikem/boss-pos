@@ -1,4 +1,5 @@
 import { lastServerError } from '../api';
+import { readLastCrash } from './ErrorBoundary';
 import { useState } from 'react';
 import { CheckCircle2, XCircle, Loader2, Wrench } from 'lucide-react';
 import { supportApi } from '../api';
@@ -104,7 +105,21 @@ export default function TillCheck({ onClose, creditEats = [], creditPayments = [
       });
     }
 
-    // 5. The build, so a report can name it.
+    // 5. Did the app itself fall over on this phone? A crash is written where
+    //    it survives a restart, because on a phone nobody can watch, "it just
+    //    doesn't work" is the only symptom there is.
+    {
+      const crash = readLastCrash();
+      out.push({
+        label: 'This phone has crashed',
+        ok: crash ? null : true,
+        detail: crash
+          ? `${crash.msg} · ${crash.where || 'no stack'} · build ${crash.build} · ${crash.at.slice(0, 16).replace('T', ' ')}`
+          : 'no — nothing has fallen over on this phone',
+      });
+    }
+
+    // 6. The build, so a report can name it.
     {
       const serverBuild = (checks.find(c => c.label === 'Reaches the server')?.detail || '').match(/build ([0-9a-f]{7,})/)?.[1] || '';
       const here = (typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__ : '').slice(0, 7);

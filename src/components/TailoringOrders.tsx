@@ -137,7 +137,8 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
   function openEdit(order: TailoringOrder) {
     setEditId(order.id);
     setF({
-      customerName: order.customerName, customerPhone: order.customerPhone,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
       workType: order.workType, workDescription: order.workDescription,
       totalAmount: String(order.totalAmount), depositPaid: String(order.depositPaid), materialCost: String(order.materialCost),
       expectedDate: order.expectedDate, notes: order.notes,
@@ -224,6 +225,7 @@ export default function TailoringOrders({ triggerToast, onAddSale, staffName, ti
       amount, method,
       customerName: order.customerName,
       unitCost: tailorMaterialsCost(order),
+      key: order.id,
     });
     return true;
   }

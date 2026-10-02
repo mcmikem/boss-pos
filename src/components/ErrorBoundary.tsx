@@ -23,10 +23,41 @@ function crashStreak(): number {
   return 1;
 }
 
-function noteCrash(): void {
+export const LAST_CRASH_KEY = 'boss_pos_last_crash';
+
+export interface LastCrash {
+  msg: string;
+  where: string;
+  build: string;
+  at: string;
+}
+
+export function readLastCrash(): LastCrash | null {
+  try {
+    const raw = localStorage.getItem(LAST_CRASH_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw) as LastCrash;
+    return c && typeof c.msg === 'string' ? c : null;
+  } catch { return null; }
+}
+
+function noteCrash(error?: Error, stack?: string): void {
   try {
     const n = crashStreak();
     sessionStorage.setItem('boss_pos_crash_streak', JSON.stringify({ n, at: Date.now() }));
+    // sessionStorage dies with the tab, so a crash that took the whole screen
+    // down left no trace at all. Written where it survives a restart AND is
+    // readable by her: this is the only way a failure on a phone I cannot see
+    // becomes a fact instead of "it just doesn't work".
+    if (error) {
+      const where = String(stack || '').split('\n').slice(1, 3).map(l => l.trim()).filter(Boolean).join(' <- ');
+      localStorage.setItem(LAST_CRASH_KEY, JSON.stringify({
+        msg: String(error.message || 'Render failed').slice(0, 160),
+        where: where.slice(0, 200),
+        build: typeof __BUILD_COMMIT__ === 'string' ? __BUILD_COMMIT__.slice(0, 7) : 'dev',
+        at: new Date().toISOString(),
+      } satisfies LastCrash));
+    }
   } catch {}
 }
 
@@ -50,7 +81,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       context: info?.componentStack || '',
       traceId,
     });
-    noteCrash();
+    noteCrash(error, info?.componentStack || undefined);
   }
 
   handleRetry = () => {

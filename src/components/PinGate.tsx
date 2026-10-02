@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Lock, Loader2 } from 'lucide-react';
 import { readLockLog, isRapidRelock } from '../utils/locklog';
+import { readLastCrash } from './ErrorBoundary';
 
 interface PinGateProps {
   onUnlock: (pin: string) => Promise<void>;
@@ -186,6 +187,24 @@ export default function PinGate({ onUnlock, shopName, candidates, onPickPerson, 
           ? 'The till PIN opens and keeps selling under this name. Manager powers need their own PIN, typed fresh.'
           : 'Your own PIN opens the till and signs you in at once. Forgot it? Ask your manager — PINs can be reset in Settings.'}
       </p>
+      <LastCrashNote />
+    </div>
+  );
+}
+
+/** If the app fell over on this phone, say so here. On a device nobody can
+ *  watch, a blank screen and a locked till are indistinguishable from "broken",
+ *  and the only way to fix that is to show what actually happened. */
+function LastCrashNote() {
+  const [crash, setCrash] = useState<ReturnType<typeof readLastCrash>>(null);
+  useEffect(() => { setCrash(readLastCrash()); }, []);
+  if (!crash) return null;
+  return (
+    <div className="mt-4 w-full max-w-[300px] rounded-xl border border-rose-800/50 bg-rose-950/30 p-3">
+      <p className="text-[10px] font-black text-rose-300 uppercase tracking-widest">This phone stopped working</p>
+      <p className="text-[11px] text-zinc-300 font-semibold mt-1 leading-snug break-words">{crash.msg}</p>
+      <p className="text-[9px] text-zinc-500 font-mono mt-1 break-words">{crash.build} · {crash.at.slice(0, 16).replace('T', ' ')}</p>
+      <p className="text-[9px] text-zinc-500 mt-1">Tell your manager this line. It is the fault, not the phone.</p>
     </div>
   );
 }

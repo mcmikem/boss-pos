@@ -141,6 +141,7 @@ export default function RepairJobs({ triggerToast, onAddSale, staffName, tillBra
               amount: topUp, method: 'Cash',
               customerName: updated.customerName,
               unitCost: updated.partsCost || 0,
+              key: updated.id,
             });
               } catch {
             triggerToast('The balance was not recorded, so the job is still open', 'error');

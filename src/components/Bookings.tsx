@@ -142,6 +142,7 @@ export default function Bookings({ triggerToast, onAddSale, staffName, tillBranc
               label: `Booking: ${updated.service}`,
               amount: topUp, method: 'Cash',
               customerName: updated.customerName,
+              key: updated.id,
             });
               } catch {
             triggerToast('The balance was not recorded, so the job is still open', 'error');
