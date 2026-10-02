@@ -1828,6 +1828,8 @@ export interface SummaryResult {
   cogs: number;
   grossProfit: number;
   expenseTotal: number;
+  /** Inside expenseTotal: the slice still waiting on a manager's approval. */
+  pendingExpenseTotal?: number;
   netProfit: number;
   creditOutstanding: number;
   vatTotal: number;

@@ -310,6 +310,10 @@ export default function Analytics({
   const shownCogs = serverWindowSummary ? serverWindowSummary.cogs : cogs;
   const shownDesignProfit = serverWindowSummary ? (serverWindowSummary.designProfit || 0) : designProfit;
   const shownExpenses = serverWindowSummary ? serverWindowSummary.expenseTotal : totalExpenses;
+  // Counted in the figure above, and named: an expense still awaiting a
+  // manager's approval is money that left, so excluding it made the owner's
+  // weekly profit disagree with her own close day.
+  const shownPending = serverWindowSummary ? (serverWindowSummary.pendingExpenseTotal || 0) : 0;
 
   const displayVat = serverWindowSummary && typeof serverWindowSummary.vatTotal === 'number'
     ? serverWindowSummary.vatTotal
@@ -985,6 +989,12 @@ const colorsMap: { [key: string]: string } = {
                       <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Design profit</span><span className={shownDesignProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{shownDesignProfit >= 0 ? '+' : '−'}{formatCurrency(Math.abs(shownDesignProfit))}</span></div>
                     )}
                     <div className="flex justify-between gap-2"><span className="text-zinc-500 uppercase">Spending</span><span className="text-rose-300">−{formatCurrency(shownExpenses)}</span></div>
+                    {shownPending > 0 && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-zinc-600 uppercase">of which awaiting approval</span>
+                        <span className="text-zinc-400">{formatCurrency(shownPending)}</span>
+                      </div>
+                    )}
                     {totalDiscounts > 0 && (
                       <div className="flex justify-between gap-2">
                         <span className="text-zinc-600 uppercase">Discounts given</span>

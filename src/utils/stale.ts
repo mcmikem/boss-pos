@@ -1,5 +1,6 @@
 import type { Product, Sale } from '../types';
 import { isLiveSale } from './saleStatus';
+import { todayLocalKey } from './dates';
 
 export const STALE_DAYS = 30;
 
@@ -22,7 +23,7 @@ export function staleProducts(
   days = STALE_DAYS,
   todayKey?: string,
 ): { product: Product; daysSince: number | null }[] {
-  const today = todayKey || new Date().toISOString().slice(0, 10);
+  const today = todayKey || todayLocalKey();
   const cutoff = Date.parse(today + 'T00:00:00Z') - days * 86400000;
   const out: { product: Product; daysSince: number | null }[] = [];
   for (const p of products) {

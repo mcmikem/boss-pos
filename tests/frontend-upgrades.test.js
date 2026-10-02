@@ -1906,3 +1906,20 @@ test('the rest of the audit: nothing announced, lost or destroyed quietly', () =
   const reg = read('src/components/CategoryRegister.tsx');
   assert.match(reg, /onBlur=\{\(e\) => \{\s*\/\/ Written when she leaves the field/);
 });
+
+test('the report and the close day must not be two different truths', () => {
+  const server = read('api/index.js');
+  // /api/summary counted only APPROVED expenses, while the Expenses screen and
+  // closeTotals count all of them -- so the owner's weekly profit disagreed
+  // with the close day she had just filled in, and neither said which was
+  // provisional. Every expense counts now; the pending slice is named.
+  assert.equal(/const expWhere = \["approval_status='approved'"\]/.test(server), false);
+  assert.match(server, /pendingExpenseTotal: pendingExpRows\.length/);
+  assert.match(server, /COALESCE\(approval_status, 'approved'\) <> 'approved'/);
+  const an = read('src/components/Analytics.tsx');
+  assert.match(an, /of which awaiting approval/);
+  // And the stale badge moved a day early in the same UTC window.
+  const stale = read('src/utils/stale.ts');
+  assert.match(stale, /const today = todayKey \|\| todayLocalKey\(\);/);
+  assert.equal(/todayKey \|\| new Date\(\)\.toISOString\(\)\.slice\(0, 10\)/.test(stale), false);
+});

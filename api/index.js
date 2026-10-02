@@ -5438,7 +5438,7 @@ app.get('/api/summary', asHandler(async (req, res) => {
     for (const it of items) cogs += (it.unitCost || 0) * (it.qty || 0);
   }
 
-  const expWhere = ["approval_status='approved'"];
+  const expWhere = ["1=1"];
   const expParams = [];
   if (from) { expParams.push(from); expWhere.push(`timestamp >= $${expParams.length}`); }
   if (to) { expParams.push(to); expWhere.push(`timestamp < $${expParams.length}`); }
@@ -5486,6 +5486,11 @@ app.get('/api/summary', asHandler(async (req, res) => {
   const designProfit = designRows.length ? designRows[0].profit : 0;
   const grossProfit = (revenue - cogs) + designProfit;
   const expenseTotal = expRows.length ? expRows[0].total : 0;
+  const pendingExpWhere = [...expWhere, `COALESCE(approval_status, 'approved') <> 'approved'`];
+  const pendingExpRows = await sql.query(
+    `SELECT COALESCE(SUM(amount),0)::float AS total FROM expenses WHERE ${pendingExpWhere.join(' AND ')}`,
+    expParams,
+  );
 
   // Server-side chart buckets so Reports stops shipping years of rows to draw
   // a line chart. bucket=hourly -> 13 buckets (08:00..20:00 local);
@@ -5520,6 +5525,9 @@ app.get('/api/summary', asHandler(async (req, res) => {
     cogs,
     grossProfit,
     expenseTotal,
+    // Counted in expenseTotal, and broken out so nothing is hidden by being
+    // "not approved yet".
+    pendingExpenseTotal: pendingExpRows.length ? pendingExpRows[0].total : 0,
     netProfit: grossProfit - expenseTotal,
     creditOutstanding: Math.max(0, (creditRows.length ? creditRows[0].total : 0) - (paidRows.length ? paidRows[0].total : 0)) + (bookRows.length ? bookRows[0].total : 0),
     vatTotal,
