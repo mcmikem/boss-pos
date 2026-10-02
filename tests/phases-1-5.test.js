@@ -431,7 +431,11 @@ test('fresh receipts close by themselves; reprints stay open', () => {
   const modal = read('src/components/ReceiptModal.tsx');
   const sales = read('src/components/Sales.tsx');
   assert.match(modal, /autoCloseMs\?: number/);
-  assert.match(modal, /Closes on its own — touch to keep it open/);
+  // A stray thumb on the receipt used to pin it open permanently, with nothing
+  // saying why. It now takes a deliberate drag and says so, and how long.
+  assert.match(modal, /Closes on its own in 3s · drag to keep it open/);
+  assert.match(modal, /onPointerDown=\{\(e\) => \{ downAt\.current/);
+  assert.equal(/onPointerDown=\{cancelAutoClose\}/.test(modal), false);
   assert.match(sales, /receiptFresh/);
   assert.match(sales, /autoCloseMs=\{receiptFresh \? 3000 : undefined\}/);
 });

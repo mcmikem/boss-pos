@@ -1923,3 +1923,42 @@ test('the report and the close day must not be two different truths', () => {
   assert.match(stale, /const today = todayKey \|\| todayLocalKey\(\);/);
   assert.equal(/todayKey \|\| new Date\(\)\.toISOString\(\)\.slice\(0, 10\)/.test(stale), false);
 });
+
+test('the screens she uses every day, audited on a thumb', () => {
+  const mp = read('src/components/MorningProduction.tsx');
+  // A one-off batch had NO cost field, so Save refused with "Enter the cost
+  // price each" while naming a box that was not on the screen. A dead end,
+  // every time.
+  assert.match(mp, /Cost of one, all ingredients/);
+  // "Earlier today ... Show" opened an empty fragment: the button changed one
+  // word and nothing appeared.
+  assert.equal(/\{showContext && \(\s*<>\s*<>\s*<>\)/.test(mp), false);
+  // The plan block was rendered TWICE, byte-identical, so she tapped Use and
+  // then found the same plan again with a second button.
+  assert.equal((mp.match(/Planned last evening — make these first/g) || []).length, 1);
+  // The chooser's own copy said the batch will not save until it is answered,
+  // and it sat BELOW the Save button that refuses without it.
+  assert.ok(mp.indexOf('{asksSource && (') < mp.indexOf('Save batch'), 'the question must come before the button that needs it');
+  // Every other destructive control arms or confirms; this one did not.
+  assert.match(mp, /title: 'Delete this batch\?'/);
+  // The half-written batch survives the idle lock.
+  assert.match(mp, /boss_pos_batch_draft/);
+
+  const inv = read('src/components/Inventory.tsx');
+  // Six nowrap controls clipped Count -- the stocktake -- off a 360px phone.
+  assert.match(inv, /flex items-center gap-2 sm:gap-3 flex-wrap shrink-0/);
+  // Save sat below the eight sections, under what she had just typed.
+  assert.match(inv, /sticky bottom-0 z-10/);
+
+  const app = read('src/App.tsx');
+  // Ten minutes was the floor and "never" did not exist, while counting a
+  // drawer takes longer than that.
+  assert.match(app, /const LOCK_OPTIONS = \[0, 10, 30, 60\]/);
+  assert.match(app, /if \(limitMins > 0 && Date\.now\(\) - last > limitMs\)/);
+  assert.match(app, /\{m === 0 \? 'Never'/);
+
+  const sales = read('src/components/Sales.tsx');
+  // Undo sat above the scroll, behind a full-screen receipt.
+  assert.match(sales, /sticky top-2 z-30/);
+  assert.match(sales, /Undo this sale/);
+});

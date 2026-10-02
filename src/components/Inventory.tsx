@@ -768,7 +768,10 @@ export default function Inventory({
             className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-2xl !text-base transition-all outline-none" />
           <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Wraps now: nowrap plus six non-shrinking controls meant Count, Sort
+            and the expiry filter were clipped off a 360px phone with no way to
+            reach them. Count is the stocktake. */}
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap shrink-0">
           <button onClick={() => { setBulkCategory(categories[0] || ''); setBulkRows([{ name: '', price: '' }]); setShowBulk(true); }}
             className="h-12 px-4 bg-[#141414] border border-white/5 hover:border-gold-brand/40 text-zinc-300 font-black rounded-2xl text-xs uppercase tracking-wider transition-all active:scale-95 cursor-pointer touch-target flex items-center gap-1.5"
             title="Bale day: add many products fast, details later">
@@ -1665,7 +1668,10 @@ export default function Inventory({
               </div>
             )}
 
-            <div className="pt-2 flex gap-3">
+            {/* Sticky: the stock boxes sit above this, so a Save button pinned
+                to the bottom of the sheet is always under her thumb instead of
+                below the fold. */}
+            <div className="sticky bottom-0 z-10 -mx-4 px-4 pt-3 pb-1 bg-gradient-to-t from-black via-black/95 to-transparent flex gap-3">
               <button onClick={() => setEditingProduct(null)} className="flex-1 h-11 border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-bold uppercase tracking-wider text-xs rounded-xl">Cancel</button>
               <button onClick={handleSaveEdit} className="flex-1 h-11 bg-gold-brand hover:bg-gold-medium text-black font-black uppercase tracking-widest text-xs rounded-xl shadow-lg flex items-center justify-center gap-2">
                 <Save className="w-4 h-4" /> Save

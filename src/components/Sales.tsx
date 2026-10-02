@@ -1982,7 +1982,7 @@ export default function Sales({
         )}
 
         {undoSaleId && onUndoSale && (
-          <div className="flex items-center justify-between gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 h-12" role="status">
+          <div className="sticky top-2 z-30 flex items-center justify-between gap-2 bg-emerald-950/90 border border-emerald-800/50 rounded-xl px-4 h-12 shadow-lg" role="status">
             <p className="text-xs font-black text-emerald-300 uppercase tracking-wider truncate">Sale done — Undo?</p>
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={() => { const id = undoSaleId; if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); if (id) onUndoSale(id); }}
@@ -2057,6 +2057,18 @@ export default function Sales({
             settings={settings || {} as StoreSettings}
             formatCurrency={formatCurrency}
             onClose={() => { setReprintSale(null); setReceiptFresh(false); }}
+            footer={undoSaleId && onUndoSale ? (
+              <div className="flex items-center gap-2 pt-1">
+                <button onClick={() => { const id = undoSaleId; if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); setReprintSale(null); if (id) onUndoSale(id); }}
+                  className="flex-1 h-11 rounded-xl bg-emerald-500 text-black font-black text-xs uppercase tracking-wider active:scale-95 transition-all cursor-pointer">
+                  Undo this sale
+                </button>
+                <button onClick={() => { if (undoTimer.current) clearTimeout(undoTimer.current); setUndoSaleId(null); }}
+                  className="h-11 px-4 rounded-xl border border-white/10 text-zinc-400 font-bold text-xs uppercase tracking-wider cursor-pointer">
+                  Keep
+                </button>
+              </div>
+            ) : undefined}
             triggerToast={triggerToast}
             autoCloseMs={receiptFresh ? 3000 : undefined}
           />

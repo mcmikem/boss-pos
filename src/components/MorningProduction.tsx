@@ -77,6 +77,43 @@ export default function MorningProduction({
   // and stay editable. Editing a price here also writes back to the recipe, so
   // the next morning starts from what was actually paid.
   const [draftIngredients, setDraftIngredients] = useState<DraftIngredient[] | null>(null);
+  // The half-written batch survives the idle lock. Walking to the storeroom to
+  // check the flour used to cost the whole ingredient list -- the lock unmounts
+  // every form on the screen, and this one takes the longest to retype.
+  const DRAFT_KEY = 'boss_pos_batch_draft';
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw) as {
+        prodDate?: string; prodItem?: string; prodCustomItem?: string;
+        prodProductId?: string | null; prodQty?: string; prodCost?: string;
+        draftIngredients?: DraftIngredient[] | null;
+      };
+      if (d.prodItem) setProdItem(d.prodItem);
+      if (d.prodCustomItem) setProdCustomItem(d.prodCustomItem);
+      if (d.prodProductId !== undefined) setProdProductId(d.prodProductId ?? null);
+      if (d.prodQty) setProdQty(d.prodQty);
+      if (d.prodCost) setProdCost(d.prodCost);
+      if (d.prodDate) setProdDate(d.prodDate);
+      if (Array.isArray(d.draftIngredients)) setDraftIngredients(d.draftIngredients);
+    } catch {}
+    // Once, when the form mounts: this is a restore, not a sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    // Nothing typed yet: do not leave an empty draft behind for next time.
+    if (!prodItem && !prodCustomItem && !prodQty) {
+      try { localStorage.removeItem(DRAFT_KEY); } catch {}
+      return;
+    }
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        prodDate, prodItem, prodCustomItem, prodProductId, prodQty, prodCost, draftIngredients,
+      }));
+    } catch {}
+  }, [prodDate, prodItem, prodCustomItem, prodProductId, prodQty, prodCost, draftIngredients]);
+
   // Only asked when the batch is over the money set aside.
   const [topUpSource, setTopUpSource] = useState<IngredientSource | null>(null);
   // Yesterday's numbers and earlier batches are one tap away, never in the way.
@@ -390,6 +427,7 @@ export default function MorningProduction({
     // No source, no save. Guessing "float" is how money ended up recorded as
     // phone float that never touched the phone.
 
+    try { localStorage.removeItem('boss_pos_batch_draft'); } catch {}
     setProdItem(''); setProdCustomItem(''); setProdProductId(null); setProdQty(''); setProdCost('');
     setDraftIngredients(null); setRecipeProductId(null);
   };
@@ -425,6 +463,20 @@ export default function MorningProduction({
             <input type="text" value={prodCustomItem} onChange={e => setProdCustomItem(e.target.value)}
               placeholder="Type the item name..."
               className="mt-2 w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+          )}
+          {/* A one-off has no saved cost, so the batch form asks for one. Save
+              used to refuse with "Enter the cost price each" while naming a box
+              that was not on the screen -- a dead end every time. */}
+          {prodItem === '__custom' && (
+            <label className="block mt-2">
+              <span className="text-[10px] text-zinc-400 font-bold uppercase mb-1 block">
+                Cost of one, all ingredients
+              </span>
+              <input type="number" min="0" step="any" inputMode="decimal" value={prodCost}
+                onChange={e => setProdCost(e.target.value)}
+                placeholder="e.g. 150"
+                className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl h-11 px-3 text-sm outline-none focus:border-amber-500" />
+            </label>
           )}
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -577,38 +629,6 @@ export default function MorningProduction({
           </span>
         </button>
 
-        <PrimaryAction onClick={handleSubmit} disabled={savingBatch}>
-          <Check className="w-4 h-4" /> {savingBatch ? 'Saving\u2026' : 'Save batch'}
-        </PrimaryAction>
-      </div>
-
-      {availableBudget != null && (
-        <div className={`boss-card p-3 border-l-4 ${availableBudget - todayCost > 0 ? 'border-l-emerald-500' : 'border-l-rose-500'}`}>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Ingredient money set aside</p>
-              <p className="text-lg font-black text-white font-display mt-1">
-                {formatCurrency(availableBudget - todayCost)}
-                <span className="text-xs text-zinc-500 font-bold"> left of {formatCurrency(availableBudget)}</span>
-              </p>
-            </div>
-            {availableBudget - todayCost <= 0 && (
-              <span className="shrink-0 h-10 px-3 flex items-center rounded-xl border border-rose-600/30 text-rose-300/80 text-[10px] font-black uppercase tracking-wider">
-                All used
-              </span>
-            )}
-          </div>
-          <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1.5">
-            This was set aside at close for tomorrow's production. Logging a batch spends it.
-          </p>
-        </div>
-      )}
-
-      {/* Where the ingredient money is coming from. Asked on EVERY batch, not
-          only when it is over budget, because the expense has to be recorded
-          against the right money — the drawer, the phone line, or the owner. A
-          drawer and a phone line are a LABEL on the expense; owner money is real
-          money in, and the owner confirms it. */}
       {asksSource && (
         <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-3 space-y-2">
           <p className="text-[11px] font-black text-amber-200 uppercase tracking-widest">
@@ -642,27 +662,39 @@ export default function MorningProduction({
         </div>
       )}
 
-      {plannedLines.length > 0 && (
-        <div className="bg-violet-950/25 border border-violet-800/40 rounded-xl p-3 space-y-2">
-          <p className="text-[10px] font-black text-violet-300 uppercase tracking-widest">
-            Planned last evening — make these first
-          </p>
-          {plannedLines.map(line => (
-            <div key={line.productId} className="flex items-center justify-between gap-2 bg-black/30 rounded-lg px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-xs font-black text-white truncate">{line.productName}</p>
-                <p className="text-[10px] text-zinc-500 font-bold uppercase">
-                  {Math.round(line.batchQty)} planned · {formatCurrency(Math.round(line.totalCost))} ingredients
-                </p>
-              </div>
-              <button onClick={() => usePlannedLine(line)}
-                className="shrink-0 h-9 px-3 bg-violet-600/20 border border-violet-600/40 text-violet-300 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-violet-600/30 cursor-pointer flex items-center gap-1">
-                Use <ArrowRight className="w-3 h-3" />
-              </button>
+        <PrimaryAction onClick={handleSubmit} disabled={savingBatch}>
+          <Check className="w-4 h-4" /> {savingBatch ? 'Saving\u2026' : 'Save batch'}
+        </PrimaryAction>
+      </div>
+
+      {availableBudget != null && (
+        <div className={`boss-card p-3 border-l-4 ${availableBudget - todayCost > 0 ? 'border-l-emerald-500' : 'border-l-rose-500'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Ingredient money set aside</p>
+              <p className="text-lg font-black text-white font-display mt-1">
+                {formatCurrency(availableBudget - todayCost)}
+                <span className="text-xs text-zinc-500 font-bold"> left of {formatCurrency(availableBudget)}</span>
+              </p>
             </div>
-          ))}
+            {availableBudget - todayCost <= 0 && (
+              <span className="shrink-0 h-10 px-3 flex items-center rounded-xl border border-rose-600/30 text-rose-300/80 text-[10px] font-black uppercase tracking-wider">
+                All used
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] font-bold text-zinc-500 uppercase mt-1.5">
+            This was set aside at close for tomorrow's production. Logging a batch spends it.
+          </p>
         </div>
       )}
+
+      {/* Where the ingredient money is coming from. Asked on EVERY batch, not
+          only when it is over budget, because the expense has to be recorded
+          against the right money — the drawer, the phone line, or the owner. A
+          drawer and a phone line are a LABEL on the expense; owner money is real
+          money in, and the owner confirms it. */}
+
 
       {/* Yesterday and earlier today are context. They used to sit between her
           and the batch form, so the form was below the fold on a small phone.
@@ -677,10 +709,10 @@ export default function MorningProduction({
           <span className="text-[10px] font-black text-gold-brand uppercase shrink-0">{showContext ? 'Hide' : 'Show'}</span>
         </button>
       )}
+      {/* Everything below is what the button says it opens. It used to open an
+          empty fragment, so Show/Hide changed one word and nothing else. */}
       {showContext && (
       <>
-      </>
-      )}
 
       {plannedLines.length > 0 && (
         <div className="bg-violet-950/25 border border-violet-800/40 rounded-xl p-3 space-y-2">
@@ -772,6 +804,15 @@ export default function MorningProduction({
               <div className="flex items-center gap-3 shrink-0">
                 <p className="text-sm font-black text-amber-400 font-display">{formatCurrency(p.total)}</p>
                 <button onClick={async () => {
+                    // Every other destructive control here arms or confirms.
+                    // This one removed a logged batch on a single tap, and it
+                    // takes the day's sellable stock down with it.
+                    const ok = await confirmDialog({
+                      title: 'Delete this batch?',
+                      message: `${p.qty} × ${p.item} comes out of today's stock. If it was a mistake you will have to log it again.`,
+                      confirmLabel: 'Delete batch',
+                    });
+                    if (!ok) return;
                     // Awaited: this used to announce the deletion before the
                     // server had been asked, and it takes the batch's stock out
                     // of sellable too, so a refusal has to be visible.
@@ -786,6 +827,8 @@ export default function MorningProduction({
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );

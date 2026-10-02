@@ -19,6 +19,10 @@ interface ReceiptModalProps {
   // customer never waits on an extra tap. Any touch or keypress means the
   // cashier is using it, and cancels the timer. Reprints pass nothing.
   autoCloseMs?: number;
+  /** Extra actions under the receipt. The fresh receipt covers the screen for
+   *  three seconds right after a sale -- the exact moment she notices she rang
+   *  the wrong thing -- so Undo belongs here. */
+  footer?: React.ReactNode;
 }
 
 function escapeHtml(s: string): string {
@@ -45,12 +49,16 @@ function printViaPopup(html: string): boolean {
   }
 }
 
-export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast, onFiscalUpdate, autoCloseMs }: ReceiptModalProps) {
+export default function ReceiptModal({ sale, settings, formatCurrency, onClose, triggerToast, onFiscalUpdate, autoCloseMs, footer }: ReceiptModalProps) {
   const [copied, setCopied] = useState(false);
   const [renderingPng, setRenderingPng] = useState(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const interacted = useRef(false);
+  // A thumb brushing the screen while reaching for change was enough to pin the
+  // receipt open for good, with nothing saying why. It now takes a deliberate
+  // drag, which no thumb produces by accident.
+  const downAt = useRef<{ x: number; y: number } | null>(null);
   const cancelAutoClose = () => { interacted.current = true; };
   useEffect(() => {
     if (!autoCloseMs || autoCloseMs <= 0) return;
@@ -257,14 +265,23 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[110] flex items-center justify-center p-4">
       <div
         className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl max-h-[92vh] flex flex-col"
-        onPointerDown={cancelAutoClose}
+        onPointerDown={(e) => { downAt.current = { x: e.clientX, y: e.clientY }; }}
+        onPointerUp={(e) => {
+          const d = downAt.current;
+          downAt.current = null;
+          if (!d) return;
+          if (Math.abs(e.clientX - d.x) < 12 && Math.abs(e.clientY - d.y) < 12) return;
+          cancelAutoClose();
+        }}
         onKeyDown={cancelAutoClose}
       >
         <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
           <div>
             <h3 className="text-sm font-black text-white uppercase tracking-wider font-display">Receipt</h3>
             {autoCloseMs ? (
-              <p role="status" className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">Closes on its own — touch to keep it open</p>
+              <p role="status" className="text-[11px] text-zinc-400 font-bold uppercase mt-0.5 leading-snug">
+                Closes on its own in 3s · drag to keep it open
+              </p>
             ) : null}
           </div>
           <button onClick={onClose} className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer">
@@ -363,6 +380,7 @@ export default function ReceiptModal({ sale, settings, formatCurrency, onClose, 
             <Bluetooth className="w-3.5 h-3.5" /> BT
           </button>
         </div>
+        {footer}
       </div>
     </div>
   );

@@ -88,9 +88,14 @@ function ensureDrinks(list: string[]): string[] {
   return next;
 }
 
-const LOCK_OPTIONS = [10, 30, 60];
+// 0 = never auto-lock. Counting a drawer or walking to the storeroom takes
+// longer than ten minutes, and locking unmounts every half-typed form.
+const LOCK_OPTIONS = [0, 10, 30, 60];
 function lockMinutesOf(s: StoreSettings): number {
-  const m = Math.round(Number(s.lockMinutes) || 0);
+  const raw = Number(s.lockMinutes);
+  const m = Number.isFinite(raw) ? Math.round(raw) : 10;
+  // 0 means never. It has to survive the default, so it is read from the raw
+  // value rather than through `|| 10`.
   return LOCK_OPTIONS.includes(m) ? m : 10;
 }
 
@@ -1654,8 +1659,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     const events = ['pointerdown', 'keydown', 'touchstart', 'mousemove', 'scroll'];
     events.forEach(e => window.addEventListener(e, bump, { passive: true }));
     const iv = setInterval(() => {
-      const limitMs = lockMinutesOf(settingsRef.current) * 60 * 1000;
-      if (Date.now() - last > limitMs) {
+      const limitMins = lockMinutesOf(settingsRef.current);
+      const limitMs = limitMins * 60 * 1000;
+      if (limitMins > 0 && Date.now() - last > limitMs) {
         // Keep the auth token: clearing it would make the outbox replay without
         // auth after an offline re-unlock, and the server would drop those
         // queued sales (data loss). The lock screen is still enforced via
@@ -4956,11 +4962,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   {LOCK_OPTIONS.map(m => (
                     <button key={m} onClick={() => setSettings(prev => ({ ...prev, lockMinutes: m }))}
                       className={`flex-1 h-10 rounded-xl text-xs font-black uppercase tracking-wider border transition-all cursor-pointer ${lockMinutesOf(settings) === m ? 'bg-gold-brand/15 border-gold-brand text-gold-brand' : 'bg-[#0A0A0A] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
-                      {m} min
+                      {m === 0 ? 'Never' : `${m} min`}
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-zinc-600">Solo seller glued to the till? 30–60 min nags less. Shared phone? Keep 10. PIN is still required on load.</p>
+                <p className="text-[10px] text-zinc-600">Never: the till stays open — choose it when you are the only one on it, and lock it yourself when you walk away. Shared phone? Keep 10. PIN is still required on load.</p>
                 {/* One PIN per person. The rescue PIN below is the exception:
                     it opens the device when staff sign-in cannot, and grants
                     no manager rights. Manager authority is always the signed-in
