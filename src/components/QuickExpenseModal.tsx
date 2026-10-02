@@ -123,125 +123,135 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     setExpenseSource('drawer');
   };
 
+  const [saving, setSaving] = useState(false);
   const handleSubmit = async () => {
-    let amtNum = 0;
-    let description = '';
-    let category = expenseCat;
-    // Per-item breakdown so the receipt shows each thing at its own price
-    // (Flour 30,000 · Oil 15,000), not one grouped total nobody can audit.
-    let items: ExpenseItem[] | undefined;
-    const priceTag = (n: number) => Math.round(n).toLocaleString();
+    // An eager second tap must not log the same expense twice.
+    if (saving) return;
+    setSaving(true);
+    try {
+      let amtNum = 0;
+      let description = '';
+      let category = expenseCat;
+      // Per-item breakdown so the receipt shows each thing at its own price
+      // (Flour 30,000 · Oil 15,000), not one grouped total nobody can audit.
+      let items: ExpenseItem[] | undefined;
+      const priceTag = (n: number) => Math.round(n).toLocaleString();
 
-    if (expenseTab === 'General') {
-      if (!expenseDesc.trim()) {
-        triggerToast('Enter the expense name', 'error');
-        return;
-      }
-      amtNum = parseFloat(expenseAmt) || 0;
-      if (amtNum <= 0) {
-        triggerToast('Amount must be positive', 'error');
-        return;
-      }
-      description = expenseDesc;
-      category = expenseCat;
-    } else if (isEatery) {
-      if (expenseEateryMode === 'dish') {
-        if (!dishProduct) {
-          triggerToast(expenseTab === 'Drinks' ? 'Select the juice you made' : 'Select the snack you made', 'error');
+      if (expenseTab === 'General') {
+        if (!expenseDesc.trim()) {
+          triggerToast('Enter the expense name', 'error');
           return;
         }
-        if (!dishIngRs.some(i => i.bought > 0 && i.price > 0)) {
-          triggerToast('Enter how much you bought and the cost', 'error');
-          return;
-        }
-        amtNum = dishSpent;
+        amtNum = parseFloat(expenseAmt) || 0;
         if (amtNum <= 0) {
-          triggerToast('Ingredient costs must be positive', 'error');
+          triggerToast('Amount must be positive', 'error');
           return;
         }
-        const names = dishIngRs.filter(i => i.bought > 0 && i.name).map(i => i.name);
-        description = names.length ? `Making ${dishProduct.name}: ${names.join(', ')}` : `Making ${dishProduct.name}`;
-        items = dishIngRs
-          .filter(i => i.bought > 0 && i.name && i.total > 0)
-          .map(i => ({ name: `${i.name} (${i.bought} ${i.unit})`, amount: i.total }));
-        if (items.length) {
-          description = `Making ${dishProduct.name}: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
-        }
-        category = expenseTab;
-      } else {
-        if (expenseIngredients.length === 0 || !expenseIngredients.some(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)) {
-          triggerToast('Add at least one ingredient with a name and cost', 'error');
-          return;
-        }
-        amtNum = ingredientsTotal;
-        if (amtNum <= 0) {
-          triggerToast('Ingredient costs must be positive', 'error');
-          return;
-        }
-        const ingredientNames = expenseIngredients.map(i => i.name.trim()).filter(Boolean);
-        description = `Ingredients: ${ingredientNames.length ? ingredientNames.join(', ') : `${expenseTab} supplies`}`;
-        items = expenseIngredients
-          .filter(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)
-          .map(i => ({ name: i.name.trim(), amount: Math.round((parseFloat(i.cost) || 0) * 100) / 100 }));
-        if (items.length) {
-          description = `Ingredients: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
-        }
-        category = expenseTab;
-      }
-    } else {
-      amtNum = parseFloat(expenseAmt) || 0;
-      if (amtNum <= 0) {
-        triggerToast('Amount must be positive', 'error');
-        return;
-      }
-      description = expenseDesc.trim() || expenseTab;
-      category = expenseTab;
-    }
-
-    const newExpense: Expense = {
-      id: `exp-${Date.now()}`,
-      timestamp: middayStamp(expenseDate),
-      description,
-      amount: amtNum,
-      category,
-      source: expenseSource || 'drawer',
-      ...(items && items.length ? { items } : {}),
-      ...(dishProduct && isEatery && expenseEateryMode === 'dish'
-        ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
-        : {}),
-    };
-    // Awaited: this toast said "Expense logged" while the entry could still be
-    // rolled back a moment later behind a different error.
-    const written = await onAddExpense(newExpense);
-    if (written === false) return;
-
-    // Carry ingredient prices forward into the dish recipe so pricing, COGS
-    // and profit stay honest: what you paid today becomes tomorrow's cost.
-    if (isEatery && expenseEateryMode === 'dish' && dishProduct?.recipe && onUpdateProduct) {
-      try {
-        const paid = new Map(dishIngRs.filter(i => i.bought > 0 && i.price > 0).map(i => [i.id, i.price]));
-        if (paid.size > 0) {
-          const nextIngredients = dishProduct.recipe.ingredients.map(ing =>
-            paid.has(ing.id) ? { ...ing, unitCost: paid.get(ing.id) || ing.unitCost } : ing,
-          );
-          const changed = nextIngredients.some((n, idx) => n.unitCost !== dishProduct.recipe!.ingredients[idx].unitCost);
-          if (changed) {
-            // Stated explicitly: this carries the prices paid, not a price change.
-            const recipeWritten = await onUpdateProduct({ ...dishProduct, recipeCostsOnly: true, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } } as Product);
-            if (recipeWritten !== false) triggerToast('Recipe costs updated from what you paid', 'info');
+        description = expenseDesc;
+        category = expenseCat;
+      } else if (isEatery) {
+        if (expenseEateryMode === 'dish') {
+          if (!dishProduct) {
+            triggerToast(expenseTab === 'Drinks' ? 'Select the juice you made' : 'Select the snack you made', 'error');
+            return;
           }
+          if (!dishIngRs.some(i => i.bought > 0 && i.price > 0)) {
+            triggerToast('Enter how much you bought and the cost', 'error');
+            return;
+          }
+          amtNum = dishSpent;
+          if (amtNum <= 0) {
+            triggerToast('Ingredient costs must be positive', 'error');
+            return;
+          }
+          const names = dishIngRs.filter(i => i.bought > 0 && i.name).map(i => i.name);
+          description = names.length ? `Making ${dishProduct.name}: ${names.join(', ')}` : `Making ${dishProduct.name}`;
+          items = dishIngRs
+            .filter(i => i.bought > 0 && i.name && i.total > 0)
+            .map(i => ({ name: `${i.name} (${i.bought} ${i.unit})`, amount: i.total }));
+          if (items.length) {
+            description = `Making ${dishProduct.name}: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
+          }
+          category = expenseTab;
+        } else {
+          if (expenseIngredients.length === 0 || !expenseIngredients.some(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)) {
+            triggerToast('Add at least one ingredient with a name and cost', 'error');
+            return;
+          }
+          amtNum = ingredientsTotal;
+          if (amtNum <= 0) {
+            triggerToast('Ingredient costs must be positive', 'error');
+            return;
+          }
+          const ingredientNames = expenseIngredients.map(i => i.name.trim()).filter(Boolean);
+          description = `Ingredients: ${ingredientNames.length ? ingredientNames.join(', ') : `${expenseTab} supplies`}`;
+          items = expenseIngredients
+            .filter(i => i.name.trim() && (parseFloat(i.cost) || 0) > 0)
+            .map(i => ({ name: i.name.trim(), amount: Math.round((parseFloat(i.cost) || 0) * 100) / 100 }));
+          if (items.length) {
+            description = `Ingredients: ${items.map(i => `${i.name} ${priceTag(i.amount)}`).join(' · ')}`;
+          }
+          category = expenseTab;
         }
-      } catch {}
-    }
+      } else {
+        amtNum = parseFloat(expenseAmt) || 0;
+        if (amtNum <= 0) {
+          triggerToast('Amount must be positive', 'error');
+          return;
+        }
+        description = expenseDesc.trim() || expenseTab;
+        category = expenseTab;
+      }
 
-    if (isEatery && expenseEateryMode === 'dish' && dishPieces > 0) {
-      triggerToast(`About ${dishPieces.toLocaleString()} pieces • ${formatCurrency(Math.round(dishCostPerPiece))} each`, 'success');
-    }
+      const newExpense: Expense = {
+        id: `exp-${Date.now()}`,
+        timestamp: middayStamp(expenseDate),
+        description,
+        amount: amtNum,
+        category,
+        source: expenseSource || 'drawer',
+        ...(items && items.length ? { items } : {}),
+        ...(dishProduct && isEatery && expenseEateryMode === 'dish'
+          ? { linkedProductId: dishProduct.id, linkedProductName: dishProduct.name }
+          : {}),
+      };
+      // Awaited: this toast said "Expense logged" while the entry could still be
+      // rolled back a moment later behind a different error.
+      const written = await onAddExpense(newExpense);
+      if (written === false) return;
 
-    const backdated = expenseDate !== todayLocalKey();
-    triggerToast(`Expense logged: ${formatCurrency(amtNum)}${backdated ? ` (for ${expenseDate})` : ''}`, 'success');
-    clearExpenseFields();
-    onClose();
+      // Carry ingredient prices forward into the dish recipe so pricing, COGS
+      // and profit stay honest: what you paid today becomes tomorrow's cost.
+      if (isEatery && expenseEateryMode === 'dish' && dishProduct?.recipe && onUpdateProduct) {
+        try {
+          const paid = new Map(dishIngRs.filter(i => i.bought > 0 && i.price > 0).map(i => [i.id, i.price]));
+          if (paid.size > 0) {
+            const nextIngredients = dishProduct.recipe.ingredients.map(ing =>
+              paid.has(ing.id) ? { ...ing, unitCost: paid.get(ing.id) || ing.unitCost } : ing,
+            );
+            const changed = nextIngredients.some((n, idx) => n.unitCost !== dishProduct.recipe!.ingredients[idx].unitCost);
+            if (changed) {
+              // Stated explicitly: this carries the prices paid, not a price change.
+              const recipeWritten = await onUpdateProduct({ ...dishProduct, recipeCostsOnly: true, recipe: { ...dishProduct.recipe, ingredients: nextIngredients } } as Product);
+              if (recipeWritten !== false) triggerToast('Recipe costs updated from what you paid', 'info');
+            }
+          }
+        } catch {}
+      }
+
+      if (isEatery && expenseEateryMode === 'dish' && dishPieces > 0) {
+        triggerToast(`About ${dishPieces.toLocaleString()} pieces • ${formatCurrency(Math.round(dishCostPerPiece))} each`, 'success');
+      }
+
+      const backdated = expenseDate !== todayLocalKey();
+      triggerToast(`Expense logged: ${formatCurrency(amtNum)}${backdated ? ` (for ${expenseDate})` : ''}`, 'success');
+      clearExpenseFields();
+      onClose();
+    } finally {
+      // Every exit above returns early; without this the button would stay
+      // greyed for good after one rejected expense.
+      setSaving(false);
+    }
   };
   const quickAmounts = [2000, 5000, 10000, 20000, 50000, 100000];
 
@@ -489,9 +499,9 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
             </div>
           </div>
 
-          <button onClick={handleSubmit}
-            className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-sm rounded-xl transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2 cursor-pointer">
-            <Wallet className="w-4 h-4" /> Log Expense
+          <button onClick={handleSubmit} disabled={saving} aria-busy={saving}
+            className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest text-sm rounded-xl transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60">
+            <Wallet className="w-4 h-4" /> {saving ? 'Saving\u2026' : 'Log Expense'}
           </button>
         </div>
       </div>

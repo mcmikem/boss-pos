@@ -1531,7 +1531,9 @@ test('a refused write offers Try again, instead of making her retype it', () => 
   // again. The reason is already known at the catch, so the retry is free.
   assert.match(app, /Expense not saved[\s\S]{0,400}label: 'Try again'[\s\S]{0,120}handleAddExpense\(newExpense\)/);
   assert.match(app, /label: 'Try again'[\s\S]{0,120}handleAddProduct\(prodWithIcon\)/);
-  assert.match(app, /label: 'Try again'[\s\S]{0,120}handleUpdateProduct\(stamped\)/);
+  // Retrying the old snapshot wrote a stale stockQty back over a newer one.
+  assert.match(app, /label: 'Try again'[\s\S]{0,700}const current = products\.find\(p => p\.id === stamped\.id\)/);
+  assert.match(app, /void handleUpdateProduct\(stamped\); return; \}/);
   // A refused write never leaves an error toast without a way forward.
   const refusals = app.match(/triggerToast\([^)]*'error'\);/g) || [];
   assert.ok(refusals.length > 0);
@@ -1868,4 +1870,39 @@ test('a slow network cannot freeze the till for 90 seconds', () => {
   assert.match(api, /const FIRST_WRITE_TIMEOUT_MS = 7000;/);
   assert.match(api, /attempt === 0 \? FIRST_WRITE_TIMEOUT_MS : WRITE_TIMEOUT_MS/);
   assert.match(api, /if \(timedOut && !isRead\) break;/);
+});
+
+test('the rest of the audit: nothing announced, lost or destroyed quietly', () => {
+  const app = read('src/App.tsx');
+  // A queued write resolves successfully, so "Payment recorded" was said for
+  // money still sitting in the phone's outbox.
+  assert.match(app, /saved on this phone \\u2014 it will sync when you are back online/);
+  // A lost version conflict DELETED the product, so a failed refetch left it
+  // unsellable on that till.
+  assert.equal(/list => list\.filter\(p => p\.id !== stamped\.id\)/.test(app), false);
+  assert.match(app, /this item is still sellable but may be out of date/);
+  // A manager tapping a PIN to approve a discount emptied the customer's cart.
+  assert.match(app, /const cartHasItems = useRef\(false\)/);
+  assert.match(app, /if \(hadItems\) \{/);
+
+  const inv = read('src/components/Inventory.tsx');
+  // "Set stock" with an empty box submitted 0 as a real adjustment.
+  assert.match(inv, /Type the number you are counting, or choose Add or Remove/);
+  assert.match(inv, /adjustmentType === 'set' && stockAdjustment === 0/);
+  // The quick expense had no guard; two taps logged it twice.
+  const qm = read('src/components/QuickExpenseModal.tsx');
+  assert.match(qm, /if \(saving\) return;/);
+  assert.match(qm, /disabled=\{saving\}/);
+  assert.match(qm, /finally \{/);
+
+  const cash = read('src/utils/cashflow.ts');
+  // `daySales` is filtered by isLiveSale(), which removes refunded and voided --
+  // so the refund counter's first term was always zero and the second counted
+  // each void as HALF a ticket. A day of voids stayed under the flag.
+  assert.match(cash, /const todaysTickets = args\.sales\.filter\(\(s\) => localDayKey\(s\.timestamp\) === args\.dayKey\)/);
+  assert.equal(/daySales\.filter\(\(s\) => s\.refunded \|\| s\.voided\)\.length \+/.test(cash), false);
+
+  // Tomorrow's opening capital was written on every keystroke.
+  const reg = read('src/components/CategoryRegister.tsx');
+  assert.match(reg, /onBlur=\{\(e\) => \{\s*\/\/ Written when she leaves the field/);
 });

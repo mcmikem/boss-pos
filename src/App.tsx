@@ -1596,17 +1596,32 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     return () => clearTimeout(timer);
   }, [cart, draftScope]);
 
+  // The draft scope includes the signed-in person, so a scope change reloaded
+  // the cart from the OTHER scope -- and a manager tapping their PIN to approve
+  // a discount emptied the customer's basket mid-sale. A cart that has items in
+  // it is never replaced; the new scope only takes effect from here on.
+  const cartHasItems = useRef(false);
+  cartHasItems.current = cart.length > 0;
+
   useEffect(() => {
     let cancelled = false;
+    const hadItems = cartHasItems.current;
     cartHydrated.current = false;
     setCartDraftReady(false);
-    const synchronous = readCheckoutDraftSync(draftScope);
-    if (synchronous) setCart(synchronous.cart);
+    if (!hadItems) {
+      const synchronous = readCheckoutDraftSync(draftScope);
+      if (synchronous) setCart(synchronous.cart);
+    }
     const revision = cartRevision.current;
     void loadActiveCheckoutDraft(draftScope).then((record) => {
       if (cancelled) return;
       if (cartRevision.current === revision) {
         const restored = record?.cart || [];
+        if (hadItems) {
+          cartHydrated.current = true;
+          setCartDraftReady(true);
+          return;
+        }
         const { cart: validated, changed } = reconcileCartPrices(restored, products);
         setCart(validated);
         if (changed) triggerToast('Cart prices updated to match current product pricing', 'info');
@@ -1615,7 +1630,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setCartDraftReady(true);
     }).catch(() => {
       if (cancelled) return;
-      if (cartRevision.current === revision) setCart([]);
+      if (cartRevision.current === revision && !hadItems) setCart([]);
       cartHydrated.current = true;
       setCartDraftReady(true);
     });
@@ -2129,8 +2144,15 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         // Another device saved a newer version. Pull the server copy so the
         // winner's row wins cleanly instead of silently keeping stale data.
         triggerToast('This product was updated on another device — loading the latest version. Your edit was not saved.', 'error');
-        setProducts(list => list.filter(p => p.id !== stamped.id));
-        fetchAllData();
+        // Keep it on the shelf. It used to be DELETED from this till's
+        // catalogue and only came back if the refetch succeeded -- so on a weak
+        // connection the item became unsellable on this phone, for a product
+        // that plainly still exists.
+        try {
+          await fetchAllData();
+        } catch {
+          triggerToast('Could not load the newer version \u2014 this item is still sellable but may be out of date.', 'info');
+        }
         return false;
       }
       if (prev) setProducts(list => list.map(p => p.id === stamped.id ? prev : p));
@@ -2140,7 +2162,20 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         : (e?.message ? String(e.message).slice(0, 70) : 'changes reverted');
       triggerToast(`Not saved \u2014 ${why}`, 'error', {
         label: 'Try again',
-        onClick: () => { void handleUpdateProduct(stamped); },
+        // Re-read the product and change only the fields she was editing.
+        // Retrying the old snapshot wrote a stale stockQty back over a newer
+        // one -- a silent rollback of a sale made in between.
+        onClick: () => {
+          const current = products.find(p => p.id === stamped.id);
+          if (!current) { void handleUpdateProduct(stamped); return; }
+          void handleUpdateProduct({
+            ...current,
+            cost: stamped.cost,
+            price: stamped.price,
+            lowStockThreshold: stamped.lowStockThreshold,
+            updatedAt: stamped.updatedAt,
+          });
+        },
       });
       return false;
     }
@@ -2958,8 +2993,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     };
     setCreditPayments(prev => [payment, ...prev]);
     try {
-      await creditPaymentApi.create(payment);
-      triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+      const { outcome } = await creditPaymentApi.create(payment);
+      triggerToast(
+        outcome.status === 'queued'
+          ? `Payment of ${formatCurrency(amount)} saved on this phone \u2014 it will sync when you are back online`
+          : `Payment of ${formatCurrency(amount)} recorded`,
+        outcome.status === 'queued' ? 'info' : 'success',
+      );
       return true;
     } catch (err) {
       setCreditPayments(prev => prev.filter(p => p.id !== payment.id));
@@ -3010,8 +3050,13 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     setCreditEats(cs => cs.map(c => c.id === id ? next : c));
     setCreditPayments(prevPs => [leg, ...prevPs]);
     try {
-      await creditEatApi.pay(id, amount);
-      triggerToast(`Payment of ${formatCurrency(amount)} recorded`, 'success');
+      const { outcome } = await creditEatApi.pay(id, amount);
+      triggerToast(
+        outcome.status === 'queued'
+          ? `Payment of ${formatCurrency(amount)} saved on this phone \u2014 it will sync when you are back online`
+          : `Payment of ${formatCurrency(amount)} recorded`,
+        outcome.status === 'queued' ? 'info' : 'success',
+      );
       return true;
     } catch (err) {
       if (prev) setCreditEats(cs => cs.map(c => c.id === id ? prev : c));

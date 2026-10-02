@@ -910,7 +910,11 @@ export function buildTheftFlags(args: {
     });
   }
   // Refund / void velocity: ≥3 refunds or ≥20% of today's tickets.
-  const refundedCount = daySales.filter((s) => s.refunded || s.voided).length + args.sales.filter((s) => (s.refunded || s.voided) && localDayKey(s.timestamp) === args.dayKey).length / 2;
+  // Counted over ALL of today's sales, not the live-only subset: a voided or
+  // refunded ticket is exactly what this counter is looking for, and the live
+  // filter had already removed every one of them.
+  const todaysTickets = args.sales.filter((s) => localDayKey(s.timestamp) === args.dayKey);
+  const refundedCount = todaysTickets.filter((s) => s.refunded || s.voided).length;
   const ticketCount = daySales.length;
   const voids = args.voidCount || 0;
   const badTickets = Math.floor(refundedCount) + voids;

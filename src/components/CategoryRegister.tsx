@@ -1851,8 +1851,12 @@ export default function CategoryRegister({
               <span className="text-[10px] text-zinc-500 font-bold uppercase shrink-0">Keep in business</span>
               <input type="number" min="0" step="1000" inputMode="numeric" id="tour-capital-input"
                 value={capForSelected || ''}
-                onChange={(e) => {
+                onBlur={(e) => {
+                  // Written when she leaves the field, not per keystroke:
+                  // typing 150000 used to fire eight separate settings writes,
+                  // each its own queued entry, and a partial value could win.
                   const v = Math.max(0, parseInt(e.target.value || '0', 10) || 0);
+                  if (v === capForSelected) return;
                   try { setClosingCapital(todayKey, selected, v); } catch {}
                   onSetEodCapital(selected, v);
                 }}

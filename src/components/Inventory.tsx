@@ -370,6 +370,14 @@ export default function Inventory({
       triggerToast(`Warning: Cost (${formatCurrency(costNum)}) is same or more than Price (${formatCurrency(priceNum)})!`, 'info');
     }
 
+    // "Set stock" to an empty box used to submit 0 as a real adjustment -- the
+    // product zeroed, with a journal entry and a stock movement. Clearing the
+    // field to retype it must not destroy anything.
+    if (adjustmentType === 'set' && stockAdjustment === 0 && editingProduct.stockQty > 0) {
+      triggerToast('Type the number you are counting, or choose Add or Remove instead of Set.', 'error');
+      return;
+    }
+
     let finalStock = editingProduct.stockQty;
     let receivedQty = 0;
     let movedQty = 0;

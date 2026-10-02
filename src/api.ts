@@ -1515,9 +1515,18 @@ export const stockPurchaseApi = {
   }),
 };
 
+export interface WriteOutcome {
+  /** 'synced' = the server has it. 'queued' = safe on this phone, not yet up. */
+  status: 'synced' | 'queued';
+}
+
 export const creditPaymentApi = {
   list: () => api<CreditPayment[]>('/api/credit-payments'),
-  create: (p: CreditPayment) => api<CreditPayment>('/api/credit-payments', { method: 'POST', body: JSON.stringify(withWriteId(p)) }),
+  create: (p: CreditPayment) => {
+    const meta: WriteMeta = { status: 'saved' };
+    return api<CreditPayment>('/api/credit-payments', { method: 'POST', body: JSON.stringify(withWriteId(p)) }, meta)
+      .then((row) => ({ row, outcome: { status: meta.status } as WriteOutcome }));
+  },
 };
 
 export interface CreditLimitRow {
@@ -1601,7 +1610,11 @@ export const creditEatApi = {
   // must not be mistaken for the first one repeated. Without it the server
   // fell back to a fixed key per record and swallowed every payment after the
   // first -- the money was taken and the book never moved.
-  pay: (id: string, amount: number) => api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify(withWriteId({ amount, paymentId: `cp-${newClientWriteId()}` })) }),
+  pay: (id: string, amount: number) => {
+    const meta: WriteMeta = { status: 'saved' };
+    return api<CreditEat>(`/api/credit-eats/${id}/pay`, { method: 'POST', body: JSON.stringify(withWriteId({ amount, paymentId: `cp-${newClientWriteId()}` })) }, meta)
+      .then((row) => ({ row, outcome: { status: meta.status } as WriteOutcome }));
+  },
 };
 
 export const productionRegisterApi = {
