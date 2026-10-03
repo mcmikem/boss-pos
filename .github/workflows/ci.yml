@@ -31,7 +31,7 @@ jobs:
 
   deploy:
     needs: check
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.VERCEL_TOKEN != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,15 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npx -y vercel@latest deploy --prod --yes --token ${{ secrets.VERCEL_TOKEN }}
+      # secrets.* cannot be referenced in a job-level if: (GitHub rejects the
+      # whole workflow). Gate at the step level instead, and skip cleanly.
+      - name: Deploy to production
+        if: env.VERCEL_TOKEN != ''
+        run: npx -y vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Skip deploy (no VERCEL_TOKEN)
+        if: env.VERCEL_TOKEN == ''
+        run: echo "VERCEL_TOKEN not set — checks ran, deploy skipped."

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "API_ONLY=1 PORT=3001 node --env-file .env server.js & vite --port=3000 --host=0.0.0.0",
     "dev:api": "API_ONLY=1 PORT=3001 node --env-file .env server.js",
-    "build": "vite build && npm run budget && npm run browser-apis",
+    "build": "vite build && npm run budget && npm run browser-apis && npm run csp",
     "budget": "node scripts/check-build-budget.mjs",
     "browser-apis": "node scripts/check-browser-apis.mjs",
     "start": "node server.js",
@@ -19,7 +19,8 @@
     "test:guards": "node --test tests/frontend-upgrades.test.js",
     "smoke": "node scripts/smoke-prod.mjs",
     "verify:deployed": "node scripts/verify-deployed-fixes.mjs",
-    "sql": "node scripts/check-sql-interpolations.mjs api/index.js api/authz.js api/businessRules.js api/creditLimits.js api/efris.js api/operationsBusiness.js api/operationsRules.js api/procurementRules.js api/reportRange.js server.js"
+    "sql": "node scripts/check-sql-interpolations.mjs api/index.js api/authz.js api/businessRules.js api/creditLimits.js api/efris.js api/operationsBusiness.js api/operationsRules.js api/procurementRules.js api/reportRange.js server.js",
+    "csp": "node scripts/check-csp.mjs"
   },
   "dependencies": {
     "@ericblade/quagga2": "^1.12.1",
@@ -32,9 +33,12 @@
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "vite": "^6.2.3",
     "vite-plugin-pwa": "^1.3.0"
+  },
+  "overrides": {
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",

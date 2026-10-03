@@ -1507,6 +1507,12 @@ function verifyStoredPin(stored, pin) {
 }
 
 function clientIp(req) {
+  // x-vercel-forwarded-for is set by Vercel's edge and cannot be spoofed by
+  // the client (Vercel overwrites it). x-forwarded-for's first entry IS
+  // client-controlled on proxy-append hosts, which let an attacker rotate
+  // their apparent IP to bypass the PIN lockout entirely.
+  const vxf = req.headers['x-vercel-forwarded-for'];
+  if (vxf) return String(vxf).split(',')[0].trim();
   const fwd = req.headers['x-forwarded-for'];
   if (fwd) return String(fwd).split(',')[0].trim();
   return req.socket?.remoteAddress || 'unknown';
@@ -1533,7 +1539,15 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   const { pin } = req.body || {};
   const rows = await sql`SELECT value FROM settings WHERE key='pinHash'`;
   const stored = rows.length ? rows[0].value : '';
-  if (stored && !verifyStoredPin(stored, String(pin || ''))) {
+  // No PIN stored = first run / cleared PIN. The till still opens (onboarding
+  // needs a live session), but the token is flagged so the client can warn,
+  // and every open-till unlock is audited. Previously this path was silent.
+  if (!stored) {
+    await audit('auth.open_till', 'Till opened with no PIN set — set one in Settings');
+    const token = await signToken();
+    return res.json({ ok: true, token, hasPin: false, openTill: true });
+  }
+  if (!verifyStoredPin(stored, String(pin || ''))) {
     if (attempts.length === 0) {
       await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
     } else {
@@ -1664,7 +1678,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/admin/')) return next();
   // Public marketer portal: the referral code in the URL is the secret.
   if (req.path.startsWith('/api/m/')) return next();
-  if (['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
+  if (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     requireAuth(req, res, next).catch(next);
     return;
   }
@@ -1781,7 +1795,8 @@ app.use((req, res, next) => {
 });
 
 // Log out every device: bump the token version. Old tokens 401 immediately.
-app.post('/api/auth/revoke-all', asHandler(async (req, res) => {
+// Manager-only: a cashier must not be able to log out the whole shop.
+app.post('/api/auth/revoke-all', requireManager, asHandler(async (req, res) => {
   const r = await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key='authVersion' RETURNING value::int AS v`;
   authVersionCache = { v: r.length ? r[0].v : 0, at: Date.now() };
   await audit('auth.revoke_all', 'Logged out all devices');
@@ -2127,7 +2142,7 @@ app.put('/api/suppliers/:id', asHandler(async (req, res) => {
   res.json(s);
 }));
 
-app.delete('/api/suppliers/:id', asHandler(async (req, res) => {
+app.delete('/api/suppliers/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM suppliers WHERE id=${req.params.id}`;
   await audit('supplier.delete', `Deleted ${req.params.id}`);
   res.json({ success: true });
@@ -2170,7 +2185,7 @@ app.put('/api/supplier-prices', asHandler(async (req, res) => {
   res.json({ id, supplierId, productId, price, purchaseQty: nextQty, purchaseUnit: nextPurchaseUnit, normalizedUnit: nextNormalizedUnit, updatedAt: at });
 }));
 
-app.delete('/api/supplier-prices/:id', asHandler(async (req, res) => {
+app.delete('/api/supplier-prices/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM supplier_prices WHERE id=${req.params.id}`;
   await audit('supplierprice.delete', `Deleted ${req.params.id}`);
   res.json({ success: true });
@@ -3836,7 +3851,7 @@ app.get('/api/efris/config', asHandler(async (req, res) => {
   res.json({ config: cfg, hasToken: !!(tok && String(tok).length > 0) });
 }));
 
-app.put('/api/efris/config', asHandler(async (req, res) => {
+app.put('/api/efris/config', requireManager, asHandler(async (req, res) => {
   const cfg = sanitizeEfrisConfig((req.body || {}).config);
   if (cfg.mode === 'provider' && !cfg.tin) {
     return res.status(400).json({ error: 'TIN is required for provider mode' });
@@ -3898,7 +3913,7 @@ app.get('/api/settings', asHandler(async (req, res) => {
   const obj = {};
   const BLOCKED_GET = new Set([
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
-    'clientWriteId', 'deviceId', 'efrisToken',
+    'clientWriteId', 'deviceId', 'efrisToken', 'sheetsUrl',
   ]);
   for (const r of rows) {
     if (BLOCKED_GET.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
@@ -4393,7 +4408,7 @@ app.put('/api/tailoring-orders/:id', asHandler(async (req, res) => {
   res.json(o);
 }));
 
-app.delete('/api/tailoring-orders/:id', asHandler(async (req, res) => {
+app.delete('/api/tailoring-orders/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM tailoring_orders WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -4428,7 +4443,7 @@ app.put('/api/design-orders/:id', asHandler(async (req, res) => {
   res.json(o);
 }));
 
-app.delete('/api/design-orders/:id', asHandler(async (req, res) => {
+app.delete('/api/design-orders/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM design_orders WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -4462,7 +4477,7 @@ app.put('/api/bookings/:id', asHandler(async (req, res) => {
   res.json(o);
 }));
 
-app.delete('/api/bookings/:id', asHandler(async (req, res) => {
+app.delete('/api/bookings/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM bookings WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -4496,7 +4511,7 @@ app.put('/api/repair-jobs/:id', asHandler(async (req, res) => {
   res.json(o);
 }));
 
-app.delete('/api/repair-jobs/:id', asHandler(async (req, res) => {
+app.delete('/api/repair-jobs/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM repair_jobs WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -4520,7 +4535,7 @@ app.post('/api/quotes', asHandler(async (req, res) => {
   res.json(o);
 }));
 
-app.delete('/api/quotes/:id', asHandler(async (req, res) => {
+app.delete('/api/quotes/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM quotes WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -4661,7 +4676,7 @@ app.put('/api/customers/:id', asHandler(async (req, res) => {
   res.json(mapCustomer(r[0]));
 }));
 
-app.delete('/api/customers/:id', asHandler(async (req, res) => {
+app.delete('/api/customers/:id', requireManager, asHandler(async (req, res) => {
   await sql`DELETE FROM customers WHERE id=${req.params.id}`;
   res.json({ success: true });
 }));
@@ -5323,7 +5338,7 @@ app.get('/api/boot', asHandler(async (req, res) => {
   const obj = {};
   const BLOCKED_BOOT = new Set([
     'authSecret', 'authVersion', 'orderCounter', 'pinHash', 'lastAutoBackupAt',
-    'clientWriteId', 'deviceId', 'efrisToken',
+    'clientWriteId', 'deviceId', 'efrisToken', 'sheetsUrl',
   ]);
   for (const r of settingsRows) {
     if (BLOCKED_BOOT.has(r.key) || r.key.startsWith('sheet_last_') || r.key.endsWith('Migrated') || r.key === 'catalogSynced') continue;
@@ -5383,7 +5398,8 @@ app.delete('/api/momo-transfers/:id', requireManager, asHandler(async (req, res)
 }));
 
 // === SYNC PRODUCT CATALOG ===
-app.post('/api/sync-products', asHandler(async (req, res) => {
+// Manager-only: this wipes and re-inserts the catalogue.
+app.post('/api/sync-products', requireManager, asHandler(async (req, res) => {
   const libCount = await syncLibraryProducts();
   const eateryCount = await syncEateryMenu();
   const drinksCount = await syncDrinksMenu();
@@ -7206,11 +7222,14 @@ app.get('/api/subscription', asHandler(async (req, res) => {
   res.redirect(307, '/api/tenant');
 }));
 
-// POST /api/subscription - update subscription status (called by Stripe webhook)
-app.post('/api/subscription', asHandler(async (req, res) => {
+// POST /api/subscription - update subscription status (called by Stripe webhook).
+// Super-admin only: the tenant id comes from the verified admin token, never
+// from a client-supplied header, or any shop could set its own plan to
+// 'enterprise'.
+app.post('/api/subscription', requireSuperAdmin, asHandler(async (req, res) => {
   const { subId, status, plan, current_period_end } = req.body || {};
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
-  if (subId) {
+  const tenantId = process.env.APP_TENANT_ID;
+  if (subId && tenantId) {
     await sql`UPDATE subscriptions SET status = ${status}, plan = ${plan}, current_period_end = ${current_period_end} WHERE tenant_id = ${tenantId}`;
   }
   const sub = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
@@ -7228,27 +7247,32 @@ app.get('/api/plans', asHandler(async (req, res) => {
 }));
 
 // POST /api/tenant - update tenant name/plan (admin use)
-app.post('/api/tenant', asHandler(async (req, res) => {
+app.post('/api/tenant', requireSuperAdmin, asHandler(async (req, res) => {
   const { name, plan } = req.body || {};
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
-  if (name) await sql`UPDATE tenants SET name = ${name} WHERE id = ${tenantId}`;
-  if (plan) await sql`UPDATE tenants SET plan = ${plan} WHERE id = ${tenantId}`;
+  const tenantId = process.env.APP_TENANT_ID;
+  if (name && tenantId) await sql`UPDATE tenants SET name = ${name} WHERE id = ${tenantId}`;
+  if (plan && tenantId) await sql`UPDATE tenants SET plan = ${plan} WHERE id = ${tenantId}`;
   const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
   res.json({ tenant: tenant[0] });
 }));
 
-// Middleware: set app.tenant_id from the shop's DB context
-// This is set by the provisioner via Vercel env var, or by the onboarding flow
+// Middleware: set app.tenant_id from the shop's DB context.
+// This is set by the provisioner via Vercel env var, or by the onboarding flow.
+// The header value is validated against a strict pattern before it reaches
+// SQL — it used to be interpolated raw, which was injectable by any client.
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 app.use((req, res, next) => {
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
-  if (tenantId) {
-    sql.query(`SET app.tenant_id = '${tenantId}'`);
+  const raw = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID || '';
+  const tenantId = String(raw).trim();
+  if (tenantId && TENANT_ID_RE.test(tenantId)) {
+    sql.query(`SET app.tenant_id = '${tenantId}'`).catch(() => {});
   }
   next();
 });
 
-// POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN
-app.post('/api/onboard', asHandler(async (req, res) => {
+// POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN.
+// Manager-only: a cashier must not be able to rewrite the shop's PIN.
+app.post('/api/onboard', requireManager, asHandler(async (req, res) => {
   const { shopName, plan, pin } = req.body || {};
   const cleanName = String(shopName || '').trim().slice(0, 100);
   const cleanPlan = ['basic', 'pro', 'enterprise'].includes(plan) ? plan : 'basic';
@@ -7269,10 +7293,9 @@ app.post('/api/onboard', asHandler(async (req, res) => {
     await sql`INSERT INTO subscriptions (id, tenant_id, status, plan) VALUES (gen_random_uuid(), ${tenantId}, 'active', ${cleanPlan})`;
   }
 
-  // Set tenant_id middleware context for this shop's API calls
-  // The frontend will set this via header on subsequent calls
-  // For now, just store it in a global the API can read
-  process.env.APP_TENANT_ID = tenantId;
+  // Do NOT mutate process.env.APP_TENANT_ID here: on a warm serverless
+  // instance that global is shared across requests, so one shop's onboarding
+  // would contaminate every subsequent request on the same instance.
 
   const salt = randomBytes(16).toString('hex');
   const pinHash = pinHashFormat(salt, hashPinStrong(cleanPin, salt));

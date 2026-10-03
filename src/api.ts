@@ -866,7 +866,7 @@ export async function flushOutbox(): Promise<number> {
 }
 
 // Server-side PIN auth (plain PIN over HTTPS; hashing happens on the server).
-export async function authVerify(pin: string, timeoutMs?: number): Promise<{ token: string; hasPin: boolean; hash?: string }> {
+export async function authVerify(pin: string, timeoutMs?: number): Promise<{ token: string; hasPin: boolean; hash?: string; openTill?: boolean }> {
   const res = await fetchTimeout(`${BASE}/api/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -1962,3 +1962,154 @@ test('the screens she uses every day, audited on a thumb', () => {
   assert.match(sales, /sticky top-2 z-30/);
   assert.match(sales, /Undo this sale/);
 });
+
+// Everything below was found by a pre-launch security audit. Each one was live:
+// a route that answered to the wrong credential, or a value from the request
+// body reaching SQL. The tests exist because every one of these had a plausible
+// reason to look deliberate in the code.
+test('no data-changing route is reachable without the right role', () => {
+  const server = read('api/index.js');
+
+  // The auth middleware listed four verbs. PATCH was not one of them, so every
+  // PATCH route ran with req.auth undefined -- and the next one added without
+  // its own middleware would have been completely unauthenticated.
+  assert.match(server, /\['GET', 'POST', 'PUT', 'PATCH', 'DELETE'\]\.includes\(req\.method\)/);
+
+  // The owner leaving the shop is not a thing a cashier does to the whole shop.
+  assert.match(server, /app\.post\('\/api\/auth\/revoke-all', requireManager/);
+  // Wipes and re-inserts the product catalogue.
+  assert.match(server, /app\.post\('\/api\/sync-products', requireManager/);
+  // Rewrites the shop's own PIN.
+  assert.match(server, /app\.post\('\/api\/onboard', requireManager/);
+  // Points fiscalisation at a provider URL, and that call carries the URA token.
+  assert.match(server, /app\.put\('\/api\/efris\/config', requireManager/);
+
+  // Plan and shop name: the tenant came from a client header, so any shop could
+  // set its own plan to 'enterprise'.
+  assert.match(server, /app\.post\('\/api\/subscription', requireSuperAdmin/);
+  assert.match(server, /app\.post\('\/api\/tenant', requireSuperAdmin/);
+  assert.equal(/req\.headers\['x-tenant-id'\][\s\S]{0,200}UPDATE (subscriptions|tenants)/.test(server), false);
+
+  // Hard deletes of financial rows. A seller's OWN loss entry stays open, or
+  // they can log a mistake and not fix it -- both directions are pinned.
+  for (const r of ['suppliers', 'supplier-prices', 'tailoring-orders', 'design-orders',
+                   'bookings', 'repair-jobs', 'quotes', 'customers']) {
+    assert.match(server, new RegExp(`app\\.delete\\('/api/${r}/:id', requireManager`), `${r} delete needs a manager`);
+  }
+  assert.match(server, /app\.delete\('\/api\/wastage-log\/:id', asHandler/);
+  assert.match(server, /app\.delete\('\/api\/production-register\/:id', asHandler/);
+});
+
+test('the client cannot talk the server into anything', () => {
+  const server = read('api/index.js');
+
+  // A request header was interpolated into SET app.tenant_id = '...' unquoted
+  // and unawaited, so one header both injected SQL and threw on failure.
+  assert.match(server, /const TENANT_ID_RE = \/\^\[a-z0-9\]\[a-z0-9-\]\{0,63\}\$\//);
+  // The value is still interpolated (a SET parameter cannot be bound), so the
+  // guard and the catch are the whole fix.
+  assert.match(server, /if \(tenantId && TENANT_ID_RE\.test\(tenantId\)\) \{\s*sql\.query\(`SET app\.tenant_id = '\$\{tenantId\}'`\)\.catch/);
+
+  // One shop's onboarding used to overwrite this process-wide, so a warm lambda
+  // answered every later request as that shop.
+  assert.equal(/process\.env\.APP_TENANT_ID = tenantId/.test(server), false);
+
+  // The PIN lockout was keyed on the first x-forwarded-for entry, which a client
+  // sets itself -- so the whole lockout was skipped by sending a new header.
+  assert.match(server, /const vxf = req\.headers\['x-vercel-forwarded-for'\]/);
+  assert.ok(server.indexOf("x-vercel-forwarded-for") < server.indexOf("const fwd = req.headers['x-forwarded-for']"),
+    'the header the edge overwrites must be read first');
+
+  // No PIN set means anyone can open the till. That stays (first run needs it),
+  // but it is now flagged, audited, and warned about on screen.
+  assert.match(server, /res\.json\(\{ ok: true, token, hasPin: false, openTill: true \}\)/);
+  assert.match(server, /audit\('auth\.open_till'/);
+
+  // The Apps Script URL is redacted from backups as a secret, and it was being
+  // handed to every till. With it, anyone can POST rows into the owner's sheet.
+  assert.equal(/BLOCKED_GET[\s\S]{0,220}'sheetsUrl'/.test(server), true);
+  assert.equal(/BLOCKED_BOOT[\s\S]{0,220}'sheetsUrl'/.test(server), true);
+
+  const app = read('src/App.tsx');
+  assert.match(app, /setOpenTill\(data\.openTill === true\)/);
+  assert.match(app, /No PIN set/);
+});
+
+test('the fiscal provider URL is not an exfiltration target', () => {
+  const efris = read('api/efris.js');
+  // The invoice POST carries the URA bearer token to this URL, so anything that
+  // is not a public https origin would hand a cashier the shop's credentials
+  // and every invoice in the business.
+  assert.match(efris, /if \(u\.protocol !== 'https:'\) return ''/);
+  assert.match(efris, /host === 'localhost'/);
+  assert.match(efris, /a === 10 \|\| a === 127 \|\| a === 0/);
+  assert.match(efris, /a === 192 && b === 168/);
+  assert.match(efris, /providerBase: sanitizeProviderBase\(src\.providerBase\)/);
+  assert.equal(/providerBase: clean\(src\.providerBase/.test(efris), false);
+});
+
+test('a build that breaks a rule does not reach a shop', () => {
+  // CI had been failing for weeks: secrets cannot be read in a job-level if,
+  // so GitHub rejected the whole workflow and every push deployed untested.
+  const ci = read('.github/workflows/ci.yml');
+  assert.equal(/^\s+if:.*secrets\./m.test(ci), false, 'no secrets.* in a job-level if');
+  assert.match(ci, /if: env\.VERCEL_TOKEN != ''/);
+
+  // Vercel ran vite and nothing else: a type error or a SQL typo shipped.
+  const vercel = JSON.parse(read('vercel.json'));
+  assert.match(vercel.buildCommand, /tsc --noEmit/);
+  assert.match(vercel.buildCommand, /npm run sql/);
+
+  // A PWA holding a token in localStorage, with nothing stopping a page on
+  // another site from framing it or sniffing its scripts.
+  const all = vercel.headers.find((h) => h.source === '/(.*)').headers.map((h) => h.key);
+  for (const h of ['X-Frame-Options', 'X-Content-Type-Options', 'Content-Security-Policy', 'Referrer-Policy']) {
+    assert.ok(all.includes(h), `missing ${h}`);
+  }
+
+  // 12 advisories, 8 high, in the image parser that reads customer uploads.
+  const pkg = JSON.parse(read('package.json'));
+  assert.match(pkg.overrides.sharp, /0\.35\.5/);
+});
+
+test('the Content-Security-Policy allows what the till actually loads', () => {
+  // A policy is only protection if the app still runs under it. This one was
+  // written first and would have silently blocked the shop's own fonts: the
+  // brand typeface comes from Google Fonts, and the stylesheet was being
+  // switched on by an inline onload=, which script-src 'self' also forbids.
+  const vercel = JSON.parse(read('vercel.json'));
+  const csp = vercel.headers
+    .flatMap((h) => h.headers)
+    .find((h) => h.key === 'Content-Security-Policy').value;
+  const html = read('index.html');
+
+  const origins = new Set();
+  for (const m of html.matchAll(/https?:\/\/([a-z0-9.-]+)/g)) origins.add(m[1]);
+
+  const directives = Object.fromEntries(
+    csp.split(';').map((d) => {
+      const [name, ...vals] = d.trim().split(/\s+/);
+      return [name, vals];
+    }),
+  );
+  // stylesheets are style-src, font files are font-src
+  const allowed = new Set([
+    ...(directives['style-src'] || []),
+    ...(directives['font-src'] || []),
+  ]);
+  for (const o of origins) {
+    assert.ok(
+      [...allowed].some((a) => a === o || a === `https://${o}` || a === 'https://'),
+      `CSP would block ${o}, which index.html loads`,
+    );
+  }
+
+  // The inline onload that needed script-src 'unsafe-inline' is gone, so the
+  // script policy can stay strict.
+  assert.equal(/on(load|error)="/.test(html), false, 'no inline event handlers in index.html');
+  assert.equal(directives['script-src'].includes("'unsafe-inline'"), false);
+  // Only 'self' plus hashes of the scripts Vite injects -- never a blanket
+  // allowance. scripts/check-csp.mjs recomputes these from the real build.
+  assert.equal(directives['script-src'][0], "'self'");
+  assert.equal(directives['script-src'].filter((d) => /^'sha256-/.test(d)).length >= 3, true);
+});

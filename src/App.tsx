@@ -463,6 +463,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   };
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<'booting' | 'locked' | 'ready'>('booting');
+  // True when the shop has no PIN set: the till is open to anyone. The server
+  // flags this on every unlock so the warning cannot be forgotten.
+  const [openTill, setOpenTill] = useState(false);
   // When the clipboard is refused outright, the support details are shown so
   // they can be selected and pasted by hand rather than lost.
   const [supportFallbackText, setSupportFallbackText] = useState('');
@@ -976,6 +979,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       try {
         const data = await authVerify('');
         localStorage.setItem('boss_pos_has_pin', String(data.hasPin));
+        setOpenTill(data.openTill === true);
         if (!data.hasPin) {
           const localPin = localStorage.getItem('boss_pos_pin');
           if (localPin && !localPin.startsWith('fb_')) {
@@ -3766,6 +3770,14 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               aria-label={`Cart total ${formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}. Go to sell screen.`}
               className="text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-gold-brand/30 hover:bg-gold-brand/20 transition-all cursor-pointer tabular-nums">
               Cart • {formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}
+            </button>
+          )}
+          {openTill && (
+            <button onClick={() => setIsSettingsOpen(true)}
+              title="No PIN is set — anyone can open this till. Tap to set one."
+              aria-label="No PIN set — anyone can open this till. Tap to set one."
+              className="text-[8px] bg-rose-950/60 text-rose-300 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-rose-500/40 cursor-pointer">
+              No PIN set
             </button>
           )}
         </div>

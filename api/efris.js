@@ -36,6 +36,34 @@ export function defaultEfrisConfig() {
 
 const clean = (v, n) => String(v || '').slice(0, n);
 
+// The provider URL is where the invoice payload — including the URA bearer
+// token — gets POSTed. It must be a public https URL: no private ranges, no
+// localhost, no non-http(s) schemes. Without this a cashier could point it at
+// their own server and intercept every fiscalised invoice.
+function sanitizeProviderBase(url) {
+  const v = clean(url, 200).replace(/\/+$/, '');
+  if (!v) return '';
+  let u;
+  try {
+    u = new URL(v);
+  } catch {
+    return '';
+  }
+  if (u.protocol !== 'https:') return '';
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return '';
+  // Block private / loopback / link-local ranges.
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 10 || a === 127 || a === 0) return '';
+    if (a === 172 && b >= 16 && b <= 31) return '';
+    if (a === 192 && b === 168) return '';
+    if (a === 169 && b === 254) return '';
+  }
+  return v;
+}
+
 export function sanitizeEfrisConfig(input) {
   const d = defaultEfrisConfig();
   const src = input && typeof input === 'object' ? input : {};
@@ -51,7 +79,7 @@ export function sanitizeEfrisConfig(input) {
     pricesIncludeVat: src.pricesIncludeVat !== false,
     autoIssue: src.autoIssue === true,
     goodsPrefix: clean(src.goodsPrefix || d.goodsPrefix, 12).replace(/[^A-Za-z0-9-]/g, '') || 'BOSS',
-    providerBase: clean(src.providerBase, 200).replace(/\/+$/, ''),
+    providerBase: sanitizeProviderBase(src.providerBase),
   };
 }
 
