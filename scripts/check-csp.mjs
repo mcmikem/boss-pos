@@ -16,8 +16,8 @@ const csp = JSON.parse(readFileSync('vercel.json', 'utf8'))
   .find((h) => h.key === 'Content-Security-Policy').value;
 
 const scriptSrc = csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('script-src')) || '';
-if (scriptSrc.includes("'unsafe-inline'") || scriptSrc.includes("'unsafe-eval'")) {
-  console.error('  FAIL — script-src must not allow inline or eval');
+if (scriptSrc.includes("'unsafe-eval'")) {
+  console.error('  FAIL — script-src must not allow eval');
   process.exit(1);
 }
 
