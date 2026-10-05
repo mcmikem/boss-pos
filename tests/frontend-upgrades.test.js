@@ -2114,3 +2114,35 @@ test('the Content-Security-Policy allows what the till actually loads', () => {
   assert.equal(directives['script-src'].includes("'unsafe-inline'"), true);
   assert.equal(directives['script-src'].filter((d) => /^'sha256-/.test(d)).length >= 3, true);
 });
+
+test('the kitchen and recipe editors fit the phone they are used on', () => {
+  // body{overflow-x:hidden} CLIPS anything wider than the screen rather than
+  // scrolling it, so a row of fixed columns does not slide into reach: the
+  // Waste % box and the delete ✕ are simply off the phone, forever.
+  for (const file of ['src/components/Inventory.tsx', 'src/components/EateryPricing.tsx']) {
+    const src = read(file);
+    assert.match(src, /grid-cols-\[1fr_1fr_1fr_1fr_2rem\]/, `${file}: two rows on a phone`);
+    assert.match(src, /col-span-5 sm:col-span-1/, `${file}: the name owns the first phone row`);
+    assert.match(src, /sm:grid-cols-\[1fr_3\.5rem_4rem_4\.5rem_3\.5rem_1\.5rem\]/, `${file}: the one-row layout stays on a wide screen`);
+    assert.match(src, /className="min-w-0 bg-zinc-950/, `${file}: a number input must not claim its 20-character intrinsic width`);
+  }
+  const mp = read('src/components/MorningProduction.tsx');
+  // Four across left about 40px for each number on a 360px phone — not a box
+  // anyone can type "100" into. Two across, four on sm and up.
+  assert.match(mp, /grid-cols-2 gap-2 sm:grid-cols-\[1fr_auto_1fr_auto\]/);
+  assert.match(mp, /justify-self-end sm:justify-self-start/);
+  // The three figures under it share ~85px each: one word at 10px with
+  // letter-spacing ran into its neighbour.
+  assert.match(mp, /tracking-normal sm:tracking-widest/);
+});
+
+test('one payment says it once, and only the handler that knows the answer says it', () => {
+  const app = read('src/App.tsx');
+  // The handler is the only place that can tell a queued write from a saved
+  // one, so it is the only place allowed to announce a collection.
+  assert.equal((app.match(/saved on this phone \\u2014 it will sync when you are back online/g) || []).length, 2);
+  for (const file of ['src/components/CreditsLedger.tsx', 'src/components/CategoryRegister.tsx']) {
+    const src = read(file);
+    assert.equal(/triggerToast\(`Payment recorded/.test(src), false, `${file} must not toast on top of the handler`);
+  }
+});

@@ -69,6 +69,37 @@ describe('holdPendingCreditEats', () => {
     expect(holdPendingCreditEats(undefined, emptyPendingCreditWrites())).toEqual([]);
   });
 
+  it('keeps a debt written offline from vanishing on the next refresh', () => {
+    const pending = emptyPendingCreditWrites();
+    pending.creates.push(eat({ id: 'ce-new' }));
+
+    const rows = holdPendingCreditEats([], pending);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe('ce-new');
+  });
+
+  it('does not double a create the server has already taken in', () => {
+    const pending = emptyPendingCreditWrites();
+    pending.creates.push(eat({ id: 'ce-new' }));
+
+    const rows = holdPendingCreditEats([eat({ id: 'ce-new' })], pending);
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it('drops a refused or delivered create so the server has the last word', () => {
+    for (const status of ['synced', 'failed']) {
+      const pending = collectPendingCreditWrites([{
+        path: '/api/credit-eats',
+        method: 'POST',
+        body: JSON.stringify(eat({ id: 'ce-new' })),
+        status,
+      }]);
+      expect(holdPendingCreditEats([], pending)).toEqual([]);
+    }
+  });
+
   it('applies an amount already summed across two queued collections', () => {
     // pendingCreditWrites() adds each queued amount for a line into one total;
     // the helper's job is to put that total on the row exactly once.

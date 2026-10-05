@@ -7,7 +7,8 @@ interface CreditsLedgerProps {
   creditPayments: CreditPayment[];
   creditEats?: CreditEat[];
   // Both payment writes report the server's answer, so a refused collection
-  // never announces itself as recorded.
+  // never announces itself as recorded — and the handler is what announces a
+  // successful one, so this component must not toast on top of it.
   onPayCreditEat?: (id: string, amount: number) => void | boolean | Promise<void | boolean>;
   formatCurrency: (val: number) => string;
   onPayCredit: (saleId: string, amount: number) => void | boolean | Promise<void | boolean>;
@@ -118,7 +119,10 @@ export default function CreditsLedger({
         // amount the cashier had typed.
         const written = await onPayCreditEat(record.refId, amtNum);
         if (written === false) return;
-        triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
+        // No toast here on purpose: only the handler knows whether the server
+        // took the money or this phone is still holding it for the queue, and
+        // a second "Payment recorded" on top of "will sync" is what made a
+        // cashier trust a debt the server had never seen.
         setPaymentKey(null);
         setPaymentAmount('');
         return;
@@ -126,7 +130,7 @@ export default function CreditsLedger({
 
       const written = await onPayCredit(record.refId, amtNum);
       if (written === false) return;
-      triggerToast(`Payment recorded: ${formatCurrency(amtNum)}`, 'success');
+      // Same rule as the book branch: one truthful toast, from the handler.
       setPaymentKey(null);
       setPaymentAmount('');
   

@@ -525,7 +525,9 @@ export default function MorningProduction({
                       {isNewLine ? '' : <>recipe needs {ing.qty} {ing.unit || 'units'}</>}
                     </p>
                   </div>
-                  <div className="grid grid-cols-[1fr_auto_1fr_auto] items-end gap-2">
+                  {/* Phone first: four across left ~40px for each number, which nobody
+                      can type a quantity into. Two across, then the wide row on sm. */}
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] items-end">
                     <label className="min-w-0">
                       <span className="text-[10px] font-black text-zinc-400 uppercase block mb-1">How much was bought?</span>
                       <input type="number" min="0" step="any" inputMode="decimal" value={ing.boughtQty}
@@ -550,7 +552,7 @@ export default function MorningProduction({
                         onChange={e => setDraftIngredients(prev => (prev || []).map((x, i) => i === idx ? { ...x, unitCost: Number(e.target.value) || 0 } : x))}
                         className="w-full h-11 bg-zinc-900 border border-zinc-800 text-white rounded-lg px-3 text-sm font-bold tabular-nums focus:border-amber-500 outline-none" />
                     </label>
-                    <p className="text-sm font-black text-amber-400 font-display tabular-nums w-24 text-right pb-3 shrink-0">{formatCurrency(lineTotal)}</p>
+                    <p className="text-sm font-black text-amber-400 font-display tabular-nums w-24 justify-self-end sm:justify-self-start text-right pb-3 shrink-0">{formatCurrency(lineTotal)}</p>
                   </div>
                 </div>
               );
@@ -564,19 +566,19 @@ export default function MorningProduction({
             <datalist id="ingredient-units">
               {['kg', 'g', 'L', 'ml', 'pcs', 'bunches', 'bags', 'boxes', 'crates', 'sacks', 'tins', 'bottles'].map(u => <option key={u} value={u} />)}
             </datalist>
-            <div className="grid grid-cols-3 gap-3 pt-2 border-t border-white/5">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 pt-2 border-t border-white/5">
               <div>
-                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Ingredients</p>
-                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(formSpend)}</p>
+                <p className="font-black text-zinc-400 uppercase tracking-normal sm:tracking-widest text-[9px] sm:text-[10px]">Ingredients</p>
+                <p className="text-sm sm:text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(formSpend)}</p>
               </div>
               <div>
-                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Cost each</p>
-                <p className="text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(derivedCostEach)}</p>
+                <p className="font-black text-zinc-400 uppercase tracking-normal sm:tracking-widest text-[9px] sm:text-[10px]">Cost each</p>
+                <p className="text-sm sm:text-base font-black text-amber-400 font-display tabular-nums">{formatCurrency(derivedCostEach)}</p>
                 <p className="text-[9px] font-bold text-zinc-600 uppercase">worked out</p>
               </div>
               <div>
-                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Recipe says</p>
-                <p className="text-base font-black text-zinc-500 font-display tabular-nums">{formatCurrency(recipeNeed)}</p>
+                <p className="font-black text-zinc-500 uppercase tracking-normal sm:tracking-widest text-[9px] sm:text-[10px]">Recipe says</p>
+                <p className="text-sm sm:text-base font-black text-zinc-500 font-display tabular-nums">{formatCurrency(recipeNeed)}</p>
                 <p className="text-[9px] font-bold text-zinc-600 uppercase">with wastage</p>
               </div>
             </div>

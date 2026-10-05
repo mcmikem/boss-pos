@@ -694,7 +694,9 @@ export default function CategoryRegister({
     }
     // Same rule: a refused payment keeps the amount on screen.
     if (saved === false) return;
-    triggerToast(`Payment recorded: ${fmt(amt)}`, 'success');
+    // The handler already toasted, and only it can say "recorded" versus
+    // "saved on this phone — it will sync". Toasting again here is what told
+    // the cashier a queued collection had reached the server.
     setPayId(null); setPayAmount('');
   };
 

@@ -196,28 +196,28 @@ export default function EateryPricing({ products, onUpdateProduct, formatCurrenc
             <BeginnerTip tipKey="ingredient-cost" text="Ingredient cost = what you spend to make one piece. Sell above it to keep money." />
 
             <div className="space-y-2">
-              <div className="grid grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem] gap-1.5 text-[10px] text-zinc-500 font-bold uppercase">
-                <span>Ingredient</span><span>Qty</span><span>Unit</span><span>Cost/Unit</span><span>Waste %</span><span></span>
+              <div className="grid grid-cols-[1fr_1fr_1fr_1fr_2rem] gap-1.5 text-[9px] sm:text-[10px] text-zinc-500 font-bold uppercase sm:grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem]">
+                <span className="col-span-5 sm:col-span-1">Ingredient</span><span>Qty</span><span>Unit</span><span>Cost/Unit</span><span>Waste %</span><span></span>
               </div>
               {recipe?.ingredients.map(ing => (
-                <div key={ing.id} className="grid grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem] gap-1.5 items-center">
+                <div key={ing.id} className="grid grid-cols-[1fr_1fr_1fr_1fr_2rem] gap-1.5 items-center sm:grid-cols-[1fr_3.5rem_4rem_4.5rem_3.5rem_1.5rem]">
                   <input value={ing.name} placeholder="e.g. Chicken breast"
                     onChange={(e) => updateIng(ing.id, { name: e.target.value })}
-                    className="min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none" />
+                    className="min-w-0 col-span-5 sm:col-span-1 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none" />
                   <input type="number" min="0" step="any" value={ing.qty || ''}
                     onChange={(e) => updateIng(ing.id, { qty: parseFloat(e.target.value) || 0 })}
-                    className="bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+                    className="min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
                   <select value={ing.unit}
                     onChange={(e) => updateIng(ing.id, { unit: e.target.value })}
-                    className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg h-9 px-1 text-xs focus:border-gold-brand focus:outline-none">
+                    className="min-w-0 bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg h-9 px-1 text-xs focus:border-gold-brand focus:outline-none">
                     {RECIPE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                   <input type="number" min="0" step="any" value={ing.unitCost || ''}
                     onChange={(e) => updateIng(ing.id, { unitCost: parseFloat(e.target.value) || 0 })}
-                    className="bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+                    className="min-w-0 bg-zinc-950 border border-zinc-800 text-gold-light rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
                   <input type="number" min="0" max="99" value={ing.wastePct || ''}
                     onChange={(e) => updateIng(ing.id, { wastePct: Math.min(99, Math.max(0, parseFloat(e.target.value) || 0)) })}
-                    className="bg-zinc-950 border border-zinc-800 text-amber-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
+                    className="min-w-0 bg-zinc-950 border border-zinc-800 text-amber-400 rounded-lg h-9 px-2 text-xs focus:border-gold-brand focus:outline-none text-right" />
                   <button onClick={() => removeIng(ing.id)} className="text-rose-400 hover:text-rose-300 p-1.5"><X className="w-4 h-4" /></button>
                 </div>
               ))}

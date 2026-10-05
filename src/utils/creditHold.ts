@@ -14,10 +14,12 @@ export interface PendingCreditWrites {
   payAmounts: Map<string, number>;
   /** `/api/credit-payments` rows reconstructed from the queue, not on the server yet. */
   payments: CreditPayment[];
+  /** `/api/credit-eats` rows this phone owes the book but has never sent. */
+  creates: CreditEat[];
 }
 
 export function emptyPendingCreditWrites(): PendingCreditWrites {
-  return { payAmounts: new Map(), payments: [] };
+  return { payAmounts: new Map(), payments: [], creates: [] };
 }
 
 /**
@@ -33,8 +35,10 @@ export function holdPendingCreditEats(
   pending: PendingCreditWrites,
 ): CreditEat[] {
   const rows = Array.isArray(server) ? server : [];
-  if (!pending.payAmounts.size) return rows;
-  return rows.map((row) => {
+  // Nothing queued: the server's list is the truth, array and all — returning
+  // a copy here would break the call sites that compare by identity.
+  if (!pending.payAmounts.size && !pending.creates.length) return rows;
+  const held = rows.map((row) => {
     const queued = pending.payAmounts.get(row.id);
     if (!queued) return row;
     const total = Number(row.total) || 0;
@@ -45,6 +49,14 @@ export function holdPendingCreditEats(
       paid: Boolean(row.paid) || (total > 0 && paidAmount >= total),
     };
   });
+  if (!pending.creates.length) return held;
+  // A debt written offline exists only in this phone's queue, so a refresh
+  // that simply has not seen it yet would erase money the shop is owed. Put
+  // it back until the queue has delivered or been refused — same rule as the
+  // collections above.
+  const have = new Set(held.map((row) => row.id));
+  const missing = pending.creates.filter((row) => !have.has(row.id));
+  return missing.length ? [...missing, ...held] : held;
 }
 
 /**
@@ -80,10 +92,11 @@ export interface CreditWriteEntry {
  * lie on screen, so both are dropped here rather than at the call site.
  */
 export function collectPendingCreditWrites(entries: CreditWriteEntry[]): PendingCreditWrites {
-  const pending: PendingCreditWrites = { payAmounts: new Map(), payments: [] };
+  const pending: PendingCreditWrites = { payAmounts: new Map(), payments: [], creates: [] };
   for (const entry of entries) {
     if (entry.status === 'synced' || entry.status === 'failed') continue;
     const path = entry.path || '';
+    const method = String(entry.method || 'POST').toUpperCase();
     let body: Record<string, unknown> | null = null;
     try { body = entry.body ? JSON.parse(entry.body) : null; } catch { continue; }
     if (!body) continue;
@@ -95,7 +108,19 @@ export function collectPendingCreditWrites(entries: CreditWriteEntry[]): Pending
       }
       continue;
     }
-    if (path === '/api/credit-payments' && String(entry.method || 'POST').toUpperCase() === 'POST' && typeof body.id === 'string' && body.id) {
+    if (path === '/api/credit-eats' && method === 'POST') {
+      if (typeof body.id === 'string' && body.id) {
+        pending.creates.push({
+          ...body,
+          id: body.id,
+          total: Number(body.total) || 0,
+          paidAmount: Number(body.paidAmount) || 0,
+          paid: Boolean(body.paid),
+        } as unknown as CreditEat);
+      }
+      continue;
+    }
+    if (path === '/api/credit-payments' && method === 'POST' && typeof body.id === 'string' && body.id) {
       pending.payments.push({
         id: body.id,
         saleId: String(body.saleId || ''),
