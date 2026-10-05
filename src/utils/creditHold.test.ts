@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { CreditEat, CreditPayment } from '../types';
 import {
+  collectPendingCreditWrites,
   emptyPendingCreditWrites,
   holdPendingCreditEats,
   holdPendingCreditPayments,
@@ -106,5 +107,70 @@ describe('holdPendingCreditPayments', () => {
     const rows = holdPendingCreditPayments([payment('cp-1')], pending);
 
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('collectPendingCreditWrites', () => {
+  const entry = (over: Record<string, unknown> = {}) => ({
+    path: '/api/credit-eats/ce-1/pay',
+    method: 'POST',
+    body: JSON.stringify({ amount: 1000 }),
+    status: 'queued',
+    ...over,
+  });
+
+  it('collects a queued collection with the amount still owed', () => {
+    const pending = collectPendingCreditWrites([entry()]);
+    expect(pending.payAmounts.get('ce-1')).toBe(1000);
+  });
+
+  it('sums two queued collections on the same line', () => {
+    const pending = collectPendingCreditWrites([
+      entry({ body: JSON.stringify({ amount: 400 }) }),
+      entry({ body: JSON.stringify({ amount: 600 }) }),
+    ]);
+    expect(pending.payAmounts.get('ce-1')).toBe(1000);
+  });
+
+  it('ignores entries the server has already answered', () => {
+    for (const status of ['synced', 'failed']) {
+      const pending = collectPendingCreditWrites([entry({ status })]);
+      expect(pending.payAmounts.size).toBe(0);
+    }
+  });
+
+  it('keeps collecting while an entry is in flight or blocked on auth', () => {
+    for (const status of ['sending', 'retrying', 'blocked_auth']) {
+      const pending = collectPendingCreditWrites([entry({ status })]);
+      expect(pending.payAmounts.get('ce-1')).toBe(1000);
+    }
+  });
+
+  it('drops a body it cannot parse and an amount that is not money', () => {
+    const pending = collectPendingCreditWrites([
+      entry({ body: 'not json' }),
+      entry({ body: JSON.stringify({ amount: -5 }) }),
+      entry({ body: JSON.stringify({}) }),
+    ]);
+    expect(pending.payAmounts.size).toBe(0);
+  });
+
+  it('reconstructs a queued sale payment, and only for a POST create', () => {
+    const create = collectPendingCreditWrites([{
+      path: '/api/credit-payments',
+      method: 'POST',
+      body: JSON.stringify({ id: 'cp-1', saleId: 's-1', amount: 2500, createdAt: '2026-10-05T09:00:00.000Z' }),
+      status: 'queued',
+    }]);
+    expect(create.payments).toHaveLength(1);
+    expect(create.payments[0]).toMatchObject({ id: 'cp-1', saleId: 's-1', amount: 2500 });
+
+    const remove = collectPendingCreditWrites([{
+      path: '/api/credit-payments/cp-1',
+      method: 'DELETE',
+      body: '',
+      status: 'queued',
+    }]);
+    expect(remove.payments).toHaveLength(0);
   });
 });

@@ -62,3 +62,47 @@ export function holdPendingCreditPayments(
   const missing = pending.payments.filter((p) => !have.has(p.id));
   return missing.length ? [...missing, ...rows] : rows;
 }
+
+/** The slice of an outbox entry the credit hold cares about. */
+export interface CreditWriteEntry {
+  path: string;
+  method: string;
+  body: string;
+  status: string;
+}
+
+/**
+ * Pulls the credit writes still owed to the server out of the queue.
+ *
+ * Reads the queue as it is: a finished entry is the server's problem now —
+ * 'synced' means the answer is already in the next list read, and 'failed'
+ * means it was refused and the sync review has it. Holding either would keep a
+ * lie on screen, so both are dropped here rather than at the call site.
+ */
+export function collectPendingCreditWrites(entries: CreditWriteEntry[]): PendingCreditWrites {
+  const pending: PendingCreditWrites = { payAmounts: new Map(), payments: [] };
+  for (const entry of entries) {
+    if (entry.status === 'synced' || entry.status === 'failed') continue;
+    const path = entry.path || '';
+    let body: Record<string, unknown> | null = null;
+    try { body = entry.body ? JSON.parse(entry.body) : null; } catch { continue; }
+    if (!body) continue;
+    const pay = /^\/api\/credit-eats\/([^/]+)\/pay$/.exec(path);
+    if (pay) {
+      const amount = Number(body.amount);
+      if (Number.isFinite(amount) && amount > 0) {
+        pending.payAmounts.set(decodeURIComponent(pay[1]), (pending.payAmounts.get(decodeURIComponent(pay[1])) || 0) + amount);
+      }
+      continue;
+    }
+    if (path === '/api/credit-payments' && String(entry.method || 'POST').toUpperCase() === 'POST' && typeof body.id === 'string' && body.id) {
+      pending.payments.push({
+        id: body.id,
+        saleId: String(body.saleId || ''),
+        amount: Number(body.amount) || 0,
+        createdAt: String(body.createdAt || ''),
+      });
+    }
+  }
+  return pending;
+}
