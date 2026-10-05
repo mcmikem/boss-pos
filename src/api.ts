@@ -20,6 +20,7 @@ export const productionPlanApi = {
   remove: (id: string) => api<{ success: boolean }>(`/api/production-plans/${id}`, { method: 'DELETE' }),
 };
 import type { CustomerProfile } from './utils/customers';
+import type { PendingCreditWrites } from './utils/creditHold';
 import { stashSyncReview } from './utils/syncReview';
 
 // Expense rows may carry `items` as a JSON string (server TEXT column) or as
@@ -577,6 +578,48 @@ export const getOutboxCountsAsync = outboxCountsAsync;
 
 export function peekOutbox(): OutboxEntry[] {
   return getOutbox();
+}
+
+/**
+ * Credit writes this phone has promised but the server has not confirmed.
+ *
+ * Read straight from the same localStorage mirror the queue writes to, so it
+ * is synchronous and can never lag behind a collection that was just queued —
+ * a refresh racing that payment is exactly how a paid line came back in the
+ * book while the cashier was still looking at the receipt.
+ */
+export function pendingCreditWrites(): PendingCreditWrites {
+  const pending: PendingCreditWrites = { payAmounts: new Map(), payments: [] };
+  let entries: OutboxEntry[];
+  try { entries = peekOutbox(); } catch { return pending; }
+  for (const entry of entries) {
+    // A finished entry is the server's problem now: 'synced' means the answer
+    // is already in the next list read, 'failed' means it was refused and the
+    // sync review has it. Holding either would keep a lie on screen.
+    if (entry.status === 'synced' || entry.status === 'failed') continue;
+    const path = entry.path || '';
+    let body: Record<string, unknown> | null = null;
+    try { body = entry.body ? JSON.parse(entry.body) : null; } catch { continue; }
+    if (!body) continue;
+    const pay = /^\/api\/credit-eats\/([^/]+)\/pay$/.exec(path);
+    if (pay) {
+      const amount = Number(body.amount);
+      if (Number.isFinite(amount) && amount > 0) {
+        const id = decodeURIComponent(pay[1]);
+        pending.payAmounts.set(id, (pending.payAmounts.get(id) || 0) + amount);
+      }
+      continue;
+    }
+    if (path === '/api/credit-payments' && String(entry.method || 'POST').toUpperCase() === 'POST' && typeof body.id === 'string' && body.id) {
+      pending.payments.push({
+        id: body.id,
+        saleId: String(body.saleId || ''),
+        amount: Number(body.amount) || 0,
+        createdAt: String(body.createdAt || new Date().toISOString()),
+      });
+    }
+  }
+  return pending;
 }
 
 export async function peekOutboxAsync(): Promise<OutboxEntry[]> {

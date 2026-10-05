@@ -27,9 +27,10 @@ interface ShopTradesProps {
 export default function ShopTrades({ settings, availableDepartments, onSave, onDismiss, compact }: ShopTradesProps) {
   const saved = settings?.trades;
   const answered = Array.isArray(saved) && saved.length > 0;
-  if (answered && !compact) return null;
-
+  // State first, return second — a hook below the return changes the hook
+  // count the moment settings load, and React drops the card instead.
   const [picked, setPicked] = useState<string[]>(Array.isArray(saved) ? saved : []);
+  if (answered && !compact) return null;
 
   const toggle = (key: string) => setPicked(prev => (
     prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]

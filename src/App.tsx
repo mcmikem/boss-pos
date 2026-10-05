@@ -7,7 +7,7 @@ import {
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig, SaleSaveResult } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked,   handoverApi, closeSummaryApi, productionPlanApi, uploadImage, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked, pendingCreditWrites,   handoverApi, closeSummaryApi, productionPlanApi, uploadImage, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { checkoutDraftScopeKey, readCheckoutDraftSync, loadActiveCheckoutDraft, saveActiveCheckoutDraft, clearActiveCheckoutDraft, type CheckoutDraftScope } from './utils/checkoutDraft';
@@ -20,6 +20,7 @@ import { recordLock, readLockLog, clearLockLog, isRapidRelock, type LockEvent } 
 import { FEATURES, isOn, type FeatureKey } from './utils/features';
 import { downloadBlob } from './utils/download';
 import { computeKeptItems, scaleKept } from './utils/returns';
+import { holdPendingCreditEats, holdPendingCreditPayments } from './utils/creditHold';
 import type { CustomerProfile } from './utils/customers';
 import { loadCustomers } from './utils/customers';
 import { isPastClose, middayStamp, todayLocalKey } from './utils/dates';
@@ -798,8 +799,11 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     } catch {
       setExpenses(normalizeExpenses(d.expenses || []));
     }
-    setCreditPayments(d.creditPayments);
-    setCreditEats(d.creditEats);
+    // Queued collections are already announced on this phone; without the hold
+    // a boot would print those lines back into the book as unpaid.
+    const queuedCredit = pendingCreditWrites();
+    setCreditPayments(holdPendingCreditPayments(d.creditPayments, queuedCredit));
+    setCreditEats(holdPendingCreditEats(d.creditEats, queuedCredit));
     setCustomers(d.customers || []);
     setProductionRegisters(d.productionRegisters);
     setWastageLogs(d.wastageLogs);
@@ -894,8 +898,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
           setExpenses(list.filter(e => !tomb.has(e.id)));
         } catch { setExpenses(list); }
       }).catch(fail('expenses')),
-      creditPaymentApi.list().then(setCreditPayments).catch(fail('credit')),
-      creditEatApi.list().then(setCreditEats).catch(fail('credit eats')),
+      creditPaymentApi.list().then(list => setCreditPayments(holdPendingCreditPayments(list, pendingCreditWrites()))).catch(fail('credit')),
+      creditEatApi.list().then(list => setCreditEats(holdPendingCreditEats(list, pendingCreditWrites()))).catch(fail('credit eats')),
       customerApi.list().then(setCustomers).catch(fail('customers')),
       productionRegisterApi.list().then(setProductionRegisters).catch(fail('production')),
       wastageLogApi.list().then(setWastageLogs).catch(fail('wastage')),

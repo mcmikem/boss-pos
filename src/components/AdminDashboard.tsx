@@ -815,11 +815,16 @@ function MarketerPortal({ code }: { code: string }) {
   );
 }
 
+// The hash check lives in a wrapper with NO hooks of its own. Returning before
+// any hook meant the hook count changed the moment the hash did — React #310.
 export const AdminDashboard: React.FC = () => {
   const hash = typeof window !== 'undefined' ? window.location.hash : '';
   const portalMatch = hash.match(/^#marketer-([A-Za-z0-9-]+)/i);
   if (portalMatch) return <MarketerPortal code={portalMatch[1].toUpperCase()} />;
+  return <AdminConsole />;
+};
 
+const AdminConsole: React.FC = () => {
   const isLocalDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   const [token, setToken] = useState(() => {
     try { return localStorage.getItem('boss_admin_token') || (isLocalDevelopment ? 'local-dev-admin' : ''); }

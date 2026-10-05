@@ -30,6 +30,10 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
   const [expenseDate, setExpenseDate] = useState(todayLocalKey());
   const [expenseSource, setExpenseSource] = useState<Expense['source']>('drawer');
   const [dishIngs, setDishIngs] = useState<{ id: string; name: string; recipeQty: number; unit: string; bought: string; price: string }[]>([]);
+  // Declared with the rest, ABOVE the `if (!isOpen) return null` below: a hook
+  // after that return made the hook count change when the modal opened, and
+  // React threw #310 instead of opening the form.
+  const [saving, setSaving] = useState(false);
 
   // Tabs = General (default) + every department the shop actually has products
   // for, so a cost gets mapped straight to that department's category.
@@ -123,7 +127,6 @@ export default function QuickExpenseModal({ isOpen, onClose, onAddExpense, produ
     setExpenseSource('drawer');
   };
 
-  const [saving, setSaving] = useState(false);
   const handleSubmit = async () => {
     // An eager second tap must not log the same expense twice.
     if (saving) return;

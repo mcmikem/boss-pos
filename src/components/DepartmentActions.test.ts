@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildActionCards, type ActionInputs } from './DepartmentActions';
 import { getDepartment } from './departmentRegistry';
+import { prevDayKey } from '../utils/cashflow';
+import { todayLocalKey } from '../utils/dates';
 
 const fmt = (n: number) => String(n);
 function product(over: Record<string, unknown> = {}) {
@@ -54,7 +56,9 @@ describe('the "Do this now" strip', () => {
   });
 
   it('offers the tray carry to a kitchen, not to a shelf', () => {
-    const regs = [{ id: 'r1', date: '2026-09-25', item: 'Chapati', category: 'Eatery', qty: 14, costEach: 100, total: 1400 }] as any;
+    // Anchored to yesterday, never to a fixed calendar day: leftovers are only
+    // ever computed for the day before today, so a hard-coded date expires.
+    const regs = [{ id: 'r1', date: prevDayKey(todayLocalKey()), item: 'Chapati', category: 'Eatery', qty: 14, costEach: 100, total: 1400 }] as any;
     const kitchen = buildActionCards(base({ dept: getDepartment('Eatery'), productionRegisters: regs }));
     expect(kitchen.map((c) => c.id)).toContain('carry-tray');
     const shelf = buildActionCards(base({ dept: getDepartment('Electronics'), productionRegisters: regs }));
