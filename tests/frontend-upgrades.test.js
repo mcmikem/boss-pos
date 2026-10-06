@@ -2146,3 +2146,21 @@ test('one payment says it once, and only the handler that knows the answer says 
     assert.equal(/triggerToast\(`Payment recorded/.test(src), false, `${file} must not toast on top of the handler`);
   }
 });
+
+test('a bar chart cannot widen the layout viewport past the phone', () => {
+  // Measured on prod at 360px: on the Sales report screen innerWidth was 492
+  // while clientWidth stayed 360. Every bar column is a flex item with
+  // min-width:auto, so thirteen "17:00" labels add up to ~492px; Chrome then
+  // widens the LAYOUT viewport, every fixed element (bottom nav, dialogs)
+  // becomes 492px wide, and her right-hand nav buttons live 132px off-screen.
+  for (const file of ['src/components/Analytics.tsx', 'src/components/Dashboard.tsx']) {
+    const src = read(file);
+    assert.match(
+      src,
+      /min-w-0 flex-1 flex flex-col items-center h-full/,
+      `${file}: bar columns must be allowed to shrink below their label`,
+    );
+  }
+  // The Dashboard's hour label was the only one without a truncation fallback.
+  assert.match(read('src/components/Dashboard.tsx'), /truncate max-w-full">\{hourLabel/);
+});

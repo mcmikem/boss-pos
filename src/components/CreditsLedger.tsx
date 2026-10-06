@@ -208,7 +208,7 @@ export default function CreditsLedger({
             <div className="ml-2 flex flex-col gap-1 shrink-0">
             <button
               onClick={() => { setPaymentKey(record.key); setPaymentAmount(String(record.remaining)); }}
-              className="px-3 py-2 bg-green-600/20 text-green-400 border border-green-600/40 rounded-lg text-xs font-bold hover:bg-green-600/30 active:scale-95 transition-all whitespace-nowrap"
+              className="px-3 min-h-[44px] flex items-center justify-center bg-green-600/20 text-green-400 border border-green-600/40 rounded-lg text-xs font-bold hover:bg-green-600/30 active:scale-95 transition-all whitespace-nowrap"
             >
               Record Payment
             </button>
@@ -222,7 +222,7 @@ export default function CreditsLedger({
                 if (w) triggerToast('Pick the customer in WhatsApp to send', 'success');
                 else triggerToast('Could not open WhatsApp — copy manually', 'error');
               }}
-              className="px-3 py-1.5 bg-emerald-950/30 text-emerald-300 border border-emerald-800/40 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-emerald-950/50 active:scale-95 transition-all whitespace-nowrap"
+              className="px-3 min-h-[44px] flex items-center justify-center bg-emerald-950/30 text-emerald-300 border border-emerald-800/40 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-emerald-950/50 active:scale-95 transition-all whitespace-nowrap"
             >
               WhatsApp
             </button>

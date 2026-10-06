@@ -1099,7 +1099,7 @@ const colorsMap: { [key: string]: string } = {
                     const pct = dailyMax > 0 ? (Math.max(0, d.val) / dailyMax) * 100 : 0;
                     const isPeak = d.val === dailyMax;
                     return (
-                      <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative">
+                      <div key={idx} className="min-w-0 flex-1 flex flex-col items-center h-full justify-end group relative">
                         <div className="absolute -top-7 bg-[#141414] border border-white/5 text-xs text-gold-brand px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none font-bold whitespace-nowrap">
                           {d.label}: {formatCurrency(d.val)}
                         </div>

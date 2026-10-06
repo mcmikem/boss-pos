@@ -511,14 +511,14 @@ export default function Dashboard({
             const isPeak = pct > 75;
 
             return (
-              <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative">
+              <div key={idx} className="min-w-0 flex-1 flex flex-col items-center h-full justify-end group relative">
                 <div className="absolute -top-7 bg-[#141414] border border-white/5 text-xs text-gold-brand px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none font-bold whitespace-nowrap">
                   {formatCurrency(salesVal)}
                 </div>
                 <div className={`w-full rounded-t transition-all duration-500 ${
                   isPeak ? 'bg-gradient-to-t from-gold-medium to-gold-brand shadow-[0_-4px_10px_rgba(255,204,0,0.35)]' : 'bg-zinc-800 group-hover:bg-zinc-700'
                 }`} style={{ height: `${Math.max(pct, 5)}%` }}></div>
-                <span className="text-xs text-zinc-500 font-bold mt-2">{hourLabel === 12 ? '12:00' : `${hourLabel}:00`}</span>
+                <span className="text-xs text-zinc-500 font-bold mt-2 truncate max-w-full">{hourLabel === 12 ? '12:00' : `${hourLabel}:00`}</span>
               </div>
             );
           })}
