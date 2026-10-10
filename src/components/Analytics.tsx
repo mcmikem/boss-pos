@@ -201,6 +201,24 @@ export default function Analytics({
       isLiveSale(s) && timeRange.filter(s.timestamp) &&
       (branchFilter === 'All' || (s.branch || '') === branchFilter));
   }, [sales, timeRange, branchFilter]);
+  // Staff-level counts: what each window holds before you tap it.
+  // Branch-aware so the number never lies on a multi-branch till.
+  const windowCounts = useMemo(() => {
+    const inBranch = (s: { branch?: string }) => branchFilter === 'All' || (s.branch || '') === branchFilter;
+    const day = todayLocalKey();
+    const month = localMonthKey(new Date().toISOString());
+    const cutoffW = Date.now() - 7 * 86400000;
+    let daily = 0, weekly = 0, monthly = 0;
+    for (const s of sales) {
+      if (!isLiveSale(s) || !inBranch(s)) continue;
+      try {
+        if (localDayKey(s.timestamp) === day) daily += 1;
+        if (Date.parse(s.timestamp) >= cutoffW) weekly += 1;
+        if (localMonthKey(s.timestamp) === month) monthly += 1;
+      } catch { /* ignore bad row */ }
+    }
+    return { Daily: daily, Weekly: weekly, Monthly: monthly };
+  }, [sales, branchFilter]);
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => timeRange.filter(e.timestamp));
@@ -877,13 +895,15 @@ const colorsMap: { [key: string]: string } = {
               <button onClick={() => { try { localStorage.setItem('boss_reports_help_seen','1'); } catch {}; setShowHelp(false); }} className="text-zinc-500 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition-colors" aria-label="Dismiss help"><X className="w-4 h-4" /></button>
             </div>
           )}
-          <nav className="flex gap-2 pb-2 overflow-x-auto no-scrollbar">
-            {['Daily', 'Weekly', 'Monthly'].map(filter => (
+          <nav className="flex gap-2 pb-2 overflow-x-auto no-scrollbar" aria-label="Time window">
+            {(['Daily', 'Weekly', 'Monthly'] as const).map(filter => (
               <button key={filter} onClick={() => setTimeFilter(filter as any)}
-                className={`px-6 h-10 rounded-full font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                aria-label={`${filter}, ${windowCounts[filter]} sales`}
+                aria-pressed={timeFilter === filter}
+                className={`px-6 h-10 rounded-full font-bold text-xs uppercase tracking-wider transition-all cursor-pointer tabular-nums ${
                   timeFilter === filter ? 'bg-gold-brand text-black shadow-[0_4px_10px_rgba(255,204,0,0.2)] font-black' : 'border border-zinc-800 hover:border-zinc-700 text-zinc-500 hover:text-zinc-400'
                 }`}>
-                {filter}
+                {filter} • {windowCounts[filter]}
               </button>
             ))}
             {branchOptions.length > 0 && (
@@ -953,7 +973,7 @@ const colorsMap: { [key: string]: string } = {
               <MoneyHero
                 label={LABELS.moneyIn}
                 value={formatCurrency(displayIncome)}
-                sub={`Sales${displayDesignRevenue > 0 ? ` • includes design ${formatCurrency(displayDesignRevenue)}` : ''}`}
+                sub={`${filteredSales.length} sale${filteredSales.length === 1 ? '' : 's'}${filteredSales.length > 0 ? ` • avg ${formatCurrency(Math.round(revenue / filteredSales.length))}` : ''}${displayDesignRevenue > 0 ? ` • includes design ${formatCurrency(displayDesignRevenue)}` : ''}`}
                 tone="white"
                 title={formatCurrency(displayIncome)}
               />

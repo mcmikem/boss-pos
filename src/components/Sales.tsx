@@ -795,6 +795,18 @@ export default function Sales({
     .filter(p => !inStockOnly || p.isService || p.stockQty > 0)
     .sort((a, b) => (salesRank.qty.get(b.id) || 0) - (salesRank.qty.get(a.id) || 0)),
     [catalog, selectedCategory, inStockOnly, salesRank]);
+  // Staff-level counts: what choosing a chip costs before you tap it.
+  // Same inStockOnly rule as the grid, so the number never lies.
+  const categoryCounts = useMemo(() => {
+    const byCat = new Map<string, number>();
+    let total = 0;
+    for (const p of catalog) {
+      if (inStockOnly && !p.isService && p.stockQty <= 0) continue;
+      total += 1;
+      byCat.set(p.category, (byCat.get(p.category) || 0) + 1);
+    }
+    return { total, byCat };
+  }, [catalog, inStockOnly]);
   // Forgiving search (#9): typo-tolerant (threshold 0.5, location-free) so
   // "chaptai", "ROLAX" or extra spaces still find chapati / rolex.
   const fuse = useMemo(() => new Fuse(byCategory, {
@@ -1869,7 +1881,7 @@ export default function Sales({
             <input
               ref={searchRef}
               type="text"
-              placeholder={t(lang, 'searchItems')}
+              placeholder={t(lang, 'searchAll')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
                className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus-visible:outline-none h-12 lg:h-14 pl-10 pr-3 rounded-xl !text-base lg:!text-lg transition-all outline-none"
@@ -2098,19 +2110,23 @@ export default function Sales({
           <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 sm:hidden"></div>
           <section className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none">
             <button onClick={() => { setSelectedCategory('All'); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowProduction(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
+              aria-label={`All products, ${categoryCounts.total} items`}
               className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                 selectedCategory === 'All'
                   ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
                   : 'bg-[#141414]/50 border-white/5 hover:border-white/10 text-zinc-400 font-bold'
               }`}>
               <span className="text-sm uppercase tracking-wider font-black">{t(lang, 'all')}</span>
+              <span className={`text-[11px] font-black tabular-nums ${selectedCategory === 'All' ? 'text-black/70' : 'text-zinc-500'}`}>{categoryCounts.total}</span>
             </button>
               {sortedCategories.filter((cat) => liveDepartments.includes(cat)).map(cat => {
                 const isActive = selectedCategory === cat;
                 const catInfo = CATEGORY_VISUALS[cat] || DEFAULT_CATEGORY_VISUAL;
                 const CatIcon = catInfo.icon;
+                const count = categoryCounts.byCat.get(cat) || 0;
                 return (
                   <button key={cat} onClick={() => { setSelectedCategory(cat); setShowTailoringOrders(false); setShowDesignOrders(false); setShowEateryPricing(false); setShowProduction(false); setShowBookings(false); setShowRepairs(false); setShowQuotes(false); }}
+                    aria-label={`${cat}, ${count} items`}
                     className={`flex items-center gap-1.5 py-3 px-5 rounded-xl transition-all border whitespace-nowrap cursor-pointer active:scale-95 shrink-0 min-h-[48px] ${
                       isActive
                         ? 'bg-gold-brand border-gold-brand text-black shadow-[0_0_12px_rgba(255,204,0,0.25)] font-black'
@@ -2118,6 +2134,7 @@ export default function Sales({
                     }`}>
                     <CatIcon className="w-4 h-4 shrink-0" />
                     <span className="text-sm uppercase tracking-wider">{cat}</span>
+                    <span className={`text-[11px] font-black tabular-nums ${isActive ? 'text-black/70' : 'text-zinc-500'}`}>{count}</span>
                   </button>
                 );
               })}
@@ -2506,6 +2523,7 @@ export default function Sales({
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">
                 {selectedCategory === 'All' ? 'All Products' : selectedCategory}
+                <span className="ml-2 text-zinc-500 tabular-nums">• {filteredProducts.length} item{filteredProducts.length === 1 ? '' : 's'}{searchQuery.trim() ? ` for “${searchQuery.trim().slice(0, 20)}”` : ''}</span>
               </h2>
               {lastSaleItems && lastSaleItems.length > 0 && !simple && (
                 <button onClick={() => { setShowMoreActions(false); repeatLastSale(); }} data-testid="same-again"

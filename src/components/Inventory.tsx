@@ -238,6 +238,10 @@ export default function Inventory({
   const lowStockProducts = useMemo(() => {
     return products.filter(p => p.stockQty <= p.lowStockThreshold && !p.isService);
   }, [products]);
+  // Staff-level count: what the Expiring filter costs before you tap it.
+  const expiringCount = useMemo(() => {
+    return products.filter(p => !p.isService && p.expiryDate && expiryStatus(p.expiryDate) !== 'ok').length;
+  }, [products]);
 
   const supplierPriceSync = useMemo(() => applySupplierPricesToRecipes(products, supplierPrices), [products, supplierPrices]);
   const applySupplierPrices = async () => {
@@ -764,7 +768,8 @@ export default function Inventory({
       <>
       <section className="flex flex-col sm:flex-row gap-4 justify-between sm:items-center">
         <div className="relative flex-1">
-          <input type="text" placeholder="Search products..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+          <input type="text" placeholder="Search name, category, supplier, barcode…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search stock by name, category, supplier, or barcode"
             className="w-full bg-[#141414] border border-white/5 text-gold-light focus:border-gold-brand focus:ring-1 focus:ring-gold-brand h-12 pl-11 pr-4 rounded-2xl !text-base transition-all outline-none" />
           <Search className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
         </div>
@@ -787,16 +792,27 @@ export default function Inventory({
             title="Count the shelves and match system stock">
             <ListChecks className="w-4 h-4" /> Count
           </button>
-          <span className="text-xs font-bold text-zinc-500 uppercase">Sort</span>
-          <select value={sortBy} onChange={(e: any) => setSortBy(e.target.value)}
-            className="bg-[#141414] border border-white/5 text-gold-brand text-xs rounded-2xl px-3 h-12 outline-none focus:border-gold-brand font-bold">
-            <option value="stock">Low Stock First</option>
-            <option value="name">Name A-Z</option>
-            <option value="price">Price High-Low</option>
-          </select>
-          <button onClick={() => setExpiringOnly(v => !v)} aria-pressed={expiringOnly} title="Only items expiring within 30 days (or past)"
-            className={`h-12 px-4 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target ${expiringOnly ? 'bg-amber-950/40 border-amber-600/40 text-amber-300' : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
-            {expiringOnly ? '✓ Expiring' : 'Expiring'}
+          <div className="flex items-center gap-1.5" role="group" aria-label="Sort stock">
+            {([
+              { key: 'stock', label: 'Low first' },
+              { key: 'name', label: 'A–Z' },
+              { key: 'price', label: 'Price ↓' },
+            ] as const).map(o => (
+              <button key={o.key} onClick={() => setSortBy(o.key)}
+                aria-pressed={sortBy === o.key}
+                title={o.key === 'stock' ? 'Low stock first' : o.key === 'name' ? 'Name A to Z' : 'Price high to low'}
+                className={`h-12 px-3.5 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target ${
+                  sortBy === o.key
+                    ? 'bg-gold-brand border-gold-brand text-black'
+                    : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'
+                }`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setExpiringOnly(v => !v)} aria-pressed={expiringOnly} aria-label={`Show only expiring items, ${expiringCount} items`} title="Only items expiring within 30 days (or past)"
+            className={`h-12 px-4 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target tabular-nums ${expiringOnly ? 'bg-amber-950/40 border-amber-600/40 text-amber-300' : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+            {expiringOnly ? `✓ Expiring • ${expiringCount}` : `Expiring • ${expiringCount}`}
           </button>
         </div>
       </section>
@@ -885,7 +901,7 @@ export default function Inventory({
       <section className="space-y-3">
         <div className="flex justify-between items-center pb-2">
           <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-display">Product List</h2>
-          <span className="text-xs text-zinc-500 font-bold uppercase">{processedProducts.length} items</span>
+          <span className="text-xs text-zinc-500 font-bold uppercase tabular-nums">{processedProducts.length} of {products.length} items{searchQuery.trim() ? ` for “${searchQuery.trim().slice(0, 20)}”` : ''}{expiringOnly ? ' • expiring' : ''}</span>
         </div>
 
         <div className="space-y-2">
