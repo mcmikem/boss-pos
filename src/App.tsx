@@ -3305,9 +3305,17 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const handleDeleteMomoTransfer = async (id: string): Promise<boolean> => {
     const prev = momoTransfers.find(t => t.id === id);
     setMomoTransfers(prev => prev.filter(t => t.id !== id));
-    try { await momoTransferApi.remove(id); return true; } catch {
+    try { await momoTransferApi.remove(id); return true; } catch (err) {
       if (prev) setMomoTransfers(list => [prev, ...list]);
-      triggerToast('Failed to delete transfer', 'error');
+      const code = (err as { code?: string })?.code;
+      if (code === 'MANAGER_REQUIRED') {
+        triggerToast('Only a manager can delete a money move — sign in with a manager PIN', 'error', {
+          label: 'Sign in',
+          onClick: () => { setStaffVerifyError(null); setShowStaffSwitcher(true); },
+        });
+      } else {
+        triggerToast('Failed to delete transfer', 'error');
+      }
       return false;
     }
   };

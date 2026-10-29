@@ -1836,14 +1836,21 @@ export default function CategoryRegister({
                       </div>
                       <button
                         onClick={async () => {
-                          if (moneyOutDelete.armedId !== t.id) { moneyOutDelete.arm(t.id); return; }
+                          if (moneyOutDelete.armedId !== t.id) {
+                            moneyOutDelete.arm(t.id);
+                            triggerToast('Tap delete again within 4 seconds to confirm', 'info');
+                            return;
+                          }
                           moneyOutDelete.disarm();
                           if ((await onDeleteMomoTransfer(t.id)) === false) return;
                           triggerToast('Entry deleted', 'info');
                         }}
                         aria-label={moneyOutDelete.armedId === t.id ? `Tap again to delete ${fmt(t.amount)}` : `Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
-                        className={`p-2 rounded-lg cursor-pointer shrink-0 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
-                        <Trash2 className="w-3.5 h-3.5" />
+                        title={moneyOutDelete.armedId === t.id ? 'Tap again within 4 seconds to confirm' : 'Delete move'}
+                        className={`p-2 rounded-lg cursor-pointer shrink-0 flex items-center gap-1.5 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
+                        {moneyOutDelete.armedId === t.id
+                          ? <><Check className="w-3.5 h-3.5" /><span className="text-[9px] font-black uppercase">Tap again</span></>
+                          : <Trash2 className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   );
@@ -1872,14 +1879,21 @@ export default function CategoryRegister({
                         </div>
                         <button
                           onClick={async () => {
-                            if (moneyOutDelete.armedId !== t.id) { moneyOutDelete.arm(t.id); return; }
+                            if (moneyOutDelete.armedId !== t.id) {
+                              moneyOutDelete.arm(t.id);
+                              triggerToast('Tap delete again within 4 seconds to confirm', 'info');
+                              return;
+                            }
                             moneyOutDelete.disarm();
                             if ((await onDeleteMomoTransfer(t.id)) === false) return;
                             triggerToast('Entry deleted', 'info');
                           }}
                           aria-label={moneyOutDelete.armedId === t.id ? `Tap again to delete ${fmt(t.amount)}` : `Delete ${fmt(t.amount)} ${d?.label || 'move'}`}
-                          className={`p-2 rounded-lg cursor-pointer shrink-0 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
+                          title={moneyOutDelete.armedId === t.id ? 'Tap again within 4 seconds to confirm' : 'Delete move'}
+                          className={`p-2 rounded-lg cursor-pointer shrink-0 flex items-center gap-1.5 ${moneyOutDelete.armedId === t.id ? 'bg-rose-950/50 text-rose-300' : 'text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30'}`}>
+                          {moneyOutDelete.armedId === t.id
+                            ? <><Check className="w-3.5 h-3.5" /><span className="text-[9px] font-black uppercase">Tap again</span></>
+                            : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     );
