@@ -128,10 +128,19 @@ It fails (exit 1) on an unsupported `formatVersion`, a payload/table checksum mi
 ### Fleet mode (selling to other shops)
 The repo productizes cleanly — see `scripts/`:
 
-- `scripts/provision-shop.mjs` — creates an isolated shop: fresh Neon database (or `--database-url`), own `AUTH_SECRET`/`CRON_SECRET`, own Vercel project (`imac-pos-<slug>`), build-time `VITE_APP_NAME` brand, blank catalog unless `--seed-catalog`. Records the shop + secrets in `fleet/registry.json` (git-ignored).
-- `scripts/init-db.mjs` — boot a shop's database against the app's idempotent migrations/`ensureDefaultSettings`.
+- `scripts/provision-shop.mjs` — creates an isolated shop: fresh Neon database (or `--database-url`), own `AUTH_SECRET`/`CRON_SECRET`, own Vercel project (`imac-pos-<slug>`), build-time `VITE_APP_NAME` brand, blank catalog unless `--seed-catalog`. Records the shop + secrets in `fleet/registry.json` (git-ignored).- `scripts/init-db.mjs` — boot a shop's database against the app's idempotent migrations/`ensureDefaultSettings`.
 - `scripts/pull-backups.mjs` — weekly off-site pull of every shop's full snapshot via `GET /api/cron/export` (guarded by that shop's `CRON_SECRET`; no till PIN needed). Every payload is verified (format version, shop identity, per-table row counts and checksums, no leaked credentials) before it is written; a shop that fails verification is reported and the script exits nonzero.
 - `scripts/restore-drill.mjs` — verify a backup file (or a live pull / restore preflight) and print a machine-readable report; nonzero exit on any mismatch. See the restore drill section above.
+
+### Billing subscriptions (Mobile Money / manual)
+There is no card gateway: a shop pays by transfer, and a human confirms the money before anything activates. The flow is claim → approve:
+
+1. Set the pay-in details on each shop deployment's env — `BILLING_MOMO_NUMBER` (e.g. `07XXXXXXXX`), `BILLING_MOMO_NAME`, `BILLING_BANK_DETAILS`, and optionally `BILLING_NOTES`. They surface in the shop's Settings → Subscription so the owner knows where to pay.
+2. The shop's manager opens Settings → Subscription, files a payment claim (amount, Mobile Money / bank / cash, plus the MoMo transaction ID or slip reference). `POST /api/billing/claims` is manager-only and audited; filing a claim itself changes nothing.
+3. The operator opens that shop's URL `+#admin`, the **Billing** tab, and approves or rejects each claim after confirming the money arrived. Approving records the payment through the same `recordShopPayment` path the manual admin entry uses — so `payment_log` and the marketer's commission accrual stay in sync — and stamps the claim `approved` (who/when are kept in the claim row, never deleted). A decided claim cannot be approved twice.
+4. Plan changes (Starter/Growth/Scale) stay super-admin, per shop, from the same console. Plans are priced in UGX (`/api/plans`) with a USD reference.
+
+The shop's Settings → Subscription panel always shows the truth from `/api/billing/status`: pending claims read **waiting**, rejected ones **rejected**, approved ones **confirmed** — the shop can never mark itself paid.
 
 The /api/cron/backup and /api/cron/export endpoints self-guard with CRON_SECRET and are exempt from the till-token middleware (they run headless from cron/fleet tooling).
 

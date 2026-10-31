@@ -1027,8 +1027,8 @@ test('the app says where it is, and never shows two different numbers as one', (
   // of five screens had no name at all.
   assert.match(app, /const SCREEN_TITLES: Record<string, string>/);
   assert.match(app, /SCREEN_TITLES\[activeTab\]/);
-  // Eight settings doors in a 320px strip showed three of them.
-  assert.match(app, /grid grid-cols-4 sm:grid-cols-8 gap-1\.5/);
+  // Nine settings doors in a 320px strip show four of them; wide phones fit one row.
+  assert.match(app, /grid grid-cols-4 sm:grid-cols-9 gap-1\.5/);
   assert.equal(/overflow-x-auto scrollbar-none">\s*\{SETTINGS_SECTIONS/.test(app), false);
   // A toast inherited the REMAINING time of the one before it, so a confirmation
   // could be gone in under a second, and a background sync report could replace
@@ -1984,11 +1984,12 @@ test('no data-changing route is reachable without the right role', () => {
   // Points fiscalisation at a provider URL, and that call carries the URA token.
   assert.match(server, /app\.put\('\/api\/efris\/config', requireManager/);
 
-  // Plan and shop name: the tenant came from a client header, so any shop could
-  // set its own plan to 'enterprise'.
+  // Plan and shop name can only be changed with a super-admin credential.
   assert.match(server, /app\.post\('\/api\/subscription', requireSuperAdmin/);
   assert.match(server, /app\.post\('\/api\/tenant', requireSuperAdmin/);
-  assert.equal(/req\.headers\['x-tenant-id'\][\s\S]{0,200}UPDATE (subscriptions|tenants)/.test(server), false);
+  assert.match(server, /const tenantId = process\.env\.APP_TENANT_ID \|\| 'imac-default';[\s\S]{0,220}SELECT id, name, plan, status, trial_ends_at, subscribed_at FROM tenants WHERE id = \$\{tenantId\}/);
+  assert.equal(server.includes("req.headers['x-tenant-id']"), false,
+    'tenant context must come from this deployment, never a client-controlled header');
 
   // Hard deletes of financial rows. A seller's OWN loss entry stays open, or
   // they can log a mistake and not fix it -- both directions are pinned.
@@ -2000,15 +2001,35 @@ test('no data-changing route is reachable without the right role', () => {
   assert.match(server, /app\.delete\('\/api\/production-register\/:id', asHandler/);
 });
 
+test('subscription billing is claim-then-approve, and one payment recorder feeds both paths', () => {
+  const server = read('api/index.js');
+
+  // The shop files a payment claim from its own till, manager-only.
+  assert.match(server, /app\.get\('\/api\/billing\/status', requireManager/);
+  assert.match(server, /app\.post\('\/api\/billing\/claims', requireManager/);
+  // The operator side is super-admin only, including approve/reject — the shop
+  // can never confirm its own money.
+  assert.match(server, /app\.get\('\/api\/admin\/billing\/claims', requireSuperAdmin/);
+  assert.match(server, /app\.post\('\/api\/admin\/billing\/claims\/:id\/approve', requireSuperAdmin/);
+  assert.match(server, /app\.post\('\/api\/admin\/billing\/claims\/:id\/reject', requireSuperAdmin/);
+
+  // Manual admin entry and claim approval must share one recorder, so the
+  // referrer's commission is computed the same way both times and a claim can
+  // never be approved into a second, unrecorded payment path.
+  assert.equal((server.match(/async function recordShopPayment/g) || []).length, 1);
+  assert.match(server, /await recordShopPayment\(claim\.tenant_id, claim\.amount/);
+  // A decided claim cannot be re-approved into another payment.
+  assert.match(server, /if \(claim\.status !== 'pending'\) return res\.json\(\{ claim, alreadyDecided: true \}\);/);
+});
+
 test('the client cannot talk the server into anything', () => {
   const server = read('api/index.js');
 
-  // A request header was interpolated into SET app.tenant_id = '...' unquoted
-  // and unawaited, so one header both injected SQL and threw on failure.
-  assert.match(server, /const TENANT_ID_RE = \/\^\[a-z0-9\]\[a-z0-9-\]\{0,63\}\$\//);
-  // The value is still interpolated (a SET parameter cannot be bound), so the
-  // guard and the catch are the whole fix.
-  assert.match(server, /if \(tenantId && TENANT_ID_RE\.test\(tenantId\)\) \{\s*sql\.query\(`SET app\.tenant_id = '\$\{tenantId\}'`\)\.catch/);
+  // Fleet deployments bind tenant context to their own database and server
+  // configuration. A client header must neither select a tenant nor set SQL
+  // session context.
+  assert.equal(server.includes("req.headers['x-tenant-id']"), false);
+  assert.equal(server.includes('SET app.tenant_id'), false);
 
   // One shop's onboarding used to overwrite this process-wide, so a warm lambda
   // answered every later request as that shop.

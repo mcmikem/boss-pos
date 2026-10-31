@@ -7,7 +7,7 @@ import {
 import type { ComponentType } from 'react';
 import { Store, Users, Database, ChevronDown } from 'lucide-react';
 import { Product, Sale, Expense, Supplier, SupplierPrice, StaffMember, SaleItem, AppTheme, StoreSettings, CreditPayment, CreditEat, ProductionRegister, WastageLog, MomoTransfer, EfrisConfig, SaleSaveResult } from './types';
-import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked, pendingCreditWrites,   handoverApi, closeSummaryApi, productionPlanApi, uploadImage, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight } from './api';
+import { productApi, supplierApi, supplierPriceApi, staffApi, saleApi, expenseApi, settingsApi, sheetsApi, efrisApi, creditPaymentApi, creditEatApi, customerApi, productionRegisterApi, wastageLogApi, momoTransferApi,   authVerify, authStatus, authSetPin, authMigratePin, flushOutbox, flushOutboxDetailed, outboxCountAsync, outboxCountsAsync, listOutboxItemsAsync, clearOutboxAsync, dismissOutboxEntryAsync, retryOutboxEntry, exportApi, restoreApi, getAuthToken, readCached, bootApi, primeCache, revokeAllSessions, emitAuthRevoked, backupsApi, auditApi, reconcileApi, supportApi, closeSessionApi, markUnlocked, pendingCreditWrites,   handoverApi, closeSummaryApi, productionPlanApi, uploadImage, normalizeExpenses, ApiError, setStaffToken, backupRowTotal, backupTableRows, billingApi, type BootData, type HandoverSummary, type CloseSummary, type AuditEntry, type OutboxEntry, type OutboxCounts, type OutboxFlushReport, type ReadyReport, type RestorePreflight, type BillingStatus } from './api';
 import { enrichProductsWithIcons } from './data/icons';
 import { saveProducts, loadProducts, clearProductsCache } from './utils/cache';
 import { checkoutDraftScopeKey, readCheckoutDraftSync, loadActiveCheckoutDraft, saveActiveCheckoutDraft, clearActiveCheckoutDraft, type CheckoutDraftScope } from './utils/checkoutDraft';
@@ -301,6 +301,7 @@ const SETTINGS_SECTIONS = [
   { key: 'security', label: 'PINs' },
   { key: 'look', label: 'Look' },
   { key: 'data', label: 'Data' },
+  { key: 'billing', label: 'Billing' },
 ] as const;
 
 // Setup quiz: "what do you sell?" One tap per trade pre-builds the
@@ -344,6 +345,135 @@ function SetupQuiz({ onApply }: {
         className="mt-3 w-full h-11 bg-gold-brand text-black rounded-xl text-xs font-black uppercase tracking-wider hover:opacity-90 active:scale-[0.99] transition-all cursor-pointer">
         {picked.length === 0 ? 'Skip for now' : `Set up (${picked.length})`}
       </button>
+    </div>
+  );
+}
+
+// Subscription billing panel (Settings → Subscription, manager only): shows
+// the shop's plan, how to pay, and the claims the shop has filed. Payment is
+// a transfer to the operator's MoMo/bank, then a claim with the reference —
+// the operator confirms the money from their console, so a plan is never
+// marked "paid" by the phone that filed it.
+const BILLING_PLAN_PRESETS: Array<{ amount: number; label: string }> = [
+  { amount: 80000, label: 'Starter' },
+  { amount: 180000, label: 'Growth' },
+  { amount: 360000, label: 'Scale' },
+];
+function BillingPanel({ formatCurrency, triggerToast }: {
+  formatCurrency: (v: number) => string;
+  triggerToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+}) {
+  const [status, setStatus] = useState<BillingStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState<'momo' | 'bank' | 'cash'>('momo');
+  const [reference, setReference] = useState('');
+  const [filing, setFiling] = useState(false);
+  const ugx = (v: number) => formatCurrency(v);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    billingApi.status()
+      .then(s => { if (alive) { setStatus(s); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const file = async () => {
+    const amt = Math.round(parseFloat(amount) || 0);
+    if (amt <= 0) { triggerToast('Enter the amount you paid', 'error'); return; }
+    if (method === 'momo' && !reference.trim()) { triggerToast('Add the MoMo transaction ID so the payment can be found', 'error'); return; }
+    // The claim is filed, not "paid": the operator confirms the money before
+    // anything activates, so this message must say what actually happened.
+    setFiling(true);
+    try {
+      await billingApi.claim({ amount: amt, method, reference: reference.trim(), note: undefined });
+      triggerToast('Claim sent — it shows as "waiting" until the payment is confirmed', 'success');
+      setAmount(''); setReference('');
+      const s = await billingApi.status();
+      setStatus(s);
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message.slice(0, 90) : 'Could not file the claim', 'error');
+    } finally {
+      setFiling(false);
+    }
+  };
+
+  if (loading) return <p className="text-[11px] text-zinc-500 font-bold uppercase">Reading subscription…</p>;
+  const tenant = status?.tenant || null;
+  const sub = status?.subscription || null;
+  const instructions = status?.instructions;
+  const claims = status?.claims || [];
+  const myMethodLabel = Object.entries(status?.methods || {}).find(([k]) => k === method)?.[1] || method;
+
+  return (
+    <div className="border-t border-white/5 pt-3 space-y-2" data-testid="billing-panel">
+      <div className="flex items-center justify-between text-[11px] font-bold">
+        <span className="text-zinc-400 uppercase tracking-wider">{tenant?.name || 'This shop'}</span>
+        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${sub?.current_period_end ? 'border border-amber-800/40 text-amber-300' : 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-300'}`}>
+          {sub ? `${sub.plan || tenant?.plan || 'basic'} · ${sub.status || 'active'}` : `${tenant?.plan || 'basic'} · ${tenant?.status || 'active'}`}
+        </span>
+      </div>
+
+      {(instructions?.momoNumber || instructions?.bank || instructions?.notes) && (
+        <div className="rounded-xl bg-[#0A0A0A] border border-white/5 p-3 space-y-1.5" data-testid="billing-instructions">
+          <p className="text-[10px] font-black text-gold-brand uppercase tracking-widest">How to pay</p>
+          {instructions.momoNumber && (
+            <p className="text-[11px] text-zinc-300 font-bold">Mobile money: {instructions.momoNumber}{instructions.momoName ? ` (${instructions.momoName})` : ''}</p>
+          )}
+          {instructions.bank && <p className="text-[11px] text-zinc-300 font-bold">Bank: {instructions.bank}</p>}
+          {instructions.notes && <p className="text-[10px] text-zinc-500">{instructions.notes}</p>}
+        </div>
+      )}
+
+      <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Paid? File the proof — the provider confirms it. Nothing activates by itself.</p>
+      <div className="grid grid-cols-3 gap-2">
+        {BILLING_PLAN_PRESETS.map(p => (
+          <button key={p.label} onClick={() => setAmount(String(p.amount))} aria-pressed={amount === String(p.amount)}
+            className={`h-10 rounded-xl border text-[10px] font-black uppercase tracking-wider cursor-pointer active:scale-95 transition-all ${amount === String(p.amount) ? 'bg-gold-brand border-gold-brand text-black' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}>
+            {p.label}<span className="block text-[8px] opacity-80 tabular-nums">{ugx(p.amount)}</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} placeholder="Amount (UGX)" inputMode="numeric"
+          aria-label="Amount paid"
+          className="h-11 bg-[#0A0A0A] border border-white/10 rounded-xl px-3 text-sm font-bold text-white outline-none focus:border-gold-brand tabular-nums" />
+        <select value={method} onChange={e => setMethod(e.target.value as 'momo' | 'bank' | 'cash')} aria-label="How you paid"
+          className="h-11 bg-[#0A0A0A] border border-white/10 rounded-xl px-2 text-xs font-bold text-white outline-none focus:border-gold-brand">
+          <option value="momo">Mobile Money</option>
+          <option value="bank">Bank transfer</option>
+          <option value="cash">Cash</option>
+        </select>
+      </div>
+      <input type="text" value={reference} onChange={e => setReference(e.target.value)} placeholder={method === 'momo' ? 'MoMo transaction ID (e.g. TP 2X9…)' : 'Reference (slip, deposit, receipt no.)'}
+        aria-label="Payment reference"
+        className="w-full h-11 bg-[#0A0A0A] border border-white/10 rounded-xl px-3 text-sm font-bold text-white outline-none focus:border-gold-brand" />
+      <button onClick={() => void file()} disabled={filing}
+        className="w-full h-11 bg-cyan-600 hover:bg-cyan-500 text-black font-black uppercase tracking-widest text-xs rounded-xl cursor-pointer active:scale-95 transition-all disabled:opacity-60"
+        aria-label={`File ${myMethodLabel} payment claim${amount ? ` of ${ugx(Math.round(parseFloat(amount) || 0))}` : ''}`}>
+        {filing ? 'Sending…' : 'Send payment claim'}
+      </button>
+
+      {claims.length > 0 && (
+        <div className="space-y-1.5 pt-1">
+          <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Your payment claims</p>
+          <div className="divide-y divide-white/5">
+            {claims.slice(0, 8).map(c => (
+              <div key={c.id} className="flex items-center gap-2 py-1.5 text-[10px] font-bold">
+                <span className={`shrink-0 px-1.5 py-0.5 rounded uppercase text-[8px] font-black ${c.status === 'approved' ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : c.status === 'rejected' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>
+                  {c.status === 'approved' ? 'confirmed' : c.status === 'rejected' ? 'rejected' : 'waiting'}
+                </span>
+                <span className="text-zinc-200 tabular-nums">{ugx(c.amount)}</span>
+                <span className="text-zinc-500 uppercase">{Object.entries(status?.methods || {}).find(([k]) => k === c.method)?.[1] || c.method}</span>
+                {c.reference && <span className="text-zinc-600 truncate min-w-0">{c.reference}</span>}
+                <span className="text-zinc-600 shrink-0 ml-auto">{c.created_at ? new Date(c.created_at).toLocaleDateString() : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -525,6 +655,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     { id: 'theme', door: 'look', label: 'Colours', text: 'light or dark on this phone', scope: 'phone' },
     { id: 'sheets', door: 'data', label: 'Google Sheet backup', text: 'a copy of every sale, every day', scope: 'shop' },
     { id: 'export', door: 'data', label: 'Export or back up', text: 'take the shop\'s data with you', scope: 'shop' },
+    { id: 'billing', door: 'billing', label: 'Subscription', text: 'your plan, how to pay, and the payment claims you filed', scope: 'shop' },
   ];
   const settingsResults = useMemo(() => {
     const q = settingsSearch.trim().toLowerCase();
@@ -4269,7 +4400,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   ))}
                 </div>
               ) : (
-              <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur grid grid-cols-4 sm:grid-cols-8 gap-1.5">
+              <div className="sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-[#141414]/95 backdrop-blur grid grid-cols-4 sm:grid-cols-9 gap-1.5">
                 {orderedSections.map(s => (
                   <button key={s.key} onClick={() => openSettingsSection(s.key)}
                     aria-current={settingsSection === s.key ? 'true' : undefined}
@@ -5281,6 +5412,12 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               </div>
               )}
               </SettingsSection>
+              {isManager && (
+              <SettingsSection id="set-billing" icon={ReceiptText} title="Subscription" hint="Plan, how to pay, payment claims"
+                open={settingsSection === 'billing'} onToggle={() => toggleSettingsSection('billing')}>
+                <BillingPanel formatCurrency={formatCurrency} triggerToast={triggerToast} />
+              </SettingsSection>
+              )}
               <SyncProductsButton triggerToast={triggerToast} onSynced={() => {
                 clearProductsCache();
                 const apiCacheKey = `boss_api_cache_/api/products`;

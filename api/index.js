@@ -756,6 +756,29 @@ async function initDB() {
     reference TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
   )`;
+  // --------------------------------------------
+  // Billing claims: a shop manager files "I paid by MoMo/bank/cash, here is
+  // the reference" and only a super admin can turn that claim into a recorded
+  // payment. This is the manual+rail payment path for Uganda: no card gateway
+  // needed, but no unverified self-serve payment either.
+  // --------------------------------------------
+  await sql`CREATE TABLE IF NOT EXISTS billing_claims (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(255) NOT NULL,
+    amount INTEGER NOT NULL,
+    method VARCHAR(32) NOT NULL DEFAULT 'momo',
+    reference VARCHAR(255) DEFAULT '',
+    note TEXT DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    created_by_id TEXT DEFAULT '',
+    created_by_name TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT NOW(),
+    decided_by TEXT DEFAULT '',
+    decided_at TIMESTAMP,
+    payment_log_id UUID
+  )`;
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_billing_claims_tenant ON billing_claims(tenant_id, created_at DESC)`; } catch {}
+  try { await sql`CREATE INDEX IF NOT EXISTS idx_billing_claims_status ON billing_claims(status, created_at DESC)`; } catch {}
   // Auto-backup bookkeeping (epoch ms; 0 = never).
   await sql`INSERT INTO settings (key, value) VALUES ('lastAutoBackupAt', '0') ON CONFLICT (key) DO NOTHING`;
 }
@@ -7211,7 +7234,9 @@ function mapMomoTransfer(r) {
 
 // GET /api/tenant - get current tenant info + subscription status
 app.get('/api/tenant', asHandler(async (req, res) => {
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
+  // Each shop deployment is bound to its own database. Never let a request
+  // header choose which tenant record the client can inspect.
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
   const tenant = await sql`SELECT id, name, plan, status, trial_ends_at, subscribed_at FROM tenants WHERE id = ${tenantId}`;
   const subscription = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
   res.json({ tenant: tenant[0] || null, subscription: subscription[0] || null });
@@ -7238,12 +7263,111 @@ app.post('/api/subscription', requireSuperAdmin, asHandler(async (req, res) => {
 
 // GET /api/plans - list available subscription plans
 app.get('/api/plans', asHandler(async (req, res) => {
+  // Ugandan shops pay in shillings; keep the USD price as the reference.
   const plans = [
-    { key: 'basic', name: 'Basic', price: 29, features: ['offline mode', 'basic reports', '1 till'] },
-    { key: 'pro', name: 'Pro', price: 79, features: ['offline mode', 'Google Sheets sync', 'multiple tills', 'priority support'] },
-    { key: 'enterprise', name: 'Enterprise', price: 199, features: ['unlimited tills', 'full API access', 'dedicated support', 'custom integrations'] }
+    { key: 'starter', name: 'Starter', price: 20, priceUgx: 80000, features: ['offline mode', '1 till', 'daily close + credit book'] },
+    { key: 'growth', name: 'Growth', price: 45, priceUgx: 180000, features: ['everything in Starter', 'up to 3 tills', 'recipes + production plans', 'priority support'] },
+    { key: 'scale', name: 'Scale', price: 90, priceUgx: 360000, features: ['unlimited tills', 'multi-branch', 'full API access', 'dedicated support'] }
   ];
   res.json({ plans });
+}));
+
+// --------------------------------------------
+// BILLING (shop-facing): a manager files a payment claim — "we paid this
+// amount by MoMo/bank/cash, reference …" — and the operator approves it from
+// the admin console. Nothing reports "active" that has not been approved here.
+// --------------------------------------------
+
+const CLAIM_METHODS = {
+  momo: 'Mobile Money (MTN/Airtel)',
+  bank: 'Bank transfer',
+  cash: 'Cash delivery',
+};
+
+// How the shop pays: transfer targets come from this deployment's env, so the
+// operator's MoMo/bank details are never hardcoded for every customer.
+function billingInstructions() {
+  const out = { momoNumber: '', momoName: '', bank: '', notes: '' };
+  try { out.momoNumber = String(process.env.BILLING_MOMO_NUMBER || '').slice(0, 32); } catch {}
+  try { out.momoName = String(process.env.BILLING_MOMO_NAME || '').slice(0, 80); } catch {}
+  try { out.bank = String(process.env.BILLING_BANK_DETAILS || '').slice(0, 200); } catch {}
+  try { out.notes = String(process.env.BILLING_NOTES || '').slice(0, 200); } catch {}
+  return out;
+}
+
+// GET /api/billing/status - manager sees this shop's plan, payment
+// instructions, and its own claims (pending first, then the last few decided).
+app.get('/api/billing/status', requireManager, asHandler(async (req, res) => {
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
+  const subscription = await sql`SELECT id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions WHERE tenant_id = ${tenantId}`;
+  const claims = await sql`SELECT id, amount, method, reference, note, status, created_at, decided_at, decided_by FROM billing_claims WHERE tenant_id = ${tenantId} ORDER BY created_at DESC LIMIT 20`;
+  res.json({
+    tenant: tenant[0] || null,
+    subscription: subscription[0] || null,
+    instructions: billingInstructions(),
+    methods: CLAIM_METHODS,
+    claims,
+  });
+}));
+
+// POST /api/billing/claims - the manager files a payment claim. Reference is
+// free text (the MoMo transaction id) and is stored verbatim; approval is a
+// separate human decision, so a false claim never activates a plan by itself.
+// Same shop may queue several claims; approval is what consumes one.
+app.post('/api/billing/claims', requireManager, asHandler(async (req, res) => {
+  const { amount, method, reference, note } = req.body || {};
+  const num = Math.round(Number(amount) || 0);
+  if (!(num > 0)) return res.status(400).json({ error: 'Enter the amount you paid', code: 'INVALID_AMOUNT' });
+  if (!(method in CLAIM_METHODS)) return res.status(400).json({ error: 'Choose how you paid', code: 'INVALID_METHOD' });
+  if (num > 10_000_000) return res.status(400).json({ error: 'Amount looks too large — check it', code: 'INVALID_AMOUNT' });
+  const tenantId = process.env.APP_TENANT_ID || 'imac-default';
+  const actor = await requestActor(req);
+  const rows = await sql`INSERT INTO billing_claims (id, tenant_id, amount, method, reference, note, status, created_by_id, created_by_name, created_at)
+    VALUES (gen_random_uuid(), ${tenantId}, ${num}, ${method}, ${String(reference || '').slice(0, 255)}, ${String(note || '').slice(0, 500)}, 'pending', ${String(actor?.id || '')}, ${String(actor?.name || '')}, NOW())
+    RETURNING id, amount, method, reference, status, created_at`;
+  await audit('billing.claim', `Claim ${rows[0].id}: ${num} ${method} (ref ${String(reference || '').slice(0, 40) || 'none'})`, actor);
+  res.json({ claim: rows[0] });
+}));
+
+// GET /api/admin/billing/claims - the operator's queue: pending first, then
+// recently decided. Includes the shop name so the console is answerable
+// without opening each shop's own deployment URL.
+app.get('/api/admin/billing/claims', requireSuperAdmin, asHandler(async (req, res) => {
+  const rows = await sql`SELECT c.id, c.tenant_id, c.amount, c.method, c.reference, c.note, c.status, c.created_at, c.decided_at, c.decided_by, c.created_by_name, t.name AS shop_name
+    FROM billing_claims c LEFT JOIN tenants t ON t.id = c.tenant_id ORDER BY (c.status = 'pending') DESC, c.created_at DESC LIMIT 100`;
+  res.json({ claims: rows });
+}));
+
+// POST /api/admin/billing/claims/:id/approve - record the payment through the
+// shared recorder (payment_log + referrer commission), then mark the claim
+// approved with who approved it. A decided claim can never be approved twice:
+// the second tap answers with the same result but does not re-insert money.
+app.post('/api/admin/billing/claims/:id/approve', requireSuperAdmin, asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM billing_claims WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Claim not found', code: 'CLAIM_NOT_FOUND' });
+  const claim = rows[0];
+  if (claim.status !== 'pending') return res.json({ claim, alreadyDecided: true });
+  let paymentId = null;
+  if (claim.payment_log_id) paymentId = claim.payment_log_id;
+  else paymentId = await recordShopPayment(claim.tenant_id, claim.amount, claim.method, claim.reference || `claim:${claim.id}`);
+  await sql`UPDATE billing_claims SET status='approved', decided_by='super-admin', decided_at=NOW(), payment_log_id=${paymentId} WHERE id=${claim.id}`;
+  await audit('billing.approve', `Claim ${claim.id}: ${claim.amount} ${claim.method} from ${claim.tenant_id}`, null, { paymentId });
+  const fresh = await sql`SELECT * FROM billing_claims WHERE id=${claim.id}`;
+  res.json({ claim: fresh[0], paymentId });
+}));
+
+// POST /api/admin/billing/claims/:id/reject - the money did not arrive. The
+// claim is kept (never deleted) so the shop can see why, and can file again.
+app.post('/api/admin/billing/claims/:id/reject', requireSuperAdmin, asHandler(async (req, res) => {
+  const rows = await sql`SELECT * FROM billing_claims WHERE id=${req.params.id}`;
+  if (!rows.length) return res.status(404).json({ error: 'Claim not found', code: 'CLAIM_NOT_FOUND' });
+  const claim = rows[0];
+  if (claim.status !== 'pending') return res.json({ claim, alreadyDecided: true });
+  await sql`UPDATE billing_claims SET status='rejected', decided_by='super-admin', decided_at=NOW() WHERE id=${claim.id}`;
+  await audit('billing.reject', `Claim ${claim.id}: ${claim.amount} ${claim.method} from ${claim.tenant_id}`);
+  const fresh = await sql`SELECT * FROM billing_claims WHERE id=${claim.id}`;
+  res.json({ claim: fresh[0] });
 }));
 
 // POST /api/tenant - update tenant name/plan (admin use)
@@ -7256,19 +7380,9 @@ app.post('/api/tenant', requireSuperAdmin, asHandler(async (req, res) => {
   res.json({ tenant: tenant[0] });
 }));
 
-// Middleware: set app.tenant_id from the shop's DB context.
-// This is set by the provisioner via Vercel env var, or by the onboarding flow.
-// The header value is validated against a strict pattern before it reaches
-// SQL — it used to be interpolated raw, which was injectable by any client.
-const TENANT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-app.use((req, res, next) => {
-  const raw = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID || '';
-  const tenantId = String(raw).trim();
-  if (tenantId && TENANT_ID_RE.test(tenantId)) {
-    sql.query(`SET app.tenant_id = '${tenantId}'`).catch(() => {});
-  }
-  next();
-});
+// Tenant context is deployment-scoped: fleet provisioning gives each shop its
+// own database and APP_TENANT_ID. Do not set session context from request data;
+// a client-supplied tenant header is not an authorization boundary.
 
 // POST /api/onboard - new shop onboarding: creates tenant + subscription + sets PIN.
 // Manager-only: a cashier must not be able to rewrite the shop's PIN.
@@ -7327,8 +7441,7 @@ function requireSuperAdmin(req, res, next) {
 
 // GET /api/admin/shops - list all shops with subscription status
 app.get('/api/admin/shops', requireSuperAdmin, asHandler(async (req, res) => {
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
-  // When no specific tenant context, query all tenants
+  // In this deployment's database, list its registered tenants.
   const tenants = await sql`SELECT id, name, plan, status FROM tenants`;
   const subscriptions = await sql`SELECT tenant_id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions`;
   const subMap = new Map(
@@ -7351,7 +7464,6 @@ app.get('/api/admin/shops', requireSuperAdmin, asHandler(async (req, res) => {
 
 // GET /api/admin/stats - get admin statistics
 app.get('/api/admin/stats', requireSuperAdmin, asHandler(async (req, res) => {
-  const tenantId = req.headers['x-tenant-id'] || process.env.APP_TENANT_ID;
   const tenants = await sql`SELECT id, name, plan, status FROM tenants`;
   const subscriptions = await sql`SELECT tenant_id, status, plan, current_period_end, cancel_at_period_end FROM subscriptions`;
   const subMap = new Map(
@@ -7383,28 +7495,38 @@ app.post('/api/admin/shop/:tenantId/cancel', requireSuperAdmin, asHandler(async 
   res.json({ subscription: sub[0] });
 }));
 
+// Record one shop payment: the payment_log row plus the referrer's commission
+// cut. Shared by the super-admin manual entry and by billing-claim approval so
+// both paths pay the marketer the same way and neither can double-insert a
+// reference. Returns the inserted payment id, or null when it was not recorded.
+async function recordShopPayment(tenantId, amount, method, reference) {
+  const num = Math.round(Number(amount) || 0);
+  if (!(num > 0) || !method) return null;
+  const rows = await sql`INSERT INTO payment_log (id, tenant_id, amount, method, reference, created_at) VALUES (gen_random_uuid(), ${String(tenantId)}, ${num}, ${String(method).slice(0, 50)}, ${String(reference || '').slice(0, 255)}, NOW()) ON CONFLICT (id) DO NOTHING RETURNING id`;
+  const paymentId = rows[0]?.id || null;
+  try {
+    const refs = await sql`SELECT r.id, r.marketer_id, m.commission_pct FROM referrals r JOIN marketers m ON m.id = r.marketer_id WHERE r.tenant_id = ${String(tenantId)} AND m.active = true`;
+    for (const r of refs) {
+      const cut = Math.round(num * (Number(r.commission_pct) || 0) / 100);
+      if (cut > 0) {
+        await sql`UPDATE referrals SET commission_due = COALESCE(commission_due, 0) + ${cut}, status = 'active' WHERE id = ${r.id}`;
+      }
+    }
+    if (refs.length) await audit('admin.commission', `Accrued referral cut on ${tenantId} payment ${num}`);
+  } catch (e) { console.error('Commission accrual failed:', e.message); }
+  return paymentId;
+}
+
 // POST /api/admin/shop/:tenantId/payment - record manual payment (super admin)
 // Side effect: auto-accrues the referrer's commission cut (if the shop was
 // referred by a marketer) so payouts always match recorded revenue.
 app.post('/api/admin/shop/:tenantId/payment', requireSuperAdmin, asHandler(async (req, res) => {
   const { amount, method, reference } = req.body || {};
   const tenantId = req.params.tenantId;
-  const num = Number(amount) || 0;
-  if (num > 0 && method) {
-    await sql`INSERT INTO payment_log (id, tenant_id, amount, method, reference, created_at) VALUES (gen_random_uuid(), ${tenantId}, ${num}, ${method}, ${reference || ''}, NOW()) ON CONFLICT (id) DO NOTHING`;
-    try {
-      const refs = await sql`SELECT r.id, r.marketer_id, m.commission_pct FROM referrals r JOIN marketers m ON m.id = r.marketer_id WHERE r.tenant_id = ${tenantId} AND m.active = true`;
-      for (const r of refs) {
-        const cut = Math.round(num * (Number(r.commission_pct) || 0) / 100);
-        if (cut > 0) {
-          await sql`UPDATE referrals SET commission_due = COALESCE(commission_due, 0) + ${cut}, status = 'active' WHERE id = ${r.id}`;
-        }
-      }
-      if (refs.length) await audit('admin.commission', `Accrued referral cut on ${tenantId} payment ${num}`);
-    } catch (e) { console.error('Commission accrual failed:', e.message); }
-  }
+  const paymentId = await recordShopPayment(tenantId, amount, method, reference);
+  if (paymentId) await audit('admin.payment', `Manual payment ${amount} ${method} from ${tenantId}`);
   const tenant = await sql`SELECT id, name, plan, status FROM tenants WHERE id = ${tenantId}`;
-  res.json({ tenant: tenant[0] });
+  res.json({ tenant: tenant[0], paymentId });
 }));
 
 // --------------------------------------------

@@ -1742,6 +1742,34 @@ export const settingsApi = {
   update: (s: StoreSettings) => api<{ success: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
 };
 
+// Subscription billing: a manager files a payment claim (Mobile Money / bank /
+// cash with its reference) and the operator approves it from the admin
+// console. Nothing here claims a plan is active — the shop reads its status
+// from the same endpoint it filed through.
+export interface BillingClaim {
+  id: string;
+  amount: number;
+  method: 'momo' | 'bank' | 'cash' | string;
+  reference: string;
+  note?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+}
+export interface BillingStatus {
+  tenant: { id: string; name: string; plan: string; status: string } | null;
+  subscription: { status: string; plan: string; current_period_end?: string | null; cancel_at_period_end?: boolean } | null;
+  instructions: { momoNumber: string; momoName: string; bank: string; notes: string };
+  methods: Record<string, string>;
+  claims: BillingClaim[];
+}
+export const billingApi = {
+  status: () => api<BillingStatus>('/api/billing/status', { fresh: true, silentManager: true }),
+  claim: (c: { amount: number; method: string; reference?: string; note?: string }) =>
+    api<{ claim: BillingClaim }>('/api/billing/claims', { method: 'POST', body: JSON.stringify(c), silentManager: true }),
+};
+
 // Real POST to the sheets test endpoint, bypassing api()'s offline-outbox
 // fallback so a failed or bogus sheet URL surfaces as an error instead of a
 // silent "success".

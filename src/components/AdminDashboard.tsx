@@ -40,6 +40,26 @@ export interface AdminReferral {
   marketer_code: string | null;
 }
 
+export interface AdminClaim {
+  id: string;
+  tenant_id: string;
+  shop_name?: string | null;
+  amount: number;
+  method: string;
+  reference: string;
+  note: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  decided_at?: string | null;
+  created_by_name?: string | null;
+}
+
+const METHOD_LABEL: Record<string, string> = {
+  momo: 'Mobile Money',
+  bank: 'Bank transfer',
+  cash: 'Cash',
+};
+
 const ADMIN_API_BASE = '/api/admin';
 
 const adminHeaders = (token: string) => ({ 'Content-Type': 'application/json', 'x-admin-token': token });
@@ -170,6 +190,24 @@ export const useManualPayment = (token: string) => {
   };
 };
 
+export const useBillingClaims = (token: string) => {
+  const [claims, setClaims] = useState<AdminClaim[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    if (!token) { setLoading(false); return; }
+    setLoading(true);
+    adminGet<{ claims: AdminClaim[] }>(token, '/billing/claims')
+      .then((data) => { setClaims(data.claims || []); setError(null); })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [token]);
+
+  useEffect(load, [load]);
+  return { claims, loading, error, reload: load };
+};
+
 function ShopActions({ shop, token, onDone }: { shop: AdminShop; token: string; onDone: () => void }) {
   const [plan, setPlan] = useState(shop.plan);
   const [amount, setAmount] = useState('');
@@ -233,6 +271,89 @@ function ShopActions({ shop, token, onDone }: { shop: AdminShop; token: string; 
         )}
       </div>
       {msg && <p className="text-[11px] font-bold text-zinc-300">{msg}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Billing queue: payment claims shops file from their till (Settings →
+// Subscription). Approve = the money arrived → recorded payment (and the
+// referrer's cut). Reject = it did not. The claim row is never deleted, so the
+// shop sees the decision instead of a vanished request.
+// ---------------------------------------------------------------------------
+
+function BillingQueue({ token }: { token: string }) {
+  const { claims, loading, error, reload } = useBillingClaims(token);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const decide = async (id: string, action: 'approve' | 'reject') => {
+    setBusyId(id);
+    try {
+      await adminSend(token, 'POST', `/billing/claims/${id}/${action}`);
+      setMsg(action === 'approve' ? 'Payment recorded' : 'Claim rejected — shop can see it');
+      reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (loading) return <p className="text-zinc-500 text-xs font-bold uppercase">Loading claims…</p>;
+  if (error) return <p className="text-rose-400 text-xs font-bold uppercase">{error}</p>;
+  const pending = claims.filter(c => c.status === 'pending');
+  const decided = claims.filter(c => c.status !== 'pending');
+
+  return (
+    <div className="space-y-3">
+      {msg && <p className="text-[11px] font-bold text-emerald-300">{msg}</p>}
+      <div className="space-y-2">
+        {pending.length === 0
+          ? <p className="text-zinc-500 text-xs font-bold uppercase">No payment claims waiting</p>
+          : pending.map(c => (
+            <div key={c.id} className="bg-[#141414] border border-white/5 rounded-xl p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-black font-display text-white tabular-nums">
+                    {(c.amount || 0).toLocaleString()}
+                    <span className="ml-2 text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{METHOD_LABEL[c.method] || c.method}</span>
+                  </p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase truncate">
+                    {c.shop_name || c.tenant_id} • {c.created_at ? new Date(c.created_at).toLocaleDateString() : ''}{c.created_by_name ? ` • by ${c.created_by_name}` : ''}
+                  </p>
+                  {c.reference && <p className="text-[11px] text-zinc-400 truncate">Ref: {c.reference}</p>}
+                  {c.note && <p className="text-[11px] text-zinc-500 truncate">{c.note}</p>}
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  <button disabled={busyId === c.id} onClick={() => void decide(c.id, 'approve')}
+                    aria-label={`Approve ${METHOD_LABEL[c.method] || c.method} payment of ${(c.amount || 0).toLocaleString()} from ${c.shop_name || c.tenant_id}`}
+                    className="h-9 px-3 bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 rounded-xl text-[10px] font-black uppercase disabled:opacity-40 cursor-pointer">Approve</button>
+                  <button disabled={busyId === c.id} onClick={() => void decide(c.id, 'reject')}
+                    aria-label={`Reject ${METHOD_LABEL[c.method] || c.method} claim of ${(c.amount || 0).toLocaleString()} from ${c.shop_name || c.tenant_id}`}
+                    className="h-9 px-3 border border-zinc-800 text-zinc-500 hover:text-rose-400 hover:border-rose-800/50 rounded-xl text-[10px] font-black uppercase disabled:opacity-40 cursor-pointer">Reject</button>
+                </div>
+              </div>
+            </div>
+          ))}
+      </div>
+      {decided.length > 0 && (
+        <details className="bg-black/30 border border-white/5 rounded-xl p-3">
+          <summary className="text-[10px] font-black text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-300">
+            Recently decided ({decided.length}) — keep for the books
+          </summary>
+          <div className="mt-2 space-y-1.5">
+            {decided.map(c => (
+              <p key={c.id} className="text-[11px] font-bold text-zinc-500 flex items-center gap-2">
+                <span className={c.status === 'approved' ? 'text-emerald-400' : 'text-rose-400'}>{c.status === 'approved' ? '✓ paid' : '✕ rejected'}</span>
+                <span className="tabular-nums">{(c.amount || 0).toLocaleString()}</span>
+                <span className="uppercase">{METHOD_LABEL[c.method] || c.method}</span>
+                <span className="truncate">{c.shop_name || c.tenant_id}</span>
+              </p>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -832,7 +953,7 @@ const AdminConsole: React.FC = () => {
   });
   const [draftToken, setDraftToken] = useState(token);
   const [openShop, setOpenShop] = useState<string | null>(null);
-  const [tab, setTab] = useState<'shops' | 'console' | 'marketers'>('shops');
+  const [tab, setTab] = useState<'shops' | 'console' | 'marketers' | 'billing'>('shops');
   const { shops, loading: shopsLoading, error: shopsError, reload: reloadShops } = useAdminShops(token);
   const { stats, loading: statsLoading, error: statsError, reload: reloadStats } = useAdminStats(token);
   const reload = () => { reloadShops(); reloadStats(); };
@@ -889,10 +1010,10 @@ const AdminConsole: React.FC = () => {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 pb-3 flex gap-2">
-          {(['shops', 'console', 'marketers'] as const).map(t => (
+          {(['shops', 'console', 'marketers', 'billing'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`flex-1 h-10 rounded-xl text-[11px] font-black uppercase tracking-wider cursor-pointer border transition-all ${tab === t ? 'bg-gold-brand text-black border-gold-brand' : 'bg-white/5 text-zinc-400 border-white/5 hover:text-white'}`}>
-              {t === 'shops' ? 'Shops' : t === 'console' ? 'Shop console' : 'Marketers'}
+              {t === 'shops' ? 'Shops' : t === 'console' ? 'Shop console' : t === 'marketers' ? 'Marketers' : 'Billing'}
             </button>
           ))}
         </div>
@@ -947,6 +1068,18 @@ const AdminConsole: React.FC = () => {
           )}
 
           {tab === 'marketers' && <Marketers token={token} />}
+
+          {tab === 'billing' && (
+            <>
+              <p className="text-[11px] text-zinc-500 font-bold uppercase bg-black/30 border border-white/5 rounded-xl p-3">
+                Payment claims shops file from their till. Approve only after the money is confirmed — approving records the payment and the referrer's cut.
+              </p>
+              <div className="bg-[#141414] border border-white/5 rounded-2xl p-4">
+                <h2 className="text-xs font-black text-white uppercase tracking-widest mb-3">Payment claims</h2>
+                <BillingQueue token={token} />
+              </div>
+            </>
+          )}
         </div>
       </main>
     </div>
