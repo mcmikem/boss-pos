@@ -1197,9 +1197,15 @@ async function initDBWithRetry() {
   }
 }
 
-let initPromise = initDBWithRetry().then(() => ensureDefaultSettings()).then(() => seedDatabase()).catch(err => {
-  console.error('Database initialization failed:', err);
-});
+// Cloudflare Workers start a new isolate frequently. The production database
+// is initialized before deployment, so rerunning the serial schema/bootstrap
+// chain on every isolate would block API requests for minutes.
+const skipWorkerBootstrap = process.env.CLOUDFLARE_WORKER === '1';
+let initPromise = skipWorkerBootstrap
+  ? Promise.resolve()
+  : initDBWithRetry().then(() => ensureDefaultSettings()).then(() => seedDatabase()).catch(err => {
+    console.error('Database initialization failed:', err);
+  });
 
 async function syncLibraryProducts() {
   let inserted = 0;
@@ -1256,9 +1262,11 @@ async function ensureCatalogSynced() {
   await sql`INSERT INTO settings (key,value) VALUES ('catalogSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
 }
 
-initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
-  console.error('Catalog sync failed:', err);
-});
+if (!skipWorkerBootstrap) {
+  initPromise = initPromise.then(() => ensureCatalogSynced()).catch(err => {
+    console.error('Catalog sync failed:', err);
+  });
+}
 
 // Drinks are additive (ON CONFLICT DO NOTHING) and run for every shop — the
 // live till asked for them explicitly, so they must land even where
@@ -1270,19 +1278,26 @@ async function ensureDrinksSynced() {
   await sql`INSERT INTO settings (key,value) VALUES ('drinksSynced','true') ON CONFLICT (key) DO UPDATE SET value='true'`;
 }
 
-initPromise = initPromise.then(() => ensureDrinksSynced()).catch(err => {
-  console.error('Drinks sync failed:', err);
-});
+if (!skipWorkerBootstrap) {
+  initPromise = initPromise.then(() => ensureDrinksSynced()).catch(err => {
+    console.error('Drinks sync failed:', err);
+  });
+}
 
-initPromise = initPromise.then(() => migrateSquareImages()).catch(err => {
-  console.error('Square image migration failed:', err);
-});
+if (!skipWorkerBootstrap) {
+  initPromise = initPromise.then(() => migrateSquareImages()).catch(err => {
+    console.error('Square image migration failed:', err);
+  });
+}
 
-initPromise = initPromise.then(() => migrateLegacyImages()).catch(err => {
-  console.error('Legacy image migration failed:', err);
-});
+if (!skipWorkerBootstrap) {
+  initPromise = initPromise.then(() => migrateLegacyImages()).catch(err => {
+    console.error('Legacy image migration failed:', err);
+  });
+}
 
 app.use((req, res, next) => {
+  if (skipWorkerBootstrap) return next();
   initPromise.then(() => next()).catch(err => {
     res.status(500).json({ error: 'Database initialization failed' });
   });

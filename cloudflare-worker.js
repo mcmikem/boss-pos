@@ -26,6 +26,7 @@ export default {
     ]) {
       if (typeof env[name] === 'string') process.env[name] = env[name];
     }
+    process.env.CLOUDFLARE_WORKER = '1';
     if (url.pathname.startsWith('/api/') || url.pathname === '/api' || url.pathname.startsWith('/uploads/')) {
       try {
         const handler = await getApiHandler();
