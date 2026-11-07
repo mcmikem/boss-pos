@@ -2,6 +2,7 @@ name = "boss-pos"
 main = "cloudflare-worker.js"
 compatibility_date = "2026-11-07"
 compatibility_flags = ["nodejs_compat"]
+keep_vars = true
 
 [assets]
 directory = "./dist"
