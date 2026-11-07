@@ -4,6 +4,9 @@ compatibility_date = "2026-11-07"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
 
+[define]
+"process.versions.node" = "undefined"
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
