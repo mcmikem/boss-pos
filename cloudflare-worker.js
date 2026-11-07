@@ -17,7 +17,7 @@ async function getApiHandler() {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     for (const name of [
       'DATABASE_URL', 'AUTH_SECRET', 'CRON_SECRET', 'SUPER_ADMIN_SECRET',
@@ -29,7 +29,7 @@ export default {
     if (url.pathname.startsWith('/api/') || url.pathname === '/api' || url.pathname.startsWith('/uploads/')) {
       try {
         const handler = await getApiHandler();
-        return handler(request);
+        return handler.fetch(request, env, ctx);
       } catch (error) {
         console.error('Boss POS API initialization failed:', error?.message || error);
         return Response.json({ error: 'Service is not configured' }, { status: 503 });
