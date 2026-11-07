@@ -20,6 +20,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/') || url.pathname === '/api' || url.pathname.startsWith('/uploads/')) {
+      // Express reads its configuration through process.env during module
+      // initialization. Copy Worker bindings first so secrets are available
+      // even when the runtime has not populated process.env automatically.
+      for (const [name, value] of Object.entries(env)) {
+        if (typeof value === 'string') process.env[name] = value;
+      }
       try {
         const handler = await getApiHandler();
         return handler(request);
