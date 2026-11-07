@@ -1532,7 +1532,10 @@ const LOCKOUT_MS = 30 * 1000;
 // PINs are stored as salted PBKDF2 (per-hash random salt, embedded in the
 // value) so a DB leak doesn't expose PINs to rainbow-table or fast-hash
 // attacks. Legacy stores (bare sha256) still verify and auto-migrate on login.
-const PIN_ITERATIONS = 120000;
+// 100,000 is Cloudflare Workers' hard PBKDF2 iteration ceiling. Keeping the
+// stored count in each hash lets existing Node deployments verify the same
+// hashes while remaining compatible with the Worker runtime.
+const PIN_ITERATIONS = 100000;
 
 function hashPinStrong(pin, salt) {
   return pbkdf2Sync(String(pin || ''), salt, PIN_ITERATIONS, 32, 'sha256').toString('hex');
