@@ -1538,11 +1538,21 @@ function hashPinStrong(pin, salt) {
   return pbkdf2Sync(String(pin || ''), salt, PIN_ITERATIONS, 32, 'sha256').toString('hex');
 }
 
+async function hashPinStrongRuntime(pin, salt) {
+  if (process.env.CLOUDFLARE_WORKER !== '1') return hashPinStrong(pin, salt);
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(String(pin || '')), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({
+    name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: PIN_ITERATIONS,
+  }, key, 256);
+  return Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function pinHashFormat(salt, hex) {
   return `pbkdf2$${PIN_ITERATIONS}$${salt}$${hex}`;
 }
 
-function verifyStoredPin(stored, pin) {
+async function verifyStoredPin(stored, pin) {
   if (!stored) return false;
   if (stored.startsWith('pbkdf2$')) {
     const parts = stored.split('$');
@@ -1550,7 +1560,15 @@ function verifyStoredPin(stored, pin) {
     const [, iterStr, salt, hex] = parts;
     const iter = parseInt(iterStr, 10);
     if (!iter || iter < 1 || iter > 1_000_000) return false;
-    const computed = pbkdf2Sync(String(pin || ''), salt, iter, 32, 'sha256').toString('hex');
+    let computed;
+    if (process.env.CLOUDFLARE_WORKER === '1') {
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey('raw', encoder.encode(String(pin || '')), 'PBKDF2', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: iter }, key, 256);
+      computed = Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } else {
+      computed = pbkdf2Sync(String(pin || ''), salt, iter, 32, 'sha256').toString('hex');
+    }
     const a = Buffer.from(hex, 'hex');
     const b = Buffer.from(computed, 'hex');
     return a.length === b.length && timingSafeEqual(a, b);
@@ -1600,7 +1618,7 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
     const token = await signToken();
     return res.json({ ok: true, token, hasPin: false, openTill: true });
   }
-  if (!verifyStoredPin(stored, String(pin || ''))) {
+  if (!(await verifyStoredPin(stored, String(pin || '')))) {
     if (attempts.length === 0) {
       await sql`INSERT INTO auth_attempts (id, failures, lastfailedat, lockeduntil) VALUES (${key}, 1, ${String(now)}, '')`;
     } else {
@@ -1629,7 +1647,7 @@ app.post('/api/auth/verify', asHandler(async (req, res) => {
   let returnedHash = stored || '';
   if (stored && !stored.startsWith('pbkdf2$')) {
     const salt = randomBytes(16).toString('hex');
-    returnedHash = pinHashFormat(salt, hashPinStrong(String(pin || ''), salt));
+    returnedHash = pinHashFormat(salt, await hashPinStrongRuntime(String(pin || ''), salt));
     await sql`UPDATE settings SET value=${returnedHash} WHERE key='pinHash'`;
   }
   await audit('auth.login', 'Unlocked the till');
@@ -1692,7 +1710,8 @@ app.post('/api/staff/unlock', asHandler(async (req, res) => {
     return res.status(401).json({ error: 'PIN must be 4 digits', code: 'WRONG_PIN' });
   }
   const active = await sql`SELECT id, name, role, pin_hash FROM staff WHERE active=true`;
-  const matches = active.filter((row) => verifyStoredPin(row.pin_hash, pin));
+  const matches = [];
+  for (const row of active) if (await verifyStoredPin(row.pin_hash, pin)) matches.push(row);
   if (!matches.length) {
     await fail();
     await audit('staff.failed', 'Failed till unlock (no staff PIN matched)');
@@ -1866,7 +1885,7 @@ app.post('/api/auth/set', requireManager, asHandler(async (req, res) => {
     value = hash.slice(0, 200);
   } else if (pin) {
     const salt = randomBytes(16).toString('hex');
-    value = pinHashFormat(salt, hashPinStrong(String(pin).slice(0, 64), salt));
+    value = pinHashFormat(salt, await hashPinStrongRuntime(String(pin).slice(0, 64), salt));
   }
   await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value=${value}`;
   await audit('auth.pin', value ? 'PIN set / changed' : 'PIN removed');
@@ -6999,13 +7018,15 @@ async function generateUniquePin(excludeId) {
     // Four digits, first digit 1-9: a PIN that starts with 0 gets mistyped as
     // three digits on a phone keypad often enough to matter.
     const pin = String(randomInt(1, 10)) + randomPinDigit() + randomPinDigit() + randomPinDigit();
-    if (!others.some((row) => verifyStoredPin(row.pin_hash, pin))) return pin;
+    let alreadyTaken = false;
+    for (const row of others) if (await verifyStoredPin(row.pin_hash, pin)) { alreadyTaken = true; break; }
+    if (!alreadyTaken) return pin;
   }
   return null;
 }
 async function savePin(id, pin) {
   const salt = randomBytes(16).toString('hex');
-  await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(pin, salt))} WHERE id=${id}`;
+  await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, await hashPinStrongRuntime(pin, salt))} WHERE id=${id}`;
 }
 
 // A person is identified by their name at this till: the sign-in screen is a
@@ -7043,7 +7064,8 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
   let pin = String(b.pin || '');
   if (pin) {
     if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'A PIN is 4 digits' });
-    const clash = (await sql`SELECT name, active FROM staff`).find(row => verifyStoredPin(row.pin_hash, pin));
+    let clash = null;
+    for (const row of await sql`SELECT name, active, pin_hash FROM staff`) if (await verifyStoredPin(row.pin_hash, pin)) { clash = row; break; }
     if (clash) {
       return res.status(409).json({
         error: `${text(name, 80)} cannot use that PIN — ${clash.name} already has it. Leave it blank and the till will write one that nobody else has.`,
@@ -7057,7 +7079,8 @@ app.post('/api/staff', requireManager, asHandler(async (req, res) => {
   const id = `st-${randomUUID()}`;
   const at = new Date().toISOString();
   const salt = randomBytes(16).toString('hex');
-  await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${pinHashFormat(salt, hashPinStrong(pin, salt))}, true, ${at})`;
+  const pinHash = pinHashFormat(salt, await hashPinStrongRuntime(pin, salt));
+  await sql`INSERT INTO staff (id, name, role, pin_hash, active, created_at) VALUES (${id}, ${name}, ${role}, ${pinHash}, true, ${at})`;
   // Never the digits. The audit can say a PIN was written, never what it is.
   await audit('staff.create', `${name} (${role}) — PIN written by the till`);
   // The only time these digits ever leave the server. Shown once, never stored.
@@ -7084,7 +7107,8 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
   await sql`UPDATE staff SET name=${name}, role=${role}, active=${active} WHERE id=${req.params.id}`;
   if (/^\d{4}$/.test(String(b.pin || ''))) {
     const others = await sql`SELECT name, active, pin_hash FROM staff WHERE id <> ${req.params.id}`;
-    const taken = others.find(row => verifyStoredPin(row.pin_hash, String(b.pin)));
+    let taken = null;
+    for (const row of others) if (await verifyStoredPin(row.pin_hash, String(b.pin))) { taken = row; break; }
     if (taken) {
       return res.status(409).json({
         error: `That PIN already belongs to ${taken.name}. Two people on one PIN is why the sign-in screen has to guess — give ${name} a PIN nobody else has.`,
@@ -7092,7 +7116,7 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
       });
     }
     const salt = randomBytes(16).toString('hex');
-    await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hashPinStrong(String(b.pin), salt))} WHERE id=${req.params.id}`;
+    await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, await hashPinStrongRuntime(String(b.pin), salt))} WHERE id=${req.params.id}`;
   }
   await audit('staff.update', `${name} (${role}, ${active ? 'active' : 'disabled'})`);
   const after = await sql`SELECT * FROM staff WHERE id=${req.params.id}`;
@@ -7158,7 +7182,7 @@ app.post('/api/staff/verify', asHandler(async (req, res) => {
   };
   const { id, pin } = req.body || {};
   const rows = await sql`SELECT * FROM staff WHERE id=${String(id || '')} AND active=true`;
-  if (!rows.length || !verifyStoredPin(rows[0].pin_hash, String(pin || ''))) {
+  if (!rows.length || !(await verifyStoredPin(rows[0].pin_hash, String(pin || '')))) {
     await fail();
     await audit('staff.failed', `Failed staff login (${String(id || '').slice(0, 20)})`);
     return res.status(401).json({ error: 'Wrong PIN', code: 'WRONG_PIN' });
@@ -7442,7 +7466,7 @@ app.post('/api/onboard', requireManager, asHandler(async (req, res) => {
   // would contaminate every subsequent request on the same instance.
 
   const salt = randomBytes(16).toString('hex');
-  const pinHash = pinHashFormat(salt, hashPinStrong(cleanPin, salt));
+  const pinHash = pinHashFormat(salt, await hashPinStrongRuntime(cleanPin, salt));
   await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${pinHash}) ON CONFLICT (key) DO UPDATE SET value=${pinHash}`;
   await sql`INSERT INTO settings (key, value) VALUES ('onboarded', 'true') ON CONFLICT (key) DO NOTHING`;
 
@@ -7655,7 +7679,7 @@ app.post('/api/admin/shop/onboard', requireSuperAdmin, asHandler(async (req, res
   if (pin !== undefined && pin !== null && String(pin) !== '') {
     if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ error: 'PIN must be exactly 4 digits' });
     const salt = randomBytes(16).toString('hex');
-    const value = pinHashFormat(salt, hashPinStrong(String(pin), salt));
+    const value = pinHashFormat(salt, await hashPinStrongRuntime(String(pin), salt));
     await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value = ${value}`;
     await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key = 'authVersion'`;
     pinSet = true;
@@ -7686,7 +7710,7 @@ app.post('/api/admin/shop/pin', requireSuperAdmin, asHandler(async (req, res) =>
     await audit('admin.pin', 'Super admin cleared the till PIN');
   } else {
     const salt = randomBytes(16).toString('hex');
-    const value = pinHashFormat(salt, hashPinStrong(String(pin), salt));
+    const value = pinHashFormat(salt, await hashPinStrongRuntime(String(pin), salt));
     await sql`INSERT INTO settings (key, value) VALUES ('pinHash', ${value}) ON CONFLICT (key) DO UPDATE SET value = ${value}`;
     await sql`UPDATE settings SET value = ((value::int) + 1)::text WHERE key = 'authVersion'`;
     await audit('admin.pin', 'Super admin reset the till PIN');
