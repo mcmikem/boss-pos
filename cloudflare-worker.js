@@ -23,8 +23,12 @@ export default {
       // Express reads its configuration through process.env during module
       // initialization. Copy Worker bindings first so secrets are available
       // even when the runtime has not populated process.env automatically.
-      for (const [name, value] of Object.entries(env)) {
-        if (typeof value === 'string') process.env[name] = value;
+      for (const name of [
+        'DATABASE_URL', 'AUTH_SECRET', 'CRON_SECRET', 'SUPER_ADMIN_SECRET',
+        'APP_TENANT_ID', 'SEED_CATALOG', 'BILLING_BANK_DETAILS',
+        'BILLING_MOMO_NAME', 'BILLING_MOMO_NUMBER', 'BILLING_NOTES',
+      ]) {
+        if (typeof env[name] === 'string') process.env[name] = env[name];
       }
       try {
         const handler = await getApiHandler();
