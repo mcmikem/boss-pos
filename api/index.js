@@ -1,6 +1,8 @@
 import express from 'express';
 import { neon } from '@neondatabase/serverless';
-import sharp from 'sharp';
+// The package's conditional export selects Node WASM under Vercel and the
+// Workerd WASM build under Cloudflare Workers.
+import { PhotonImage, SamplingFilter, crop, resize } from '@cf-wasm/photon';
 import { createHmac, createHash, pbkdf2Sync, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { defaultEfrisConfig, sanitizeEfrisConfig, buildInvoicePayload, simulateSandbox, sendToProvider, saleVatTotal } from './efris.js';
 import { creditLimitDecision, normalizeCreditKey, summarizeCreditBalances } from './creditLimits.js';
@@ -837,17 +839,30 @@ function qty3(v) {
   return Math.round(n * 1000) / 1000;
 }
 
-// Render an image Buffer to a uniform 320x320 square JPEG thumbnail (centre
-// crop) so every product photo is the same clean size/shape in the grid.
+// Render an image to a uniform 320x320 square JPEG thumbnail in WASM. This
+// replaces Sharp so the same endpoint can run on Cloudflare Workers.
 async function renderThumbnail(buf) {
-  const img = sharp(buf, { failOn: 'none', limitInputPixels: 64 * 1024 * 1024 });
-  const meta = await img.metadata().catch(() => null);
-  if (!meta || !meta.width || !meta.height) return null;
-  return img
-    .rotate()
-    .resize(320, 320, { fit: 'cover', position: 'centre' })
-    .jpeg({ quality: 70, mozjpeg: true })
-    .toBuffer();
+  let input;
+  let square;
+  let thumbnail;
+  try {
+    input = PhotonImage.new_from_byteslice(new Uint8Array(buf));
+    const width = input.get_width();
+    const height = input.get_height();
+    if (!width || !height || width * height > 16 * 1024 * 1024) return null;
+    const edge = Math.min(width, height);
+    const left = Math.floor((width - edge) / 2);
+    const top = Math.floor((height - edge) / 2);
+    square = crop(input, left, top, left + edge, top + edge);
+    thumbnail = resize(square, 320, 320, SamplingFilter.Lanczos3);
+    return Buffer.from(thumbnail.get_bytes_jpeg(70));
+  } catch {
+    return null;
+  } finally {
+    thumbnail?.free();
+    square?.free();
+    input?.free();
+  }
 }
 
 // Store a raw image or data: URL as an /uploads/<id>.jpg thumbnail. Returns the
@@ -1857,7 +1872,7 @@ app.post('/api/orders/next', asHandler(async (req, res) => {
 
 // === IMAGE UPLOADS ===
 // Raw file (image/*) OR JSON { imageData: "data:image/..." }. The phone uploads
-// the raw file and sharp downsizes it here — no canvas, no createObjectURL, no
+// the raw file and the WASM converter downsizes it here — no canvas, no createObjectURL, no
 // OOM on old Androids. Returns a public, immutable /uploads/<id>.jpg URL.
 app.post('/api/uploads', express.raw({ type: () => true, limit: '8mb' }), asHandler(async (req, res) => {
   let buf;
@@ -3465,7 +3480,7 @@ app.post('/api/purchase-orders', requireManager, asHandler(async (req, res) => {
   const at = body.createdAt ? new Date(body.createdAt) : new Date();
   if (!Number.isFinite(at.getTime())) return res.status(400).json({ error: 'createdAt is invalid', code: 'INVALID_DATE' });
   const requestedNumber = normalizeOrderNumber(body.orderNumber);
-  const orderNumber = requestedNumber || await nextPurchaseOrderNumberValue();
+  let orderNumber = requestedNumber || await nextPurchaseOrderNumberValue();
   const lineRows = validated.lines.map((line, index) => ({
     id: `pol-${randomUUID()}`,
     lineNumber: index + 1,

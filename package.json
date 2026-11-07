@@ -20,9 +20,13 @@
     "smoke": "node scripts/smoke-prod.mjs",
     "verify:deployed": "node scripts/verify-deployed-fixes.mjs",
     "sql": "node scripts/check-sql-interpolations.mjs api/index.js api/authz.js api/businessRules.js api/creditLimits.js api/efris.js api/operationsBusiness.js api/operationsRules.js api/procurementRules.js api/reportRange.js server.js",
-    "csp": "node scripts/check-csp.mjs"
+    "csp": "node scripts/check-csp.mjs",
+    "deploy": "npx wrangler deploy",
+    "dev:worker": "npx wrangler dev",
+    "preview:worker": "npx wrangler dev --remote"
   },
   "dependencies": {
+    "@cf-wasm/photon": "0.4.0",
     "@ericblade/quagga2": "^1.12.1",
     "@neondatabase/serverless": "^1.0.0",
     "@tailwindcss/vite": "^4.1.14",
@@ -33,12 +37,8 @@
     "lucide-react": "^0.546.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "sharp": "^0.35.5",
     "vite": "^6.2.3",
     "vite-plugin-pwa": "^1.3.0"
-  },
-  "overrides": {
-    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
@@ -56,5 +56,8 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "sharp": "^0.35.5"
   }
 }

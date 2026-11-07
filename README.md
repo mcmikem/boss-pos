@@ -21,3 +21,9 @@ A lightweight, offline-first point-of-sale system for IMAC Enterprises. React/Vi
 ## Deploy
 
 See [DEPLOY.md](DEPLOY.md) for Vercel/Render setup, environment variables, cron, and backup/restore notes.
+
+### Cloudflare Workers
+
+This repository can also deploy as a Cloudflare Worker with the static frontend served from Worker Assets. Connect `mcmikem/boss-pos` in Workers & Pages and use `npm run build` as the build command and `npx wrangler deploy` as the deploy command. Set `DATABASE_URL` as an encrypted production secret on the Worker before deploying; it must point to the existing Boss POS Neon database. `AUTH_SECRET` is loaded from the database on first boot unless explicitly configured. Keep `CRON_SECRET` set if using the backup/export cron endpoints.
+
+The Worker uses `nodejs_compat` for the existing Express API and a WASM image converter in place of native Sharp. On the free Workers plan, CPU-intensive requests such as password verification and image uploads can hit Cloudflare's 10 ms CPU limit; monitor Worker invocation errors after deployment. The existing Vercel/Render deployments are not changed by this configuration.
