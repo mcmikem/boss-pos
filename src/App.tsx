@@ -277,16 +277,17 @@ function SettingsSection({ id, icon: Icon, title, hint, open, onToggle, children
 // where the eye already goes looking for the shop name.
 // Each screen gets a plain-language subtitle so a new user knows what the
 // screen is for without guessing. Keep them to one short sentence.
+// Plain-language titles. Short words a new cashier understands on first read.
 const SCREEN_TITLES: Record<string, { title: string; hint: string }> = {
-  sales: { title: 'Sell', hint: 'Add items to the cart and check out' },
+  sales: { title: 'Sell', hint: 'Add items to the cart, then check out' },
   analytics: { title: 'Sales report', hint: 'What you sold and earned today' },
-  expenses: { title: 'Spend', hint: 'Money the shop spent' },
+  expenses: { title: 'Money spent', hint: 'Rent, supplies, wages and other costs' },
   inventory: { title: 'Stock', hint: 'What you have on the shelf' },
-  registers: { title: 'Close day', hint: 'Count the money and finish the books' },
-  suppliers: { title: 'Suppliers', hint: 'Who you buy from' },
-  customers: { title: 'Regulars', hint: 'Customers who buy on credit' },
+  registers: { title: 'End of day', hint: 'Count money, check stock, plan tomorrow' },
+  suppliers: { title: 'Suppliers', hint: 'Who you buy stock from' },
+  customers: { title: 'Customers', hint: 'People who buy on credit' },
   tailoring: { title: 'Tailor', hint: 'Sewing orders and fittings' },
-  designs: { title: 'Designs', hint: 'Print and design jobs' },
+  designs: { title: 'Print & design', hint: 'Print and design jobs' },
   eatery: { title: 'Eatery', hint: 'Food and drink menu' },
   production: { title: 'Production', hint: 'What the kitchen made today' },
   repairs: { title: 'Repairs', hint: 'Items being fixed' },
@@ -631,6 +632,9 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   // Settings search, and the doors in the order THIS shop needs them: a tailor
   // should not be scrolling past Eatery doors to find their PINs.
   const [settingsSearch, setSettingsSearch] = useState('');
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(() => {
+    try { return localStorage.getItem('boss_pos_show_advanced_settings') === '1'; } catch { return false; }
+  });
   const SETTINGS_INDEX: Array<{ id: string; door: string; label: string; text: string; scope: 'shop' | 'phone' }> = [
     { id: 'shopname', door: 'shop', label: 'Shop name', text: 'what the till and the receipts call this shop', scope: 'shop' },
     { id: 'shoptype', door: 'shop', label: 'Shop type', text: 'which trade unlocks which screens', scope: 'shop' },
@@ -668,23 +672,27 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   }, [settingsSearch]);
   const orderedSections = useMemo(() => {
     const wanted = settings.trades;
-    if (!Array.isArray(wanted) || wanted.length === 0) return SETTINGS_SECTIONS;
-    // A kitchen shop leads with its own doors; a shelf shop with its own.
-    const leads: Record<string, string[]> = {
-      kitchen: ['selling', 'money', 'staff', 'security'],
-      orders: ['staff', 'money', 'security', 'data'],
-      services: ['staff', 'selling', 'money', 'security'],
-      sell: ['inventory', 'staff', 'money', 'security'],
-    };
-    const first = leads[wanted[0]] || [];
-    return [...SETTINGS_SECTIONS].sort((a, b) => {
+    const base = (!Array.isArray(wanted) || wanted.length === 0) ? SETTINGS_SECTIONS : [...SETTINGS_SECTIONS].sort((a, b) => {
+      const leads: Record<string, string[]> = {
+        kitchen: ['selling', 'money', 'staff', 'security'],
+        orders: ['staff', 'money', 'security', 'data'],
+        services: ['staff', 'selling', 'money', 'security'],
+        sell: ['inventory', 'staff', 'money', 'security'],
+      };
+      const first = leads[wanted[0]] || [];
       const ia = first.indexOf(a.key), ib = first.indexOf(b.key);
       if (ia === -1 && ib === -1) return 0;
       if (ia === -1) return 1;
       if (ib === -1) return -1;
       return ia - ib;
     });
-  }, [settings.trades]);
+    // Essentials first; advanced (permissions, money, look, data, billing)
+    // stay hidden until the owner asks for them — keeps the settings screen
+    // from feeling like a wall on first open.
+    const advanced = new Set(['staff-doors', 'money', 'look', 'data', 'billing']);
+    if (showAdvancedSettings || settingsSearch.trim().length >= 2) return base;
+    return base.filter(s => !advanced.has(s.key));
+  }, [settings.trades, showAdvancedSettings, settingsSearch]);
   // Every configured department — what the question is allowed to hide.
   const departmentKeys = useMemo(() => {
     const cats = Array.isArray(settings.categories) ? settings.categories.filter(Boolean) : [];
@@ -4615,6 +4623,18 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                     {s.label}
                   </button>
                 ))}
+                {!showAdvancedSettings && settingsSearch.trim().length < 2 && (
+                  <button onClick={() => { setShowAdvancedSettings(true); try { localStorage.setItem('boss_pos_show_advanced_settings', '1'); } catch {} }}
+                    className="min-w-0 h-9 px-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-dashed border-white/20 bg-transparent text-zinc-500 hover:text-zinc-300 transition-all active:scale-95 cursor-pointer truncate">
+                    + More
+                  </button>
+                )}
+                {showAdvancedSettings && (
+                  <button onClick={() => { setShowAdvancedSettings(false); try { localStorage.setItem('boss_pos_show_advanced_settings', '0'); } catch {} }}
+                    className="min-w-0 h-9 px-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-dashed border-white/20 bg-transparent text-zinc-500 hover:text-zinc-300 transition-all active:scale-95 cursor-pointer truncate">
+                    Less
+                  </button>
+                )}
               </div>
               )}
               <SettingsSection id="set-shop" icon={Store} title="Shop" hint="Name, type, language, hours, branches"
@@ -5126,6 +5146,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 )}
               </div>
               </SettingsSection>
+              {showAdvancedSettings && (
               <SettingsSection id="set-money" icon={Wallet} title="Money" hint="Owner number, sheets, EFRIS receipts"
                 open={settingsSection === 'money'} onToggle={() => toggleSettingsSection('money')}>
               <div className="border-t border-white/5 pt-3 space-y-2">
@@ -5265,6 +5286,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                 </div>
               </div>
               </SettingsSection>
+              )}
+              {showAdvancedSettings && (
               <SettingsSection id="set-staff-doors" icon={LayoutGrid} title="Cashier doors" hint="What cashiers may open — Sell and Spend always on"
                 open={settingsSection === 'staff-doors'} onToggle={() => toggleSettingsSection('staff-doors')}>
               <div className="space-y-1">
@@ -5298,6 +5321,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   </p>
                 </div>
               </SettingsSection>
+              )}
               <SettingsSection id="set-security" icon={User} title="PINs & lock" hint="Rescue PIN, auto-lock, manager sign-in, log out all"
                 open={settingsSection === 'security'} onToggle={() => toggleSettingsSection('security')}>
               {isManager && (
@@ -5374,6 +5398,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
 </div>
               )}
               </SettingsSection>
+              {showAdvancedSettings && (
               <SettingsSection id="set-look" icon={Palette} title="Look & feel" hint="Colours, text size, sounds, tour"
                 open={settingsSection === 'look'} onToggle={() => toggleSettingsSection('look')}>
               <div className="space-y-2">
@@ -5433,6 +5458,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
                   {simpleTill ? 'Simple till: On' : 'Simple till: Off'}
                 </button>
               </SettingsSection>
+              )}
+              {showAdvancedSettings && (
               <SettingsSection id="set-data" icon={Database} title="Data & sync" hint="Backups, sync queue, gaps, exports"
                 open={settingsSection === 'data'} onToggle={() => toggleSettingsSection('data')}>
               {isManager && (
@@ -5619,7 +5646,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               </div>
               )}
               </SettingsSection>
-              {isManager && (
+              )}
+              {isManager && showAdvancedSettings && (
               <SettingsSection id="set-billing" icon={ReceiptText} title="Subscription" hint="Plan, how to pay, payment claims"
                 open={settingsSection === 'billing'} onToggle={() => toggleSettingsSection('billing')}>
                 <BillingPanel formatCurrency={formatCurrency} triggerToast={triggerToast} />
