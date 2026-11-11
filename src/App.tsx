@@ -842,6 +842,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [supportReport, setSupportReport] = useState<ReadyReport | null>(null);
   const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>([]);
   const [updatingApp, setUpdatingApp] = useState(false);
+  // A newer build exists on the server. Surfaced as a floating banner so the
+  // till can be upgraded in one tap instead of digging through Settings.
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateServerShort, setUpdateServerShort] = useState<string | null>(null);
   const [sheetStatus, setSheetStatus] = useState<{ configured: boolean; lastError: string | null; lastOkAt: string | null } | null>(null);
   const [efrisForm, setEfrisForm] = useState<EfrisConfig | null>(null);
   const [efrisToken, setEfrisToken] = useState('');
@@ -2164,6 +2168,41 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
       setUpdatingApp(false);
     }
   };
+
+  const checkUpdateAvailable = async () => {
+    const localBuild = typeof __BUILD_COMMIT__ === 'string' && __BUILD_COMMIT__ ? __BUILD_COMMIT__ : 'dev';
+    const localShort = localBuild === 'dev' ? 'dev' : localBuild.slice(0, 7);
+    try {
+      const ctrl = new AbortController();
+      const t = window.setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch('/api/version', { cache: 'no-store', signal: ctrl.signal });
+      window.clearTimeout(t);
+      if (!r.ok) return;
+      const data = await r.json().catch(() => ({}));
+      const serverShort = (data?.short as string) || null;
+      if (serverShort && localShort !== 'dev' && serverShort !== 'dev' && serverShort !== localShort) {
+        setUpdateServerShort(serverShort);
+        setUpdateAvailable(true);
+      } else {
+        setUpdateAvailable(false);
+        setUpdateServerShort(null);
+      }
+    } catch {}
+  };
+
+  // Periodically probe for a newer build so the "Update available" banner can
+  // appear without the user having to open Settings and tap the button.
+  useEffect(() => {
+    if (authState !== 'ready') return;
+    checkUpdateAvailable();
+    const iv = setInterval(checkUpdateAvailable, 5 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === 'visible') checkUpdateAvailable(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [authState]);
 
   const handleRestoreData = async (file: File | undefined) => {
     if (!file) return;
@@ -4074,6 +4113,24 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
         })()}
         {renderContent()}
       </main>
+
+      {updateAvailable && (
+        <div className="fixed top-0 inset-x-0 z-[70] px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 flex items-center justify-between gap-2 bg-gold-brand text-black shadow-lg">
+          <span className="text-xs font-black uppercase tracking-wider truncate">
+            New version available{updateServerShort ? ` (${updateServerShort})` : ''} — tap to upgrade
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={handleCheckUpdate} disabled={updatingApp}
+              className="h-8 px-3 bg-black/15 rounded-lg text-[10px] font-black uppercase tracking-wider disabled:opacity-60">
+              {updatingApp ? 'Upgrading…' : 'Upgrade now'}
+            </button>
+            <button onClick={() => setUpdateAvailable(false)} aria-label="Dismiss update notice"
+              className="h-8 w-8 grid place-items-center rounded-lg bg-black/15 text-xs font-black">
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Bottom nav sits at z-40 (below every modal/sheet/backdrop) so no
           form footer can ever hide behind it. Page content has no z-index,
