@@ -845,6 +845,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>([]);
   const [updatingApp, setUpdatingApp] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState('');
   // A newer build exists on the server. Surfaced as a floating banner so the
   // till can be upgraded in one tap instead of digging through Settings.
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -3963,6 +3965,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               Cart • {formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}
             </button>
           )}
+          <button onClick={() => { setShowGlobalSearch(true); setGlobalQuery(''); }} aria-label="Search products, customers, sales"
+            className="text-[10px] bg-white/5 text-zinc-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-white/10 hover:bg-white/10 hover:text-white transition-all cursor-pointer">
+            🔍
+          </button>
           <button onClick={() => setShowHelp(true)} aria-label="Help and guide"
             className="text-[10px] bg-white/5 text-zinc-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-white/10 hover:bg-white/10 hover:text-white transition-all cursor-pointer">
             ?
@@ -4310,6 +4316,86 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             activeTab,
           }} />
         </ErrorBoundary>
+      )}
+
+      {showGlobalSearch && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-start justify-center p-4 pt-16" role="dialog" aria-modal="true" aria-label="Search">
+          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-white/5">
+              <div className="flex items-center gap-2">
+                <input autoFocus type="text" value={globalQuery} onChange={(e) => setGlobalQuery(e.target.value)}
+                  placeholder="Search products, customers, sales…"
+                  className="flex-1 h-11 bg-[#0A0A0A] border border-white/5 text-sm px-4 rounded-xl text-white font-bold focus:border-gold-brand outline-none"
+                  aria-label="Search" />
+                <button onClick={() => setShowGlobalSearch(false)} aria-label="Close search"
+                  className="p-2 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+              {globalQuery.trim().length < 2 ? (
+                <p className="text-xs text-zinc-500 font-bold uppercase text-center py-8">Type at least 2 characters to search</p>
+              ) : (() => {
+                const q = globalQuery.trim().toLowerCase();
+                const matchedProducts = products.filter(p => p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)).slice(0, 8);
+                const matchedCustomers = customers.filter(c => (c.name || '').toLowerCase().includes(q) || (c.phone || '').includes(q)).slice(0, 5);
+                const matchedSales = sales.filter(s => (s.customerName || '').toLowerCase().includes(q) || (s.id || '').toLowerCase().includes(q)).slice(0, 5);
+                const hasResults = matchedProducts.length > 0 || matchedCustomers.length > 0 || matchedSales.length > 0;
+                if (!hasResults) return <p className="text-xs text-zinc-500 font-bold uppercase text-center py-8">No matches found</p>;
+                return (
+                  <>
+                    {matchedProducts.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider">Products</p>
+                        {matchedProducts.map(p => (
+                          <button key={p.id} onClick={() => { setActiveTab('inventory'); setShowGlobalSearch(false); }}
+                            className="w-full text-left flex items-center gap-3 p-3 rounded-xl bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 active:scale-[0.99] transition-all cursor-pointer min-h-[44px]">
+                            <Package className="w-4 h-4 text-gold-brand shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <span className="block text-xs font-bold text-white truncate">{p.name}</span>
+                              <span className="block text-[10px] text-zinc-500 font-bold">{p.category} • {formatCurrency(p.price)} • {p.stockQty} in stock</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {matchedCustomers.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider">Customers</p>
+                        {matchedCustomers.map(c => (
+                          <button key={c.id} onClick={() => { setActiveTab('sales'); setShowGlobalSearch(false); }}
+                            className="w-full text-left flex items-center gap-3 p-3 rounded-xl bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 active:scale-[0.99] transition-all cursor-pointer min-h-[44px]">
+                            <Users className="w-4 h-4 text-gold-brand shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <span className="block text-xs font-bold text-white truncate">{c.name}</span>
+                              <span className="block text-[10px] text-zinc-500 font-bold">{c.phone || 'No phone'}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {matchedSales.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-black text-gold-brand uppercase tracking-wider">Recent sales</p>
+                        {matchedSales.map(s => (
+                          <button key={s.id} onClick={() => { setActiveTab('analytics'); setShowGlobalSearch(false); }}
+                            className="w-full text-left flex items-center gap-3 p-3 rounded-xl bg-[#0A0A0A] border border-white/5 hover:border-gold-brand/40 active:scale-[0.99] transition-all cursor-pointer min-h-[44px]">
+                            <ReceiptText className="w-4 h-4 text-gold-brand shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <span className="block text-xs font-bold text-white truncate">{s.customerName || 'Walk-in'} • {formatCurrency(s.total)}</span>
+                              <span className="block text-[10px] text-zinc-500 font-bold">{s.id} • {new Date(s.timestamp).toLocaleDateString()}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
       )}
 
       {showHelp && (
