@@ -2741,10 +2741,16 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
     overrideTotal?: number | null;
     note?: string;
   }) => {
+    // No fixed clientWriteId here. The plan is one row per day + department +
+    // branch and "recommit replaces", but the server answers a replayed write id
+    // with the FIRST version and never upserts. A constant key made every later
+    // commit look like a retry of the first one, so adjusted quantities and the
+    // new ingredient money were accepted with a 200 and silently discarded while
+    // the screen said the plan was committed. The id is generated per commit, so
+    // an offline replay still carries the id it was queued with.
     const saved = await productionPlanApi.save({
       ...plan,
       branch: tillBranch || '',
-      clientWriteId: `plan:${plan.businessDate}:${plan.category}:${tillBranch || 'shop'}`,
     });
     setSettings(prev => ({
       ...prev,

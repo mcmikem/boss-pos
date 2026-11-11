@@ -753,6 +753,20 @@ export async function flushOutboxDetailed(): Promise<OutboxFlushReport> {
         body: entry.body,
       }, WRITE_TIMEOUT_MS);
       if (res.ok) {
+        // A 200 is not automatically a write. The server can answer
+        // { success: false } when it skipped the insert and found no existing
+        // row; marking that "synced" would drop a batch/transfer the till
+        // believes it made. Send it to review instead, like any refusal.
+        const body = await res.json().catch(() => ({})) as { success?: unknown; error?: unknown };
+        if (body && typeof body === 'object' && body.success === false) {
+          dropped++;
+          if (isSale) salesDropped++;
+          flushed++;
+          const review = stashSyncReview('refused', entry);
+          reviewAdded++;
+          await save(addReview(mark(entry, 'failed', String(body.error || 'Server refused the change')), 'refused', review.summary));
+          continue;
+        }
         sent++;
         if (isSale) salesSent++;
         flushed++;
@@ -1270,6 +1284,17 @@ async function api<T>(path: string, options?: RequestInit & { fresh?: boolean; s
         throw new ApiError(message, res.status, code, traceId);
       }
       const data = await res.json();
+
+      // A 200 is not automatically a success. Two write endpoints answer
+      // { success: false, error } when their insert was skipped and no existing
+      // row matched. Treating that as data let the caller announce the write and
+      // roll nothing back, so the batch was gone and the screen said it was
+      // saved. Fail the write instead, with the server's own reason.
+      if (!isRead && data && typeof data === 'object' && (data as { success?: unknown }).success === false) {
+        const message = String((data as { error?: unknown }).error || 'The server did not save this change');
+        const code = (data as { code?: unknown }).code;
+        throw new ApiError(message, res.status, code ? String(code) : undefined, responseTraceId(res));
+      }
 
       if (isRead) {
         if (!isControl && (!options || !options.fresh || options.store)) {

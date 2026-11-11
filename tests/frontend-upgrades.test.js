@@ -2185,3 +2185,32 @@ test('a bar chart cannot widen the layout viewport past the phone', () => {
   // The Dashboard's hour label was the only one without a truncation fallback.
   assert.match(read('src/components/Dashboard.tsx'), /truncate max-w-full">\{hourLabel/);
 });
+
+test('recommitting tomorrow’s production plan is not mistaken for the one before it', () => {
+  const app = read('src/App.tsx');
+  const server = read('api/index.js');
+  // The plan is one row per day + department + branch and "recommit replaces".
+  // A fixed clientWriteId made every later commit look like a retry of the
+  // first one: the server matched it, answered "duplicate" with a 200, and
+  // never upserted. Adjusted quantities and the new ingredient money were
+  // discarded while the screen said the plan was committed.
+  assert.equal(/clientWriteId:\s*`plan:/.test(app), false);
+  assert.match(app, /productionPlanApi\.save\(\{[\s\S]{0,240}?\.\.\.plan,[\s\S]{0,80}?branch: tillBranch \|\| ''/);
+  // A replay of the same write id must still return the existing row, so an
+  // offline retry cannot stack a second plan for the same day.
+  assert.match(server, /SELECT \* FROM production_plans WHERE client_write_id=\$\{clientWriteId\}/);
+  assert.match(server, /ON CONFLICT \(business_date, category, branch\) DO UPDATE/);
+});
+
+test('a write that answers success:false is not announced as saved', () => {
+  const api = read('src/api.ts');
+  // Two write endpoints answer { success: false, error } when their insert was
+  // skipped and no existing row matched. Treating a 200 body as data let the
+  // caller announce the write and roll nothing back — the batch was gone and
+  // the screen said it was saved.
+  assert.match(api, /\(data as \{ success\?: unknown \}\)\.success === false/);
+  assert.match(api, /throw new ApiError\(message, res\.status/);
+  // The offline queue must not mark that either as synced.
+  assert.match(api, /body && typeof body === 'object' && body\.success === false/);
+  assert.match(api, /stashSyncReview\('refused', entry\)/);
+});
