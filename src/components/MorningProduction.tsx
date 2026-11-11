@@ -95,7 +95,7 @@ export default function MorningProduction({
       if (d.prodProductId !== undefined) setProdProductId(d.prodProductId ?? null);
       if (d.prodQty) setProdQty(d.prodQty);
       if (d.prodCost) setProdCost(d.prodCost);
-      if (d.prodDate) setProdDate(d.prodDate);
+      // (date always defaults to today; see note above)
       if (Array.isArray(d.draftIngredients)) setDraftIngredients(d.draftIngredients);
     } catch {}
     // Once, when the form mounts: this is a restore, not a sync.
