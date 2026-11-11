@@ -7029,7 +7029,8 @@ async function generateUniquePin(excludeId) {
 }
 async function savePin(id, pin) {
   const salt = randomBytes(16).toString('hex');
-  await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, await hashPinStrongRuntime(pin, salt))} WHERE id=${id}`;
+  const hash = await hashPinStrongRuntime(pin, salt);
+  await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hash)} WHERE id=${id}`;
 }
 
 // A person is identified by their name at this till: the sign-in screen is a
@@ -7119,7 +7120,8 @@ app.put('/api/staff/:id', requireManager, asHandler(async (req, res) => {
       });
     }
     const salt = randomBytes(16).toString('hex');
-    await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, await hashPinStrongRuntime(String(b.pin), salt))} WHERE id=${req.params.id}`;
+    const hash = await hashPinStrongRuntime(String(b.pin), salt);
+    await sql`UPDATE staff SET pin_hash=${pinHashFormat(salt, hash)} WHERE id=${req.params.id}`;
   }
   await audit('staff.update', `${name} (${role}, ${active ? 'active' : 'disabled'})`);
   const after = await sql`SELECT * FROM staff WHERE id=${req.params.id}`;
