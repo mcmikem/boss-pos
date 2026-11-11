@@ -1025,7 +1025,7 @@ test('the app says where it is, and never shows two different numbers as one', (
   const reg = read('src/components/CategoryRegister.tsx').replace(/^\s*\/\/.*$/gm, '');
   // Nothing named the screen. One nav item covered two screens each, so four
   // of five screens had no name at all.
-  assert.match(app, /const SCREEN_TITLES: Record<string, string>/);
+  assert.match(app, /const SCREEN_TITLES: Record<string, \{ title: string; hint: string \}>/);
   assert.match(app, /SCREEN_TITLES\[activeTab\]/);
   // Nine settings doors in a 320px strip show four of them; wide phones fit one row.
   assert.match(app, /grid grid-cols-4 sm:grid-cols-9 gap-1\.5/);

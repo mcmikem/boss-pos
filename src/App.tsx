@@ -275,21 +275,23 @@ function SettingsSection({ id, icon: Icon, title, hint, open, onToggle, children
 // and nothing anywhere said the name of the screen you were on — so four of the
 // five screens had no name at all. The top bar now carries it, which is also
 // where the eye already goes looking for the shop name.
-const SCREEN_TITLES: Record<string, string> = {
-  sales: 'Sell',
-  analytics: 'Sales report',
-  expenses: 'Spend',
-  inventory: 'Stock',
-  registers: 'Close day',
-  suppliers: 'Suppliers',
-  customers: 'Regulars',
-  tailoring: 'Tailor',
-  designs: 'Designs',
-  eatery: 'Eatery',
-  production: 'Production',
-  repairs: 'Repairs',
-  bookings: 'Bookings',
-  quotes: 'Quotes',
+// Each screen gets a plain-language subtitle so a new user knows what the
+// screen is for without guessing. Keep them to one short sentence.
+const SCREEN_TITLES: Record<string, { title: string; hint: string }> = {
+  sales: { title: 'Sell', hint: 'Add items to the cart and check out' },
+  analytics: { title: 'Sales report', hint: 'What you sold and earned today' },
+  expenses: { title: 'Spend', hint: 'Money the shop spent' },
+  inventory: { title: 'Stock', hint: 'What you have on the shelf' },
+  registers: { title: 'Close day', hint: 'Count the money and finish the books' },
+  suppliers: { title: 'Suppliers', hint: 'Who you buy from' },
+  customers: { title: 'Regulars', hint: 'Customers who buy on credit' },
+  tailoring: { title: 'Tailor', hint: 'Sewing orders and fittings' },
+  designs: { title: 'Designs', hint: 'Print and design jobs' },
+  eatery: { title: 'Eatery', hint: 'Food and drink menu' },
+  production: { title: 'Production', hint: 'What the kitchen made today' },
+  repairs: { title: 'Repairs', hint: 'Items being fixed' },
+  bookings: { title: 'Bookings', hint: 'Appointments and reservations' },
+  quotes: { title: 'Quotes', hint: 'Price quotes for customers' },
 };
 
 const SETTINGS_SECTIONS = [
@@ -842,6 +844,7 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
   const [supportReport, setSupportReport] = useState<ReadyReport | null>(null);
   const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>([]);
   const [updatingApp, setUpdatingApp] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   // A newer build exists on the server. Surfaced as a floating banner so the
   // till can be upgraded in one tap instead of digging through Settings.
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -3924,8 +3927,8 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             {settings.shopName}
           </h1>
           {SCREEN_TITLES[activeTab] && (
-            <span aria-current="page" className="text-[10px] font-black uppercase tracking-widest text-zinc-300 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 shrink-0 whitespace-nowrap">
-              {SCREEN_TITLES[activeTab]}
+            <span aria-current="page" title={SCREEN_TITLES[activeTab]?.hint} className="text-[10px] font-black uppercase tracking-widest text-zinc-300 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 shrink-0 whitespace-nowrap cursor-help">
+              {SCREEN_TITLES[activeTab].title}
             </span>
           )}
           <span className="hidden sm:inline-block text-[8px] bg-gold-brand/10 text-gold-brand font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans">
@@ -3960,6 +3963,10 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
               Cart • {formatCurrency(cart.reduce((s, i) => s + i.lineTotal, 0))}
             </button>
           )}
+          <button onClick={() => setShowHelp(true)} aria-label="Help and guide"
+            className="text-[10px] bg-white/5 text-zinc-400 font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest font-sans border border-white/10 hover:bg-white/10 hover:text-white transition-all cursor-pointer">
+            ?
+          </button>
           {openTill && (
             <button onClick={() => setIsSettingsOpen(true)}
               title="No PIN is set — anyone can open this till. Tap to set one."
@@ -4303,6 +4310,57 @@ export default function App() {  const [theme, setTheme] = useState<'light' | 'd
             activeTab,
           }} />
         </ErrorBoundary>
+      )}
+
+      {showHelp && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Help and guide">
+          <div className="bg-[#141414] border border-white/10 rounded-3xl w-full max-w-md p-6 shadow-2xl relative overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+            <div className="flex justify-between items-center pb-4 border-b border-white/5 mb-4">
+              <h3 className="text-sm font-black text-white uppercase tracking-wider font-display">How to use this till</h3>
+              <button onClick={() => setShowHelp(false)} aria-label="Close help"
+                className="p-1 text-zinc-500 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
+              <div className="space-y-2">
+                <p className="text-xs font-black text-gold-brand uppercase tracking-wider">The 5 main screens</p>
+                <div className="space-y-1.5">
+                  {[
+                    { name: 'Sell', desc: 'Add items to cart, complete the sale. This is where you spend most of your day.' },
+                    { name: 'Stock', desc: 'What you have on the shelf. Add products, check quantities, set prices.' },
+                    { name: 'Spend', desc: 'Money the shop spent — rent, supplies, wages. Log it so profit is honest.' },
+                    { name: 'Money (Reports)', desc: 'What you sold and earned today. See your best sellers.' },
+                    { name: 'Close day', desc: 'Count the money, check the tray, plan tomorrow. Do this at end of day.' },
+                  ].map(s => (
+                    <div key={s.name} className="flex gap-3 p-3 rounded-xl bg-[#0A0A0A] border border-white/5">
+                      <span className="text-xs font-black text-gold-brand uppercase tracking-wider shrink-0 w-16">{s.name}</span>
+                      <span className="text-[11px] text-zinc-400 font-bold leading-snug">{s.desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-black text-gold-brand uppercase tracking-wider">Quick tips</p>
+                <ul className="space-y-1.5 text-[11px] text-zinc-400 font-bold leading-snug list-disc pl-4">
+                  <li>Tap a product to add it to the cart. Tap again to add more.</li>
+                  <li>The gold "Complete Sale" button finishes the sale.</li>
+                  <li>"Park" saves a half-built sale under a name for later.</li>
+                  <li>Red numbers mean low stock — restock in the Stock tab.</li>
+                  <li>Everything works offline. Sales sync when you're back online.</li>
+                  <li>Tap the "?" on any screen for help with that screen.</li>
+                </ul>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-black text-gold-brand uppercase tracking-wider">Need more help?</p>
+                <p className="text-[11px] text-zinc-400 font-bold leading-snug">
+                  Settings → "Check this till" shows what's saved and what's waiting to sync.
+                  Settings → "Update app" gets the newest version.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {showTillCheck && <TillCheck
