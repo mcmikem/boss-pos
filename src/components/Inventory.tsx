@@ -66,6 +66,7 @@ export default function Inventory({
   const [sortBy, setSortBy] = useState<'stock' | 'name' | 'price'>('stock');
   // Expiring filter: show only dated items expiring within 30 days (or past).
   const [expiringOnly, setExpiringOnly] = useState(false);
+  const [lowStockOnly, setLowStockOnly] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   // Quick add: name + price + qty for basic sellers. Full details hides
@@ -303,6 +304,10 @@ export default function Inventory({
         .sort((a, b) => (daysUntilExpiry(a.expiryDate) ?? 9999) - (daysUntilExpiry(b.expiryDate) ?? 9999));
     }
 
+    if (lowStockOnly) {
+      list = list.filter(p => !p.isService && p.stockQty <= p.lowStockThreshold);
+    }
+
     if (sortBy === 'stock') {
       list.sort((a, b) => a.stockQty - b.stockQty);
     } else if (sortBy === 'name') {
@@ -312,7 +317,7 @@ export default function Inventory({
     }
 
     return list;
-  }, [products, searchQuery, sortBy, expiringOnly, suppliers]);
+  }, [products, searchQuery, sortBy, expiringOnly, lowStockOnly, suppliers]);
 
   const handleOpenEdit = (product: Product) => {
     setEditingProduct(product);
@@ -813,6 +818,10 @@ export default function Inventory({
           <button onClick={() => setExpiringOnly(v => !v)} aria-pressed={expiringOnly} aria-label={`Show only expiring items, ${expiringCount} items`} title="Only items expiring within 30 days (or past)"
             className={`h-12 px-4 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target tabular-nums ${expiringOnly ? 'bg-amber-950/40 border-amber-600/40 text-amber-300' : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
             {expiringOnly ? `✓ Expiring • ${expiringCount}` : `Expiring • ${expiringCount}`}
+          </button>
+          <button onClick={() => setLowStockOnly(v => !v)} aria-pressed={lowStockOnly} aria-label="Show only low-stock items"
+            className={`h-12 px-4 rounded-2xl text-xs font-black uppercase tracking-wider border transition-all active:scale-95 cursor-pointer touch-target tabular-nums ${lowStockOnly ? 'bg-rose-950/40 border-rose-600/40 text-rose-300' : 'bg-[#141414] border-white/5 text-zinc-500 hover:text-zinc-300'}`}>
+            {lowStockOnly ? `✓ Low stock • ${lowStockProducts.length}` : `Low stock • ${lowStockProducts.length}`}
           </button>
         </div>
       </section>
